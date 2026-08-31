@@ -1,0 +1,443 @@
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import path from "node:path";
+
+import { CREW_DIR } from "./crew-dirs.js";
+import { createContainerEngine } from "./engines/container.js";
+import { getEngine } from "./engines/index.js";
+import { readExecutionPolicy } from "./execution-policy.js";
+import { listPreferences } from "./preference-memory.js";
+import { roleCapabilityInstructions, roleCapabilityProfile } from "./role-capabilities.js";
+import { defaultRunnerProfileId, resolveRunnerProfile, roleRunnerId } from "./runner-config.js";
+import { listSkills, skillIndexPrompt } from "./skills.js";
+import { createExecuteWorktree } from "./workspace.js";
+
+// Files always injected even if a role's frontmatter omits them — the universal floor.
+const DEFAULT_UNIVERSAL_MEMORY = ["lean-engineering.md"];
+const DEFAULT_MEMORY_TITLES = { "lean-engineering": "Lean & readable engineering" };
+const DEFAULT_NOISE = /^\s*(?:\[(cmd|edit|mcp|search|tool|worktree|subagent)\b|mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_]+$)/i;
+const EXECUTE_MODE_INSTRUCTION = "You may read and edit files inside your working directory, which is an isolated git worktree on a dedicated branch. Run commands only when your engine exposes a shell tool. Make the changes the user asks for; the user reviews the branch afterwards.";
+const PROPOSE_MODE_INSTRUCTION = "You have read-only tool access to the project. Propose changes as diffs or precise instructions in your reply; do not attempt to write files.";
+const TITLE_TIMEOUT_MS = 45000;
+
+// Returns "" only when nothing is configured and no vendor CLI is set up — resolution order: role's assigned profile → detected provider default.
+export function runnerIdForRole(role, targetRoot) {
+  const configured = targetRoot ? resolveConfiguredRunnerId(role, targetRoot) : "";
+  if (configured) return configured;
+  return defaultRunnerProfileId() || "";
+}
+
+function resolveConfiguredRunnerId(role, targetRoot) {
+  try {
+    const text = readFileSync(path.join(targetRoot, `${CREW_DIR}/memory/ai-runners.json`), "utf8");
+    const config = JSON.parse(text);
+    return roleRunnerId(role, config.default_role_runners || {});
+  } catch {
+    return "";
+  }
+}
+
+export function buildConversationPrompt(messages) {
+  const lines = ["## Conversation so far"];
+  appendTranscript(lines, messages);
+  lines.push("");
+  lines.push("## Your turn");
+  lines.push("Respond to the latest message from the user. Stay in scope of your role.");
+  return lines.join("\n");
+}
+
+// On a resumed vendor session the engine already holds the conversation, so only the newest user message is sent.
+export function buildResumePrompt(messages, context = "") {
+  const lastUser = [...(messages || [])].reverse().find((msg) => msg.author === "user");
+  const prompt = lastUser?.content || buildConversationPrompt(messages);
+  return context ? `${context}\n\n## Latest user message\n${prompt}` : prompt;
+}
+
+export function isLikelyStaleSessionError(value) {
+  const text = String(value || "");
+  return /(?:session|thread|conversation).{0,40}(?:not found|expired|invalid|gone|does not exist)|resume.{0,40}(?:failed|not found|expired|invalid)/i.test(text);
+}
+
+// Resolves the role's declared `memory_pointers` into prompt sections: a role carries only the
+// memory it lists, plus the universal floor. Glob/tool-fetched entries (`<task-id>`, `*`,
+// "(when active)") and missing files are skipped silently; paths outside CREW_DIR are refused.
+export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVERSAL_MEMORY, extra = [], titles = {} } = {}) {
+  const root = path.resolve(targetRoot);
+  const paths = [];
+  const add = (candidate) => {
+    const safePath = resolveRoleMemoryPath(root, candidate);
+    if (safePath && !paths.includes(safePath)) paths.push(safePath);
+  };
+  for (const name of universal) add(path.resolve(root, CREW_DIR, "memory", name));
+  for (const entry of parseMemoryPointers(roleText)) add(path.resolve(root, entry));
+  for (const name of extra) add(path.resolve(root, CREW_DIR, "memory", name));
+
+  const sections = [];
+  for (const filePath of paths) {
+    const body = readMaybe(filePath);
+    if (body && body.trim()) sections.push({ title: memoryTitle(filePath, titles), body });
+  }
+  return sections;
+}
+
+// Host hooks give the runtime its product identity: prompt boilerplate, role display names,
+// universal memory, worktree branch naming, the MCP tool bridge, and the container worker entry.
+export function createRoleRunner({
+  tools = null,
+  displayRoleName = (role) => role,
+  universalMemory = DEFAULT_UNIVERSAL_MEMORY,
+  memoryTitles = {},
+  extraMemory = () => [],
+  capabilityProfile = (role, options) => roleCapabilityProfile(role, options),
+  capabilityInstructions = (profile) => roleCapabilityInstructions(profile),
+  protocol = () => [],
+  turnInstructions = () => ["Respond to the latest message from the user. Stay in scope of the role file."],
+  proposeModeInstruction = () => PROPOSE_MODE_INSTRUCTION,
+  createWorktree = (targetRoot, slug) => createExecuteWorktree(targetRoot, slug),
+  container = {},
+  noise = DEFAULT_NOISE
+} = {}) {
+  const memoryOptions = { universal: universalMemory, titles: memoryTitles };
+
+  function buildPromptBody({ role, rolePrompt, memory = [], messages, context, capabilities, skills = [], preferences = [] }) {
+    const lines = [
+      `You are the ${displayRoleName(role)}. Follow the role file below exactly.`,
+      "",
+      ...contextSections({ rolePrompt, memory }),
+      ...contextBlock(preferencePrompt(preferences)),
+      ...contextBlock(skillIndexPrompt(skills)),
+      ...contextBlock(capabilityInstructions(capabilities || capabilityProfile(role, {}))),
+      ...contextBlock(context),
+      "## Conversation so far"
+    ];
+    appendTranscript(lines, messages);
+    lines.push("");
+    lines.push(...protocol(role));
+    lines.push("## Your turn");
+    lines.push(...turnInstructions(role));
+    return lines.join("\n");
+  }
+
+  function buildSystemPrompt({ role, rolePrompt, memory = [], mode, context, capabilities, skills = [], preferences = [] }) {
+    const lines = [
+      `You are the ${displayRoleName(role)} for this project. Follow the role file below exactly.`,
+      "",
+      ...contextSections({ rolePrompt, memory }),
+      ...contextBlock(preferencePrompt(preferences)),
+      ...contextBlock(skillIndexPrompt(skills)),
+      ...contextBlock(capabilityInstructions(capabilities || capabilityProfile(role, {}))),
+      ...contextBlock(context),
+      ...protocol(role),
+      "## Operating mode",
+      mode === "execute" ? EXECUTE_MODE_INSTRUCTION : proposeModeInstruction(role)
+    ];
+    return lines.join("\n");
+  }
+
+  // Returns the engine handle ({ kill }) plus resolution metadata for the run record and budget ledger.
+  function startRoleTurn({ targetRoot, role, messages, resumeSessionId, worktree, readOnlyWorktree, context, toolContext, modeOverride, onLine, onPartialText, onStatus, onClose, onError }) {
+    const runnerId = runnerIdForRole(role, targetRoot);
+    const profile = resolveRunnerProfile(runnerId);
+    if (runnerId && !profile) {
+      throw new Error(`runner ${runnerId} is not configured for role ${role}`);
+    }
+    const engineId = profile?.engine || "cli";
+    const baseEngine = getEngine(engineId);
+    const requestedMode = modeOverride || profile?.mode;
+    if (requestedMode === "execute" && !baseEngine.capabilities.agentic) {
+      throw new Error(`runner ${runnerId || role} cannot execute edits; choose a runner profile that supports execute mode`);
+    }
+    const mode = requestedMode === "execute" && baseEngine.capabilities.agentic ? "execute" : "propose";
+    const executionPolicy = readExecutionPolicy(targetRoot);
+    const engine = mode === "execute" && executionPolicy.runtime === "container"
+      ? createContainerEngine(baseEngine, executionPolicy, container)
+      : baseEngine;
+    const resuming = Boolean(resumeSessionId) && engineId !== "cli";
+
+    const rolePrompt = readMaybe(path.join(targetRoot, `${CREW_DIR}/roles`, `${role}.md`));
+    const memory = loadRoleMemory(targetRoot, rolePrompt, { ...memoryOptions, extra: extraMemory(toolContext) });
+    const roleOptions = toolContext?.roleOptions || {};
+    const capabilities = capabilityProfile(role, roleOptions);
+    const workProfile = String(toolContext?.workProfile?.kind || "");
+    const skills = listSkills({ targetRoot, role, workProfile });
+    const preferences = listPreferences({ targetRoot }).effective;
+
+    let workdir = targetRoot;
+    let branch = null;
+    let worktreeCreated = false;
+    if (mode !== "execute" && readOnlyWorktree?.dir && existsSync(readOnlyWorktree.dir)) {
+      workdir = readOnlyWorktree.dir;
+      branch = readOnlyWorktree.branch || null;
+      onStatus?.(`reviewing branch ${branch || "worktree"}`);
+    } else if (mode === "execute") {
+      // One worktree per execute conversation so each turn sees the previous turns' edits; a fresh one is created only on the first turn or after a tmp wipe/discard.
+      if (worktree?.dir && worktree?.branch && existsSync(worktree.dir)) {
+        workdir = worktree.dir;
+        branch = worktree.branch;
+        onStatus?.(`continuing on branch ${branch}`);
+      } else {
+        const created = createWorktree(targetRoot, `${role}`);
+        workdir = created.dir;
+        branch = created.branch;
+        worktreeCreated = true;
+        onLine?.(`[worktree] ${branch} (${workdir})`);
+      }
+    }
+
+    const turn = engineId === "cli"
+      ? {
+          prompt: buildPromptBody({ role, rolePrompt, memory, messages, context, capabilities, skills, preferences }),
+          systemPrompt: null
+        }
+      : {
+          prompt: resuming ? buildResumePrompt(messages, context) : buildConversationPrompt(messages),
+          systemPrompt: buildSystemPrompt({ role, rolePrompt, memory, mode, context, capabilities, skills, preferences })
+        };
+
+    const handle = engine.startTurn({
+      targetRoot,
+      workdir,
+      runnerId,
+      profile: profile || { id: runnerId },
+      role,
+      capabilities,
+      mode,
+      systemPrompt: turn.systemPrompt,
+      prompt: turn.prompt,
+      resumeSessionId: resuming ? resumeSessionId : null,
+      toolContext: {
+        ...(toolContext || {}),
+        targetRoot,
+        root: targetRoot,
+        role,
+        capabilities
+      },
+      tools,
+      onLine,
+      onPartialText,
+      onStatus,
+      onClose,
+      onError
+    });
+
+    return {
+      ...handle,
+      runnerId,
+      engineId,
+      mode,
+      isolation: mode === "execute" ? executionPolicy.runtime : "read-only",
+      branch,
+      workdir,
+      worktreeCreated,
+      resumed: resuming,
+      capabilities,
+      provider: profile?.provider || null
+    };
+  }
+
+  // Best-effort headless turn: resolves { ok:false } on timeout or non-zero exit instead of rejecting.
+  function runRoleCapture({ root, role, prompt, label = role, timeoutMs = 120000, toolContext = {}, context = "", onStatus, log, error } = {}) {
+    const lines = [];
+    const marker = tools?.toolLineMarker || "";
+    const isNoise = (line) => noise.test(line) || (marker && line.trimStart().startsWith(marker));
+    return new Promise((resolve) => {
+      let settled = false;
+      let handle = null;
+      let lastStatus = "";
+      const finish = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
+      const timer = setTimeout(() => {
+        try { handle?.kill?.("SIGTERM"); } catch { /* already gone */ }
+        error?.(`${label}: timed out after ${Math.round(timeoutMs / 1000)}s`);
+        finish({ ok: false, reason: "runner timed out", text: lines.join("\n").trim() });
+      }, timeoutMs);
+      timer.unref?.();
+
+      try {
+        handle = startRoleTurn({
+          targetRoot: root,
+          role,
+          messages: [{ author: "user", content: prompt }],
+          context,
+          toolContext,
+          onLine: (line) => { if (!isNoise(String(line || ""))) lines.push(String(line)); },
+          onStatus: (status) => {
+            const text = String(status || "");
+            onStatus?.(text);
+            if (text && text !== lastStatus) {
+              lastStatus = text;
+              log?.(`${label}: ${text}`);
+            }
+          },
+          onError: (err) => lines.push(`[runner-error] ${err?.message || err}`),
+          onClose: ({ code, stderr } = {}) => {
+            const text = lines.join("\n").trim();
+            if ((code === 0 || code === undefined || code === null) && text) { finish({ ok: true, text }); return; }
+            finish({ ok: false, reason: `runner exited ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`, text });
+          }
+        });
+      } catch (err) {
+        finish({ ok: false, reason: err?.message || String(err), text: "" });
+      }
+    });
+  }
+
+  // Best effort: resolves "" if no runner, on error, or on timeout — chats start untitled and get a real title once there's something to summarise.
+  function generateConversationTitle({ targetRoot, role, messages }) {
+    const runnerId = runnerIdForRole(role, targetRoot);
+    const profile = resolveRunnerProfile(runnerId);
+    if (!runnerId || !profile) return Promise.resolve("");
+
+    const engine = getEngine(profile.engine || "cli");
+    const transcript = (messages || [])
+      .filter((msg) => msg.author === "user" || msg.author === role)
+      .map((msg) => `${msg.author === "user" ? "User" : "Assistant"}: ${msg.content}`)
+      .join("\n\n")
+      .slice(0, 6000);
+    const prompt = [
+      "Summarise the conversation below as a short, specific title.",
+      "Rules: 3 to 6 words, no surrounding quotes, no trailing punctuation, plain text only.",
+      "Output only the title.",
+      "",
+      "Conversation:",
+      transcript
+    ].join("\n");
+
+    return new Promise((resolve) => {
+      const lines = [];
+      let settled = false;
+      let handle = null;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(cleanTitle(value));
+      };
+      const timer = setTimeout(() => {
+        try { handle?.kill?.("SIGTERM"); } catch { /* already gone */ }
+        finish(lines.join(" "));
+      }, TITLE_TIMEOUT_MS);
+      timer.unref?.();
+
+      try {
+        handle = engine.startTurn({
+          targetRoot,
+          workdir: targetRoot,
+          runnerId,
+          profile,
+          role,
+          capabilities: capabilityProfile("", {}),
+          mode: "propose",
+          systemPrompt: "You write short, specific titles for conversations. Reply with only the title.",
+          prompt,
+          resumeSessionId: null,
+          onLine: (line) => lines.push(String(line)),
+          onStatus: () => {},
+          onClose: () => finish(lines.join(" ")),
+          onError: () => {}
+        });
+      } catch {
+        finish("");
+      }
+    });
+  }
+
+  return {
+    runnerIdForRole,
+    buildPromptBody,
+    buildSystemPrompt,
+    buildConversationPrompt,
+    buildResumePrompt,
+    isLikelyStaleSessionError,
+    startRoleTurn,
+    runRoleCapture,
+    generateConversationTitle,
+    loadRoleMemory: (targetRoot, roleText, options = {}) => loadRoleMemory(targetRoot, roleText, { ...memoryOptions, ...options })
+  };
+}
+
+function preferencePrompt(preferences = []) {
+  if (!preferences.length) return "";
+  return [
+    "## Approved preferences",
+    "These preferences are approved context. A current user instruction or task/PR decision overrides them.",
+    ...preferences.map((entry) => `- ${entry.key} [${entry.scope}]: ${entry.statement}`)
+  ].join("\n");
+}
+
+function cleanTitle(raw) {
+  const text = String(raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)[0] || "";
+  const stripped = text.replace(/^["'`]+|["'`.]+$/g, "").trim();
+  if (!stripped) return "";
+  const words = stripped.split(/\s+/).slice(0, 8).join(" ");
+  return words.slice(0, 80);
+}
+
+function contextSections({ rolePrompt, memory = [] }) {
+  const out = ["## Role", rolePrompt || "(role file missing)", ""];
+  for (const section of memory) {
+    out.push(`## ${section.title}`, section.body, "");
+  }
+  return out;
+}
+
+function resolveRoleMemoryPath(root, candidate) {
+  const crewRoot = path.resolve(root, CREW_DIR);
+  const resolved = path.resolve(root, String(candidate || ""));
+  if (!pathIsWithin(crewRoot, resolved)) return "";
+  if (!existsSync(resolved)) return resolved;
+  try {
+    const realRoot = realpathSync(root);
+    const realFile = realpathSync(resolved);
+    return pathIsWithin(realRoot, realFile) ? resolved : "";
+  } catch {
+    return "";
+  }
+}
+
+function pathIsWithin(base, candidate) {
+  const relative = path.relative(base, candidate);
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+}
+
+function parseMemoryPointers(roleText) {
+  const text = String(roleText || "").replace(/\r\n/g, "\n");
+  const block = text.match(/^memory_pointers:[ \t]*\n([\s\S]*?)(?:\n[A-Za-z0-9_]+:|\n---)/m);
+  if (!block) return [];
+  const out = [];
+  for (const line of block[1].split("\n")) {
+    const item = line.match(/^[ \t]*-[ \t]+(.+?)[ \t]*$/);
+    if (!item) continue;
+    const entry = item[1].trim();
+    if (!entry.endsWith(".md") || /[<>*]/.test(entry)) continue; // skip globs / tool-fetched
+    out.push(entry);
+  }
+  return out;
+}
+
+function memoryTitle(filePath, titles) {
+  const base = path.basename(filePath).replace(/\.md$/, "");
+  return titles[base] || DEFAULT_MEMORY_TITLES[base] || base.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function contextBlock(context) {
+  const value = String(context || "").trim();
+  return value ? [value, ""] : [];
+}
+
+function appendTranscript(lines, messages) {
+  if (!messages || messages.length === 0) {
+    lines.push("(no prior turns)");
+    return;
+  }
+  for (const msg of messages) {
+    lines.push("");
+    lines.push(`### ${msg.author}`);
+    lines.push(msg.content);
+  }
+}
+
+function readMaybe(file) {
+  try { return readFileSync(file, "utf8"); } catch { return null; }
+}

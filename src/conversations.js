@@ -54,9 +54,9 @@ export function ensureConversationSchema(db, { singletonRoles = [], uniqueIndexe
     const roles = singletonRoles.map((role) => `'${String(role).replace(/'/g, "''")}'`).join(", ");
     if (roles) {
       db.exec(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_singleton_work_item ON conversations (target_root, work_item_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_singleton_work_item ON conversations (target_root, role, work_item_id)
           WHERE role IN (${roles}) AND work_item_id IS NOT NULL;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_singleton_issue ON conversations (target_root, issue_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_singleton_issue ON conversations (target_root, role, issue_id)
           WHERE role IN (${roles}) AND work_item_id IS NULL AND issue_id IS NOT NULL;
       `);
     }

@@ -18,6 +18,7 @@ const DEFAULT_NOISE = /^\s*(?:\[(cmd|edit|mcp|search|tool|worktree|subagent)\b|m
 const EXECUTE_MODE_INSTRUCTION = "You may read and edit files inside your working directory, which is an isolated git worktree on a dedicated branch. Run commands only when your engine exposes a shell tool. Make the changes the user asks for; the user reviews the branch afterwards.";
 const PROPOSE_MODE_INSTRUCTION = "You have read-only tool access to the project. Propose changes as diffs or precise instructions in your reply; do not attempt to write files.";
 const TITLE_TIMEOUT_MS = 45000;
+const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 
 // Returns "" only when nothing is configured and no vendor CLI is set up — resolution order: role's assigned profile → detected provider default.
 export function runnerIdForRole(role, targetRoot) {
@@ -135,6 +136,8 @@ export function createRoleRunner({
 
   // Returns the engine handle ({ kill }) plus resolution metadata for the run record and budget ledger.
   function startRoleTurn({ targetRoot, role, messages, resumeSessionId, worktree, readOnlyWorktree, context, toolContext, modeOverride, onLine, onPartialText, onStatus, onClose, onError }) {
+    // The role names a file under the crew directory; only a slug may reach the filesystem.
+    if (!ROLE_SLUG.test(String(role || ""))) throw new Error(`invalid role name: ${role || "<empty>"}`);
     const runnerId = runnerIdForRole(role, targetRoot);
     const profile = resolveRunnerProfile(runnerId);
     if (runnerId && !profile) {

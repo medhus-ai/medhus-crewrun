@@ -71,6 +71,7 @@ export function createRoleCatalog({
 
   async function removeRole({ target, name }) {
     if (!name) throw new Error("roles remove requires --name <slug>");
+    if (!SLUG.test(name)) throw new Error("role name must be a lowercase slug like physics-specialist");
     if (always.has(name)) throw new Error(`${name} is always-present and cannot be removed via this command`);
     const root = path.resolve(target);
     const sourcePath = path.join(root, crewDir(), "roles", `${name}.md`);

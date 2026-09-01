@@ -64,5 +64,7 @@ sqlite("leases fence stale workers and expire so a stranded batch is recoverable
   assert.equal(queue.completeHandoffBatch({ conversationId: cid, handoffIds: ids, leaseToken: batch[0].leaseToken }), 0, "the old owner cannot complete a reclaimed batch");
   assert.throws(() => queue.claimHandoffBatch({ conversationId: cid, leaseMs: 10 }), /between 1 second and 1 hour/);
   assert.throws(() => queue.enqueueHandoff({ targetRoot: "/repo", conversationId: cid, taskKey: "", body: "x" }), /taskKey/);
+  assert.throws(() => queue.enqueueHandoff({ targetRoot: "/elsewhere", conversationId: cid, taskKey: "i7", body: "x" }), /belongs to/);
+  assert.throws(() => queue.enqueueHandoff({ targetRoot: "/repo", conversationId: 999, taskKey: "i7", body: "x" }), /does not exist/);
   assert.throws(() => createHandoffQueue({ getDb: () => null, table: "bad;name" }), /invalid handoff table/);
 });

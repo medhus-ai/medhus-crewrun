@@ -83,6 +83,9 @@ export function createHandoffQueue({ getDb, table = "handoffs", batchLimit = DEF
     if (!key) throw new Error("taskKey is required for a handoff");
     if (!text) throw new Error("body is required for a handoff");
     const handle = db();
+    const owner = handle.prepare("SELECT target_root FROM conversations WHERE id = ?").get(cid);
+    if (!owner) throw new Error(`conversation ${cid} does not exist`);
+    if (owner.target_root !== root) throw new Error(`conversation ${cid} belongs to ${owner.target_root}, not ${root}`);
     const now = new Date().toISOString();
     if (external) {
       return handle.transaction(() => {

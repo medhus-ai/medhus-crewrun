@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as fsModule from "node:fs";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
@@ -190,3 +191,15 @@ test("listSecretNames signals locked vs empty vs unlocked", () => {
   store.lock();
   assert.equal(store.listSecretNames(), null); // file exists but locked
 });
+
+test("writes repair the file mode of an existing secrets file", () => {
+  if (process.platform === "win32") return;
+  const { chmodSync } = require_fs();
+  store.unlock(PASSWORD);
+  store.setSecret("A_KEY", "1");
+  chmodSync(process.env.CREW_SECRETS_FILE, 0o644);
+  store.setSecret("B_KEY", "2");
+  assert.equal(statSync(process.env.CREW_SECRETS_FILE).mode & 0o777, 0o600);
+});
+
+function require_fs() { return fsModule; }

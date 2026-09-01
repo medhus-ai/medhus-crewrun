@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { crewEnv, crewHome } from "./crew-dirs.js";
 import path from "node:path";
 
@@ -303,5 +303,7 @@ function writeBlob(blob) {
   const file = secretsFilePath();
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(blob, null, 2)}\n`, { mode: 0o600 });
+  // `mode` only applies on creation; an existing file keeps whatever it had, so repair it.
+  try { chmodSync(file, 0o600); } catch { /* platforms without POSIX modes */ }
   return file;
 }

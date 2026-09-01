@@ -61,3 +61,10 @@ test("removing a role archives its file and notifies the host", async () => {
   assert.match(archived[0], /^ops-\d{4}-\d{2}-\d{2}\.md$/);
   assert.deepEqual([...(await catalog.installedRoleNames(target))], []);
 });
+
+test("role names never leave the roles directory", async () => {
+  const { templatesDir, target } = await fixture();
+  const catalog = createRoleCatalog({ templatesDir });
+  await assert.rejects(catalog.removeRole({ target, name: "../escape" }), /lowercase slug/);
+  await assert.rejects(catalog.addRole({ target, name: "../escape" }), /lowercase slug/);
+});

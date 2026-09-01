@@ -76,3 +76,14 @@ test("the scheduler runs due schedules once, records outcomes, and never double-
   assert.deepEqual(dueSchedules({ targetRoot: root, now: clock, state: { runs: {} } }).map((s) => s.id), ["every-minute"]);
   await assert.rejects(scheduler.runNow("missing"), /not found/);
 });
+
+test("a crashed run goes stale instead of blocking the schedule forever", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "crew-scheduler-stale-"));
+  const root = path.join(base, "repo");
+  upsertSchedule({ targetRoot: root, schedule: { id: "job", role: "ceo", cron: "* * * * *", prompt: "go" } });
+  const started = new Date(2026, 8, 1, 6, 0, 0);
+  const crashed = { runs: { job: { lastStartedAt: started.toISOString() } } }; // no lastRunAt ever written
+  assert.deepEqual(dueSchedules({ targetRoot: root, now: new Date(started.getTime() + 10 * 60_000), state: crashed }), [], "recent start counts as running");
+  assert.deepEqual(dueSchedules({ targetRoot: root, now: new Date(started.getTime() + 61 * 60_000), state: crashed }).map((s) => s.id), ["job"], "a stale start is released");
+  assert.deepEqual(dueSchedules({ targetRoot: root, now: new Date(started.getTime() + 2 * 60_000), state: crashed, staleAfterMs: 60_000 }).map((s) => s.id), ["job"], "threshold is configurable");
+});

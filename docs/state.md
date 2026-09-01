@@ -33,29 +33,25 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 ## Candidates for a later move
 
 
-## Known gaps from the 2026-08-31 review
+## Review findings closed in v0.1.6
 
-- Schedule state is a JSON file without a cross-process claim. Hosts must currently run one
-  scheduler per project. If a process exits after writing `lastStartedAt` but before
-  `lastRunAt`, that schedule remains classified as running; add a lease/recovery rule before
-  treating schedules as crash-safe.
-- Singleton-conversation unique indexes cover `(target_root, reference)` across every role in
-  `singletonRoles`, while lookup includes `role`. Configuring two singleton roles for the same
-  reference can therefore make the second `getOrCreateConversation` fail; include `role` in the
-  indexes or explicitly narrow the contract to one singleton role.
-- `enqueueHandoff` accepts `targetRoot` separately from `conversationId` without verifying that
-  it matches the conversation row. Validate that relationship before using pending handoffs to
-  select a project to run.
-- Role identifiers are not validated consistently at filesystem boundaries. `removeRole` does
-  not apply the slug validation used by `addRole`, so traversal segments can move markdown files
-  outside the roles directory; `startRoleTurn` also interpolates an unvalidated role into its
-  role-file path. Validate before constructing either path.
-- Secret and auth files are created with mode 0600, but `writeFileSync(..., { mode: 0o600 })`
-  does not repair permissions on an existing file. Explicitly chmod after writes before claiming
-  the mode is continuously enforced.
+The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
 
+- Role names are validated as slugs at every filesystem boundary (`removeRole`, `startRoleTurn`), so
+  a role identifier can never build a path outside the roles directory.
+- A schedule whose process died after `lastStartedAt` is released after `staleAfterMs` (default
+  one hour, configurable) instead of staying "running" forever. Run state is still a JSON file
+  without a cross-process claim: run one scheduler per project.
+- Singleton-conversation unique indexes include `role`, so two singleton roles can each hold a
+  thread on the same reference.
+- `enqueueHandoff` verifies the conversation exists and belongs to `targetRoot`.
+- Secret and auth files are chmod'ed to 0600 on every write, not only on creation.
 
 ## Last Check
+
+- (10) 2026-09-01 — v0.1.6: closes the five review findings above (role-name validation at
+  filesystem boundaries, stale-run release for schedules, per-role singleton indexes, handoff
+  root check, continuous 0600 on sensitive files).
 
 - (8) 2026-09-01 — v0.1.5: Codex SDK `^0.152.0` (GPT-5.6 model ids); no code change.
 

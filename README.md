@@ -120,8 +120,9 @@ Two ways work reaches a role without a person typing in a chat:
   (numeric five-field cron in local time; `*`, lists, ranges, and steps are supported).
   `createScheduler({ targetRoot, run })` ticks, fires each due schedule once (a schedule that
   missed several windows fires once, not per window), and records outcomes under the crew home
-  so the repository never churns. Run one scheduler per project. `run(schedule)` is the host's
-  role turn — typically `runner.runRoleCapture`.
+  so the repository never churns. Run one scheduler per project (run state is a JSON file, not a
+  cross-process lock); a run whose process died is released after an hour by default
+  (`staleAfterMs`). `run(schedule)` is the host's role turn — typically `runner.runRoleCapture`.
 
 ## Memory and learning
 
@@ -167,7 +168,7 @@ crewrun has neutral defaults and no product identity; a host injects its own.
 
 ## Security notes
 
-- API keys live in one AES-256-GCM file (`~/.crew/secrets.json`, created with mode 0600) sealed
+- API keys live in one AES-256-GCM file (`~/.crew/secrets.json`, kept at mode 0600 on every write) sealed
   with the operator password; they are exported to vendor SDKs as environment variables only
   for the duration of the process that unlocked the store.
 - Codex reaches host tools through a child process. The tool context crosses that boundary as

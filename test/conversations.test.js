@@ -12,7 +12,7 @@ import { createConversationStore, ensureConversationSchema } from "../src/conver
 
 function memoryStore(options = {}) {
   const db = new Database(":memory:");
-  return { db, store: createConversationStore({ getDb: () => db, singletonRoles: ["manager"], ...options }) };
+  return { db, store: createConversationStore({ getDb: () => db, singletonRoles: ["manager", "reviewer"], ...options }) };
 }
 
 sqlite("conversations and messages round-trip with usage and legacy author mapping", () => {
@@ -44,6 +44,9 @@ sqlite("singleton roles and purpose-scoped threads get exactly one conversation 
   const b = store.getOrCreateConversation({ targetRoot: "/repo", role: "manager", workItemId: 7, title: "later" });
   assert.equal(a, b);
   assert.notEqual(a, store.getOrCreateConversation({ targetRoot: "/repo", role: "manager", workItemId: 8 }));
+  const reviewer = store.getOrCreateConversation({ targetRoot: "/repo", role: "reviewer", workItemId: 7 });
+  assert.notEqual(reviewer, a, "two singleton roles keep separate threads on the same reference");
+  assert.equal(reviewer, store.getOrCreateConversation({ targetRoot: "/repo", role: "reviewer", workItemId: 7 }));
   assert.notEqual(a, store.getOrCreateConversation({ targetRoot: "/other", role: "manager", workItemId: 7 }));
 
   const setup = store.getOrCreateConversation({ targetRoot: "/repo", role: "planner", workItemId: 7, purpose: "setup" });
@@ -64,7 +67,7 @@ sqlite("schema upgrades a legacy table in place and unique indexes are optional"
   db.exec("CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, target_root TEXT NOT NULL, role TEXT NOT NULL, title TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
   db.exec("INSERT INTO conversations (target_root, role, created_at, updated_at) VALUES ('/r', 'manager', 'x', 'x'), ('/r', 'manager', 'x', 'x')");
   db.exec("UPDATE conversations SET title = 'dup'");
-  ensureConversationSchema(db, { singletonRoles: ["manager"], uniqueIndexes: false });
+  ensureConversationSchema(db, { singletonRoles: ["manager", "reviewer"], uniqueIndexes: false });
   const cols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
   for (const col of ["issue_id", "work_item_id", "purpose", "engine_session_id", "worktree_dir"]) assert.ok(cols.includes(col), col);
   const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((r) => r.name);

@@ -1,6 +1,6 @@
 {
   "name": "medhus-crewrun",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Run a crew of AI roles on the vendor agent runtimes you already pay for \u2014 Claude, Codex, OpenRouter, local \u2014 with brokered tools over MCP, sandboxed edits, and a cost ledger.",
   "keywords": [
     "agents",

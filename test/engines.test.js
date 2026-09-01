@@ -443,3 +443,8 @@ test("runRoleCapture drops tool noise and resolves ok:false on failure instead o
   assert.equal(failed.ok, false);
   assert.match(failed.reason, /runner exited 2: bad/);
 });
+
+test("startRoleTurn refuses a role name that is not a slug", () => {
+  assert.throws(() => createRoleRunner().startRoleTurn({ targetRoot: tmpRoot, role: "../../etc/passwd", messages: [] }), /invalid role name/);
+  assert.throws(() => createRoleRunner().startRoleTurn({ targetRoot: tmpRoot, role: "", messages: [] }), /invalid role name/);
+});

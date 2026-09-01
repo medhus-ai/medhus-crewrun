@@ -128,14 +128,19 @@ function writeScheduleState({ targetRoot, env = process.env, state }) {
 // Enabled schedules whose next fire time since their last run (or since `since`, by default one
 // minute ago for a never-run schedule) is not in the future. A schedule that missed several
 // windows while nothing was running fires once, not once per missed window.
-export function dueSchedules({ targetRoot, now = new Date(), state = readScheduleState({ targetRoot }), since } = {}) {
+// A run is considered in progress from lastStartedAt until lastRunAt is written; if a process
+// dies in between, the start goes stale after `staleAfterMs` and the schedule becomes due again.
+export const DEFAULT_STALE_RUN_MS = 60 * 60 * 1000;
+
+export function dueSchedules({ targetRoot, now = new Date(), state = readScheduleState({ targetRoot }), since, staleAfterMs = DEFAULT_STALE_RUN_MS } = {}) {
   const due = [];
   for (const schedule of listSchedules({ targetRoot })) {
     if (!schedule.enabled) continue;
     const run = state.runs?.[schedule.id] || {};
     const lastStarted = Date.parse(run.lastStartedAt || "");
     const lastFinished = Date.parse(run.lastRunAt || "");
-    if (Number.isFinite(lastStarted) && !(Number.isFinite(lastFinished) && lastFinished >= lastStarted)) continue; // running
+    const inProgress = Number.isFinite(lastStarted) && !(Number.isFinite(lastFinished) && lastFinished >= lastStarted);
+    if (inProgress && now.getTime() - lastStarted < staleAfterMs) continue;
     const from = Number.isFinite(lastFinished) ? new Date(lastFinished) : since ? new Date(since) : new Date(now.getTime() - 60_000);
     const next = nextRun(schedule.cron, from);
     if (next && next.getTime() <= now.getTime()) due.push({ ...schedule, dueAt: next.toISOString() });
@@ -144,7 +149,8 @@ export function dueSchedules({ targetRoot, now = new Date(), state = readSchedul
 }
 
 // Ticks on an interval; `run(schedule)` performs the role turn and resolves to { ok, text?, reason? }.
-export function createScheduler({ targetRoot, run, intervalMs = 30_000, now = () => new Date(), env = process.env, log = () => {}, error = () => {} } = {}) {
+// One scheduler per project: the JSON run state is not a cross-process lock.
+export function createScheduler({ targetRoot, run, intervalMs = 30_000, staleAfterMs = DEFAULT_STALE_RUN_MS, now = () => new Date(), env = process.env, log = () => {}, error = () => {} } = {}) {
   if (typeof run !== "function") throw new Error("createScheduler requires run(schedule)");
   let timer = null;
   let ticking = false;
@@ -179,7 +185,7 @@ export function createScheduler({ targetRoot, run, intervalMs = 30_000, now = ()
     try {
       const at = now();
       const outcomes = [];
-      for (const schedule of dueSchedules({ targetRoot, now: at, state: readScheduleState({ targetRoot, env }) })) {
+      for (const schedule of dueSchedules({ targetRoot, now: at, state: readScheduleState({ targetRoot, env }), staleAfterMs })) {
         outcomes.push({ id: schedule.id, ...(await execute(schedule, at)) });
       }
       return outcomes;

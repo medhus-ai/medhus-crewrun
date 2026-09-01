@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 import path from "node:path";
 
@@ -167,6 +167,7 @@ function writeAuthRecord(record) {
     viewer: record.viewer || undefined,
     updated_at: new Date().toISOString()
   }, null, 2)}\n`, { mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch { /* platforms without POSIX modes */ }
   return file;
 }
 

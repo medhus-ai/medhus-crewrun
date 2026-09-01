@@ -73,5 +73,5 @@ test("deliveryReport pairs a month's spend with what it delivered", () => {
   assert.equal(report.costEstimated, true, "no reported cost, only estimates");
   assert.deepEqual(report.byProject.map((row) => [row.key, row.costUsd, row.costPerDelivered]), [["a", 9, 3], ["c", 0, 0]]);
   assert.equal(deliveryReport(null, { delivered: 0, humanTouches: 2, byProject: [] }).costPerDelivered, null);
-  assert.equal(memoryLedger().deliveryReport, deliveryReport);
+  if (Database) assert.equal(memoryLedger().deliveryReport, deliveryReport);
 });

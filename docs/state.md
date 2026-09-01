@@ -27,12 +27,18 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 
 - Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`) — both hosts use them.
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
+- Handoff queue (`handoffs`) and cron schedules for roles (`schedules`).
 - Learning layers: skill proposals (`skill-proposals`), episodic recall (`recall` + `conversations.searchMessages`), per-role reflections (`reflections`).
 
 ## Candidates for a later move
 
 
 ## Last Check
+
+- (7) 2026-09-01 — v0.1.4: `handoffs` (the leased input queue that wakes a role's singleton
+  thread; table name is host-configurable so an existing table is reused as-is) and `schedules`
+  (five-field cron parser, project-versioned definitions, crew-home run state, a scheduler that
+  fires once per due schedule and records outcomes).
 
 - (6) 2026-09-01 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
   human approves into a scope; reuses the preference proposal/audit helpers), `recall`

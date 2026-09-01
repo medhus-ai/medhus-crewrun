@@ -75,6 +75,8 @@ choices never enter a repository.
 | `budget` | `createBudgetLedger({ getDb })` — per-run rows, monthly report, subscription cost estimates |
 | `conversations` | `createConversationStore({ getDb })` — durable chat threads and messages per project/role |
 | `work-items` | `createWorkItemSource({ dir })` — tasks as markdown files (frontmatter or bold bullets) |
+| `handoffs` | `createHandoffQueue({ getDb })` — durable inputs for a role's thread: attach once, claim in leased batches, recover after a crash ("wake the manager") |
+| `schedules` | Cron-scheduled role turns: `<crew dir>/schedules.json`, `parseCron`, `dueSchedules`, `createScheduler({ run })` |
 | `skills`, `skill-proposals` | Scoped `SKILL.md` skills; agent-proposed skills that a human approves into a scope |
 | `preference-memory`, `reflections`, `recall` | Approved preferences; per-role journals; episodic recall over past conversations |
 | `execution-policy` | Container sandbox policy |
@@ -104,6 +106,21 @@ Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token
 > permitted by those SDKs today, but the vendors set the rules and can change them. Read
 > Anthropic's and OpenAI's current terms before running unattended workloads on a
 > subscription, and prefer API keys for anything you operate for others.
+
+## Handoffs and schedules
+
+Two ways work reaches a role without a person typing in a chat:
+
+- **Handoffs** — `enqueueHandoff({ conversationId, taskKey, body, externalId })` queues an input
+  for a role's singleton thread (a task's manager conversation). A worker claims a bounded
+  batch under a lease; queued bodies are attached to the transcript exactly once, retries never
+  duplicate them, an expired lease makes a crashed worker's batch reclaimable, and an
+  `externalId` makes a retried caller idempotent.
+- **Schedules** — `<crew dir>/schedules.json` holds `{ id, role, cron, prompt, enabled }` entries
+  (standard five-field cron, local time). `createScheduler({ targetRoot, run })` ticks, fires each
+  due schedule once (a schedule that missed several windows fires once, not per window), and
+  records outcomes under the crew home so the repository never churns. `run(schedule)` is the
+  host's role turn — typically `runner.runRoleCapture`.
 
 ## Memory and learning
 

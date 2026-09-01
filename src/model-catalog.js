@@ -36,19 +36,22 @@ export function modelCatalogPath() {
   return path.join(crewHome(), "model-catalog.json");
 }
 
-let cache = { file: "", mtimeNs: 0n, catalog: null };
+let cache = { file: "", stamp: "", catalog: null };
 
 // { updated_at, providers: { anthropic: [{model,label,description,efforts}], openai: [...] } } or null.
+// The cache key includes the size: two writes inside one mtime tick (Windows timestamp granularity)
+// must not serve the earlier content.
 export function loadModelCatalog() {
   const file = modelCatalogPath();
   try {
-    const { mtimeNs } = statSync(file, { bigint: true });
-    if (cache.file === file && cache.mtimeNs === mtimeNs) return cache.catalog;
+    const { mtimeNs, size } = statSync(file, { bigint: true });
+    const stamp = `${mtimeNs}:${size}`;
+    if (cache.file === file && cache.stamp === stamp) return cache.catalog;
     const catalog = normalizeCatalog(JSON.parse(readFileSync(file, "utf8")));
-    cache = { file, mtimeNs, catalog };
+    cache = { file, stamp, catalog };
     return catalog;
   } catch {
-    if (cache.file === file) cache = { file: "", mtimeNs: 0n, catalog: null };
+    if (cache.file === file) cache = { file: "", stamp: "", catalog: null };
     return null;
   }
 }
@@ -101,7 +104,7 @@ export async function refreshModelCatalog({
   const file = modelCatalogPath();
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
-  cache = { file: "", mtimeNs: 0n, catalog: null };
+  cache = { file: "", stamp: "", catalog: null };
   return { catalog, refreshed: true, errors };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "medhus-crewrun",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Run a crew of AI roles on the vendor agent runtimes you already pay for \u2014 Claude, Codex, OpenRouter, local \u2014 with brokered tools over MCP, sandboxed edits, and a cost ledger.",
   "keywords": [
     "agents",
@@ -39,7 +39,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.170",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/codex-sdk": "^0.139.0",
+    "@openai/codex-sdk": "^0.152.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

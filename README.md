@@ -111,16 +111,17 @@ Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token
 
 Two ways work reaches a role without a person typing in a chat:
 
-- **Handoffs** — `enqueueHandoff({ conversationId, taskKey, body, externalId })` queues an input
+- **Handoffs** — `enqueueHandoff({ targetRoot, conversationId, taskKey, body, externalId })` queues an input
   for a role's singleton thread (a task's manager conversation). A worker claims a bounded
   batch under a lease; queued bodies are attached to the transcript exactly once, retries never
   duplicate them, an expired lease makes a crashed worker's batch reclaimable, and an
   `externalId` makes a retried caller idempotent.
 - **Schedules** — `<crew dir>/schedules.json` holds `{ id, role, cron, prompt, enabled }` entries
-  (standard five-field cron, local time). `createScheduler({ targetRoot, run })` ticks, fires each
-  due schedule once (a schedule that missed several windows fires once, not per window), and
-  records outcomes under the crew home so the repository never churns. `run(schedule)` is the
-  host's role turn — typically `runner.runRoleCapture`.
+  (numeric five-field cron in local time; `*`, lists, ranges, and steps are supported).
+  `createScheduler({ targetRoot, run })` ticks, fires each due schedule once (a schedule that
+  missed several windows fires once, not per window), and records outcomes under the crew home
+  so the repository never churns. Run one scheduler per project. `run(schedule)` is the host's
+  role turn — typically `runner.runRoleCapture`.
 
 ## Memory and learning
 
@@ -166,9 +167,9 @@ crewrun has neutral defaults and no product identity; a host injects its own.
 
 ## Security notes
 
-- API keys live in one AES-256-GCM file (`~/.crew/secrets.json`, mode 0600) sealed with the
-  operator password; they are exported to vendor SDKs as environment variables only for the
-  duration of the process that unlocked the store.
+- API keys live in one AES-256-GCM file (`~/.crew/secrets.json`, created with mode 0600) sealed
+  with the operator password; they are exported to vendor SDKs as environment variables only
+  for the duration of the process that unlocked the store.
 - Codex reaches host tools through a child process. The tool context crosses that boundary as
   plain data (no closures); remote-auth tokens travel in a 0600 file, never in the child
   environment.

@@ -33,24 +33,54 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 ## Candidates for a later move
 
 
+## Known gaps from the 2026-08-31 review
+
+- Schedule state is a JSON file without a cross-process claim. Hosts must currently run one
+  scheduler per project. If a process exits after writing `lastStartedAt` but before
+  `lastRunAt`, that schedule remains classified as running; add a lease/recovery rule before
+  treating schedules as crash-safe.
+- Singleton-conversation unique indexes cover `(target_root, reference)` across every role in
+  `singletonRoles`, while lookup includes `role`. Configuring two singleton roles for the same
+  reference can therefore make the second `getOrCreateConversation` fail; include `role` in the
+  indexes or explicitly narrow the contract to one singleton role.
+- `enqueueHandoff` accepts `targetRoot` separately from `conversationId` without verifying that
+  it matches the conversation row. Validate that relationship before using pending handoffs to
+  select a project to run.
+- Role identifiers are not validated consistently at filesystem boundaries. `removeRole` does
+  not apply the slug validation used by `addRole`, so traversal segments can move markdown files
+  outside the roles directory; `startRoleTurn` also interpolates an unvalidated role into its
+  role-file path. Validate before constructing either path.
+- Secret and auth files are created with mode 0600, but `writeFileSync(..., { mode: 0o600 })`
+  does not repair permissions on an existing file. Explicitly chmod after writes before claiming
+  the mode is continuously enforced.
+
+
 ## Last Check
 
-- (7) 2026-09-01 — v0.1.4: `handoffs` (the leased input queue that wakes a role's singleton
+- (8) 2026-09-01 — v0.1.5: Codex SDK `^0.152.0` (GPT-5.6 model ids); no code change.
+
+- (9) 2026-08-31 — Code and documentation review. The non-SQLite suite passes under Node 20;
+  SQLite-backed tests were skipped because the installed native `better-sqlite3` binding requires
+  GLIBC 2.38 while the available Node 20 image provides an older GLIBC. Corrected the public
+  handoff signature, cron feature description, and secret-file mode wording; recorded the
+  scheduler-recovery, singleton-index, handoff-root, path-validation, and file-mode gaps above.
+
+- (7) 2026-08-31 — v0.1.4: `handoffs` (the leased input queue that wakes a role's singleton
   thread; table name is host-configurable so an existing table is reused as-is) and `schedules`
   (five-field cron parser, project-versioned definitions, crew-home run state, a scheduler that
   fires once per due schedule and records outcomes).
 
-- (6) 2026-09-01 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
+- (6) 2026-08-31 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
   human approves into a scope; reuses the preference proposal/audit helpers), `recall`
   (episodes = ask + outcome, by role / reference / mention; LIKE with escaped wildcards), and
   `reflections` (per-role append-only journal, bounded read, prompt section). Hosts expose these
   as tools and decide where to inject; the kernel ships no skill or memory content.
 
-- (5) 2026-09-01 — v0.1.2: `deliveryReport` on the ledger; no host is named anywhere in the repo;
+- (5) 2026-08-31 — v0.1.2: `deliveryReport` on the ledger; no host is named anywhere in the repo;
   the `cli` engine publishes prompt-file env under `CREW_*` plus the configured legacy prefix;
   `EXTRA_PATH` reads through `crewEnv`; catalog cache keys on size + mtime.
 
-- (4) 2026-09-01 — v0.1.1: native-Windows runtime fixes ported from the engineering host (`resolveExecutable`
+- (4) 2026-08-31 — v0.1.1: native-Windows runtime fixes ported from the engineering host (`resolveExecutable`
   prefers PATHEXT launchers and the claude/codex `.exe` behind npm's `.cmd` shims, restores real
   file case; the `cli` engine resolves its command the same way). v0.1.0 stays as pushed.
 

@@ -169,7 +169,7 @@ export function createScheduler({ targetRoot, run, intervalMs = 30_000, staleAft
     const finished = readScheduleState({ targetRoot, env });
     finished.runs[schedule.id] = {
       lastStartedAt: startedAt.toISOString(),
-      lastRunAt: new Date(Math.max(Date.now(), startedAt.getTime())).toISOString(),
+      lastRunAt: new Date(Math.max(now().getTime(), startedAt.getTime())).toISOString(),
       lastStatus: result?.ok === false ? "failed" : "ok",
       lastError: result?.ok === false ? String(result.reason || "").slice(0, 500) : "",
       lastDurationMs: Date.now() - began

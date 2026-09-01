@@ -203,9 +203,11 @@ function defaultSerialize(toolContext = {}, keys = []) {
   return data;
 }
 
+// MCP structuredContent must be an object; arrays and primitives are wrapped as { value }.
 function makeStructured(value) {
   try {
-    return JSON.parse(JSON.stringify(value ?? null));
+    const plain = JSON.parse(JSON.stringify(value ?? null));
+    return plain !== null && typeof plain === "object" && !Array.isArray(plain) ? plain : { value: plain };
   } catch {
     return { value: stringify(value) };
   }

@@ -35,7 +35,9 @@ function demoRegistry(overrides = {}) {
 test("tool names sanitize for function calling", () => {
   assert.equal(sanitizeToolName("codebase.search_code"), "codebase_search_code");
   assert.equal(mcpToolFullName("demo", "doc.read"), "mcp__demo__doc_read");
-  assert.deepEqual(toolResult("plain"), { content: [{ type: "text", text: "plain" }], structuredContent: "plain" });
+  assert.deepEqual(toolResult("plain"), { content: [{ type: "text", text: "plain" }], structuredContent: { value: "plain" } });
+  assert.deepEqual(toolResult([{ id: 1 }]).structuredContent, { value: [{ id: 1 }] }, "structuredContent is always a record, never a bare array");
+  assert.deepEqual(toolResult({ items: [] }).structuredContent, { items: [] }, "plain objects pass through unwrapped");
   assert.equal(toolError(new Error("nope")).isError, true);
 });
 

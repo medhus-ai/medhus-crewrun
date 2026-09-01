@@ -143,6 +143,7 @@ test("refreshModelCatalog merges per provider and keeps entries on partial failu
   assert.equal(result.refreshed, true);
   assert.deepEqual(result.errors, ["Codex: codex CLI not found"]);
   const written = JSON.parse(readFileSync(CATALOG_FILE, "utf8"));
+  assert.ok(written.providers.anthropic, `anthropic missing; path=${modelCatalogPath()} file=${CATALOG_FILE} written=${JSON.stringify(written)} result=${JSON.stringify(result.catalog)}`);
   assert.equal(written.providers.anthropic.length, 3);
   assert.equal(written.providers.openai.length, 1); // preserved from the previous catalog
 

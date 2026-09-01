@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { toolEnv } from "../platform.js";
+import { resolveExecutable, toolEnv } from "../platform.js";
 import { anthropicRouteEnv, secretEnvForRunner } from "../secret-store.js";
 
 // Tier-0 universal engine: invokes the runner profile's configured command
@@ -29,9 +29,11 @@ export function createCliEngine() {
       delete providerEnv.GH_TOKEN;
       delete providerEnv.GITHUB_TOKEN;
       providerEnv.GH_CONFIG_DIR = path.join(tmpdir, "no-gh-auth");
+      const resolved = resolveExecutable(command, { env: providerEnv });
+      const executable = resolved.available ? resolved.path : command;
 
       onStatus?.("thinking…");
-      const child = spawn(command, args, {
+      const child = spawn(executable, args, {
         cwd: targetRoot,
         env: {
           ...providerEnv,
@@ -87,9 +89,12 @@ export function createCliEngine() {
       const health = profile.healthcheck || { command: profile.command, args: profile.args || [] };
       const command = health.command || profile.command;
       const args = health.args || profile.args || [];
-      const result = spawnSync(command, args, {
+      const runtimeEnv = toolEnv();
+      const resolved = resolveExecutable(command, { env: runtimeEnv });
+      const executable = resolved.available ? resolved.path : command;
+      const result = spawnSync(executable, args, {
         encoding: "utf8",
-        env: toolEnv(),
+        env: runtimeEnv,
         timeout: 60000
       });
       const stdout = String(result.stdout || "").trim();

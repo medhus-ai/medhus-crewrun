@@ -217,10 +217,45 @@ function looksLikePath(value, platform = process.platform) {
 }
 
 function resolveCandidate(candidate, options) {
-  for (const file of candidateNames(candidate, options)) {
-    if (isExecutableFile(file, options?.platform)) return file;
+  for (const file of [...nativeWindowsCliCandidates(candidate, options), ...candidateNames(candidate, options)]) {
+    if (isExecutableFile(file, options?.platform)) return actualFileCase(file, options?.platform);
   }
   return "";
+}
+
+// npm's .cmd shims for claude/codex wrap a native .exe; spawning the .exe directly avoids the
+// cmd.exe hop and its quoting rules.
+function nativeWindowsCliCandidates(candidate, { platform = process.platform } = {}) {
+  if (platform !== "win32") return [];
+  const extension = path.extname(candidate).toLowerCase();
+  if (extension && extension !== ".cmd" && extension !== ".bat") return [];
+  const stem = extension ? candidate.slice(0, -extension.length) : candidate;
+  const command = path.basename(stem).toLowerCase();
+  if (command !== "claude" && command !== "codex") return [];
+
+  const binDir = path.dirname(stem);
+  const moduleRoots = [path.resolve(binDir, ".."), path.join(binDir, "node_modules")];
+  if (command === "claude") {
+    return moduleRoots.map((root) => path.join(root, "@anthropic-ai", "claude-code", "bin", "claude.exe"));
+  }
+
+  const target = process.arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+  const packageName = process.arch === "arm64" ? "codex-win32-arm64" : "codex-win32-x64";
+  return moduleRoots.map((root) => path.join(
+    root, "@openai", packageName, "vendor", target, "bin", "codex.exe"
+  ));
+}
+
+function actualFileCase(file, platform = process.platform) {
+  if (platform !== "win32") return file;
+  try {
+    const directory = path.dirname(file);
+    const name = path.basename(file);
+    const actual = readdirSync(directory).find((entry) => entry.toLowerCase() === name.toLowerCase());
+    return actual ? path.join(directory, actual) : file;
+  } catch {
+    return file;
+  }
 }
 
 function candidateNames(candidate, { env = process.env, platform = process.platform } = {}) {
@@ -231,7 +266,12 @@ function candidateNames(candidate, { env = process.env, platform = process.platf
     .split(";")
     .map((item) => item.trim())
     .filter(Boolean);
-  return [candidate, ...pathext.map((suffix) => `${candidate}${suffix}`)];
+  // npm installs both POSIX shims and Windows launchers in node_modules/.bin.
+  // Prefer PATHEXT launchers so spawn/execFile never selects an extensionless
+  // shell script that Windows cannot execute directly. Both suffix cases are
+  // tried so the lookup also works on a case-sensitive filesystem.
+  const suffixes = [...new Set(pathext.flatMap((suffix) => [suffix.toLowerCase(), suffix]))];
+  return [...suffixes.map((suffix) => `${candidate}${suffix}`), candidate];
 }
 
 function isExecutableFile(file, platform = process.platform) {

@@ -1,4 +1,4 @@
-import { anthropicRouteEnv } from "../secret-store.js";
+import { anthropicRouteEnv, secretValueForRunner } from "../secret-store.js";
 import { claudeSubagentDefinitions, claudeSubagentToolRule, roleCapabilityProfile } from "../role-capabilities.js";
 import { emitLines } from "./utils.js";
 
@@ -14,6 +14,27 @@ const EFFORT_MAP = {
   xhigh: "xhigh",
   max: "max"
 };
+
+
+// Subprocess env for the SDK. Routed profiles (base_url) speak the Anthropic protocol with a
+// Bearer token; otherwise `auth` forces subscription (strip ambient keys so CLI login is used)
+// or API-key (inject the stored key, failing loudly when none exists).
+function claudeAuthEnv(profile) {
+  const routeEnv = anthropicRouteEnv(profile);
+  if (routeEnv.ANTHROPIC_BASE_URL) return { env: { ...process.env, ...routeEnv } };
+  if (profile.auth === "subscription") {
+    const env = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    return { env };
+  }
+  if (profile.auth === "api-key") {
+    const key = secretValueForRunner(profile) || process.env.ANTHROPIC_API_KEY || "";
+    if (!key) throw new Error(`runner ${profile.id} is set to API-key auth but no Anthropic API key is available; store one or switch the profile to subscription auth`);
+    return { env: { ...process.env, ANTHROPIC_API_KEY: key } };
+  }
+  return {};
+}
 
 export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
   const load = loadSdk || (async () => {
@@ -36,13 +57,11 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
       ? tools.claudeToolInstructions(role, { ...(toolContext || {}), targetRoot, root: targetRoot })
       : "";
     const effectiveSystemPrompt = [systemPrompt, toolInstructions].filter(Boolean).join("\n\n");
-    // Routed profiles (GLM, Kimi, local servers) speak the Anthropic API at profile.base_url.
-    // options.env replaces the subprocess env entirely, so spread process.env back in.
-    const routeEnv = anthropicRouteEnv(profile);
+    // options.env replaces the subprocess env entirely, so claudeAuthEnv spreads process.env back in.
     return {
       cwd: workdir,
       model: profile.model || "sonnet",
-      ...(routeEnv.ANTHROPIC_BASE_URL ? { env: { ...process.env, ...routeEnv } } : {}),
+      ...claudeAuthEnv(profile),
       // Models without effort support (e.g. Haiku) run with the CLI default.
       ...(profile.reasoning_effort ? { effort: EFFORT_MAP[profile.reasoning_effort] || "high" } : {}),
       systemPrompt: effectiveSystemPrompt,
@@ -177,14 +196,13 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
         const query = sdk.query;
         const abortController = new AbortController();
         const timer = setTimeout(() => abortController.abort(), 120000);
-        const routeEnv = anthropicRouteEnv(profile);
         let resultMessage = null;
         try {
           const stream = query({
             prompt: "Respond with the word OK and nothing else.",
             options: {
               model: profile.model || "sonnet",
-              ...(routeEnv.ANTHROPIC_BASE_URL ? { env: { ...process.env, ...routeEnv } } : {}),
+              ...claudeAuthEnv(profile),
               tools: [],
               maxTurns: 1,
               permissionMode: "dontAsk",

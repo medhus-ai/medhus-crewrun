@@ -1,8 +1,8 @@
-# crewcore
+# medhus-router
 
 **The shared agent runtime behind Medhus crews.**
 
-`@medhus/crewcore` runs one role turn on a vendor engine with brokered tools: it
+`@medhus/router` runs one role turn on a vendor engine with brokered tools: it
 resolves the runner profile, assembles the prompt from the role file and its
 declared memory, exposes the host's tools to the model over MCP, isolates
 execute-mode edits in a git worktree or container, and reports usage. Everything
@@ -29,10 +29,11 @@ Two hosts consume it, and neither depends on the other:
 | `roles`, `templates` | Role catalog installer; template reader; the lean-engineering doctrine |
 | `runner-config`, `model-catalog` | Runner profiles (global + per-project role mapping), live model discovery |
 | `secret-store` | Encrypted per-operator API-key store (scrypt + AES-256-GCM) |
+| `budget` | `createBudgetLedger({ getDb })` — token/cost ledger: per-run rows, monthly report, subscription cost estimates |
 | `skills`, `preference-memory`, `execution-policy` | Scoped skills, approved preferences, container policy |
 | `auth`, `request-context`, `markdown`, `process`, `platform`, `frontmatter`, `agent-output` | Framework-free cockpit and OS helpers |
 
-Import by subpath: `import { createRoleRunner } from "@medhus/crewcore/runner";`.
+Import by subpath: `import { createRoleRunner } from "@medhus/router/runner";`.
 
 ## Host contract
 
@@ -55,10 +56,35 @@ Import by subpath: `import { createRoleRunner } from "@medhus/crewcore/runner";`
   `runContainerWorker({ engineId, tools })`; pass their paths as `stdioServerEntry` and
   `container.workerEntry`.
 
+## Providers and auth
+
+Runner profiles route each role to a provider, model, and thinking effort. Per profile, `auth` picks how it authenticates:
+
+| `auth` | Behaviour |
+|---|---|
+| *(absent — auto)* | Today's default: ambient/stored API key if present, else the vendor CLI's subscription login |
+| `"subscription"` | Forces vendor login (Claude Pro/Max, ChatGPT) by stripping ambient API keys from the turn |
+| `"api-key"` | Forces the stored key (secret store `secret_ref` or the provider default) and fails loudly if none exists |
+
+Routed profiles (`base_url`) speak the Anthropic protocol at a third-party endpoint with a Bearer token
+(`ANTHROPIC_AUTH_TOKEN`), and blank `ANTHROPIC_API_KEY` so the token always wins:
+
+- **GLM** (`api.z.ai`), **Kimi** (`api.moonshot.ai`), **local servers** (Ollama, LM Studio, llama.cpp)
+- **OpenRouter** (`openrouter.ai/api`) — one `OPENROUTER_API_KEY` for its whole catalog. The
+  `openrouter-auto` preset targets `openrouter/auto`; concrete models are discovered from
+  `/api/v1/models?supported_parameters=tools` (tool-calling models only) once the key is stored.
+
+## Budget ledger
+
+`createBudgetLedger({ getDb, describeSource, pricing })` records one row per agent run
+(tokens, reported cost, duration, result) into a `budget_runs` table in the host's SQLite
+database, and `report()` aggregates by month with per-project/engine/runner rows, estimating
+API-equivalent cost for subscription runs from a pricing table hosts can override.
+
 ## Install
 
 ```bash
-npm install "github:medhus-ai/medhus-crewcore#v0.1.0"
+npm install "github:medhus-ai/medhus-router#v0.1.0"
 ```
 
 Node 20 or newer. Dependencies: the Claude Agent SDK, the Codex SDK, the MCP SDK, and zod.

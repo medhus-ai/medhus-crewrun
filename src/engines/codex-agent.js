@@ -20,12 +20,18 @@ const NO_TOOLS = Object.freeze({ available: false, transport: "mcp", mcp: true }
 // Routed profiles target an OpenAI-compatible endpoint (e.g. vLLM) with their own
 // key; without base_url the ambient subscription/env auth stays untouched.
 function codexClientOptions(profile, mcpConfig = {}, capabilities = null) {
-  const apiKey = profile?.base_url ? secretValueForRunner(profile) : "";
+  const auth = profile?.auth || "auto";
+  let apiKey = profile?.base_url ? secretValueForRunner(profile) : "";
+  if (auth === "api-key") {
+    apiKey = secretValueForRunner(profile) || process.env.OPENAI_API_KEY || "";
+    if (!apiKey) throw new Error(`runner ${profile.id} is set to API-key auth but no OpenAI API key is available; store one or switch the profile to subscription auth`);
+  }
   const allowSubagents = capabilities?.subagents?.allowed === true;
   return {
     ...(profile?.base_url ? { baseUrl: profile.base_url } : {}),
     ...(apiKey ? { apiKey } : {}),
-    env: codexRuntimeEnv(),
+    // Subscription-forced profiles drop the ambient key so ChatGPT login auth is used.
+    env: codexRuntimeEnv(process.env, { dropApiKey: auth === "subscription" }),
     config: {
       features: {
         hooks: false,
@@ -43,7 +49,7 @@ function codexClientOptions(profile, mcpConfig = {}, capabilities = null) {
   };
 }
 
-function codexRuntimeEnv(env = process.env) {
+function codexRuntimeEnv(env = process.env, { dropApiKey = false } = {}) {
   const allowed = [
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
     "LANG", "TERM", "CODEX_HOME", "OPENAI_API_KEY", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -52,6 +58,7 @@ function codexRuntimeEnv(env = process.env) {
   const out = {};
   for (const key of allowed) if (env[key] !== undefined) out[key] = env[key];
   for (const key of Object.keys(env)) if (key.startsWith("LC_")) out[key] = env[key];
+  if (dropApiKey) delete out.OPENAI_API_KEY;
   const ghConfig = path.join(os.tmpdir(), "crew-provider-no-gh-auth");
   try { mkdirSync(ghConfig, { recursive: true, mode: 0o700 }); } catch { /* best effort */ }
   out.GH_CONFIG_DIR = ghConfig;

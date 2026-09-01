@@ -5,7 +5,7 @@ updated: 2026-08-31
 status: active
 ---
 
-# crewcore State
+# medhus-router State
 
 ## Direction
 
@@ -25,10 +25,20 @@ tag; the org automation is the second.
 ## Candidates for a later move
 
 - Conversations/messages store (currently GitCrew `cockpit/src/store.js`) once a second host
-  needs durable chats.
+  needs durable chats. The budget ledger already follows the intended pattern: kernel schema and
+  math, host-owned database handle.
 - A markdown work-item source (tasks as files) — useful to both hosts.
 
 ## Last Check
+
+- (2) 2026-08-31 — Renamed to `medhus-router` / `@medhus/router` (was medhus-crewcore). Added:
+  the shared token/cost budget ledger (`src/budget.js`, host-injected SQLite handle so GitCrew's
+  rows stay in cockpit.db); OpenRouter as a provider (secret `OPENROUTER_API_KEY`, preset
+  `openrouter-auto`, discovery filtered to tool-calling models, Anthropic-protocol route at
+  `https://openrouter.ai/api` per OpenRouter's Claude Code guide); per-runner `auth:
+  "subscription" | "api-key"` forcing on both agent engines; and routed profiles now blank
+  `ANTHROPIC_API_KEY` so the Bearer token wins (latent GLM/Kimi bug, required by OpenRouter).
+  better-sqlite3 added as a devDependency for ledger tests only.
 
 - (1) 2026-08-31 — Initial extraction: 27 modules, 21 test files; GitCrew consumes it via
   thin binding modules and its full suite stays green.

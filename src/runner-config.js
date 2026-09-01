@@ -16,6 +16,7 @@ const RUNNER_MODES = new Set(["propose", "execute"]);
 // Vendor-documented Anthropic-protocol endpoints (Claude Code integration).
 const GLM_ANTHROPIC_URL = "https://api.z.ai/api/anthropic";
 const KIMI_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic";
+const OPENROUTER_ANTHROPIC_URL = "https://openrouter.ai/api";
 
 export const BUILT_IN_RUNNER_PROFILES = [
   // Subscription CLIs — concrete profile ids used by generated projects.
@@ -48,6 +49,8 @@ export const BUILT_IN_RUNNER_PROFILES = [
   // the key from Settings → API Keys (both vendors document this integration).
   anthropicRouteProfile("glm-4.7", "GLM 4.7", "glm", GLM_ANTHROPIC_URL, "glm-4.7"),
   anthropicRouteProfile("kimi-k2.7", "Kimi K2.7 Code", "kimi", KIMI_ANTHROPIC_URL, "kimi-k2.7-code"),
+  // OpenRouter: one key, many models. The auto-router alias is stable; concrete models are discovered.
+  anthropicRouteProfile("openrouter-auto", "OpenRouter Auto Router", "openrouter", OPENROUTER_ANTHROPIC_URL, "openrouter/auto"),
 ];
 
 // Profiles generated from the discovered model catalog (see model-catalog.js).
@@ -97,6 +100,15 @@ export function discoveredRunnerProfiles(catalog = loadModelCatalog()) {
       `Kimi ${entry.label}`,
       "kimi",
       KIMI_ANTHROPIC_URL,
+      entry.model
+    ));
+  }
+  for (const entry of providers.openrouter || []) {
+    profiles.push(anthropicRouteProfile(
+      `openrouter-${modelIdSlug(entry.model)}`,
+      `OpenRouter ${entry.label}`,
+      "openrouter",
+      OPENROUTER_ANTHROPIC_URL,
       entry.model
     ));
   }
@@ -155,8 +167,8 @@ export function defaultRunnerProfileId(tools = detectRunnerTools()) {
   return "";
 }
 
-const PROVIDER_LABELS = { anthropic: "Claude", openai: "Codex", glm: "GLM", kimi: "Kimi", local: "Local" };
-const MODEL_LABELS = { sonnet: "Sonnet 4.6", opus: "Opus 4.8", "gpt-5.5": "GPT-5.5", "code-spark": "Code Spark" };
+const PROVIDER_LABELS = { anthropic: "Claude", openai: "Codex", glm: "GLM", kimi: "Kimi", openrouter: "OpenRouter", local: "Local" };
+const MODEL_LABELS = { sonnet: "Sonnet 4.6", opus: "Opus 4.8", "gpt-5.5": "GPT-5.5", "code-spark": "Code Spark", "openrouter/auto": "Auto Router" };
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", "very-high": "Very High", xhigh: "Very High", max: "Max" };
 
 // Thinking is always on: effort is the reasoning level, and there is no "off".
@@ -671,6 +683,11 @@ function normalizeRunner(value) {
     throw new Error(`runner ${runner.id} has unknown engine: ${runner.engine}`);
   }
   runner.mode = RUNNER_MODES.has(runner.mode) ? runner.mode : "propose";
+  // Auth preference: "subscription" forces vendor CLI/OAuth login, "api-key" forces a stored key;
+  // absent means auto (today's behavior: ambient key if present, else subscription).
+  const auth = String(runner.auth || "").trim().toLowerCase();
+  if (auth === "subscription" || auth === "api-key") runner.auth = auth;
+  else delete runner.auth;
   runner.kind = String(runner.kind || (runner.engine === "cli" ? "cli" : "agent-sdk")).trim();
   runner.provider = String(runner.provider || "custom").trim();
   runner.model = String(runner.model || "").trim();

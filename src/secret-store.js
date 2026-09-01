@@ -14,6 +14,7 @@ export const KNOWN_SECRETS = [
   { id: "openai", label: "OpenAI · Codex", env: "OPENAI_API_KEY", hint: "sk-…" },
   { id: "glm", label: "Z.ai · GLM", env: "GLM_API_KEY", hint: "GLM coding-plan key" },
   { id: "kimi", label: "Moonshot · Kimi K2", env: "MOONSHOT_API_KEY", hint: "Moonshot key" },
+  { id: "openrouter", label: "OpenRouter", env: "OPENROUTER_API_KEY", hint: "sk-or-…" },
   { id: "github", label: "GitHub · token", env: "GH_TOKEN", hint: "ghp_… or github_pat_…" },
   { id: "github-app", label: "GitHub App · private key", env: "GITHUB_APP_PRIVATE_KEY", hint: "-----BEGIN PRIVATE KEY-----" },
   { id: "azure-devops", label: "Azure DevOps · PAT", env: "AZURE_DEVOPS_EXT_PAT", hint: "Azure DevOps personal access token", agentRuntime: false }
@@ -179,7 +180,9 @@ export function anthropicRouteEnv(runner) {
   const baseUrl = String(runner?.base_url || "").trim();
   if (!baseUrl) return {};
   const key = secretValueForRunner(runner);
-  return { ANTHROPIC_BASE_URL: baseUrl, ...(key ? { ANTHROPIC_AUTH_TOKEN: key } : {}) };
+  // ANTHROPIC_API_KEY is explicitly blanked so the Bearer token wins even when the operator
+  // also stores a direct Anthropic key (OpenRouter's Claude Code guide requires this).
+  return { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_API_KEY: "", ...(key ? { ANTHROPIC_AUTH_TOKEN: key } : {}) };
 }
 
 // ── Writes (require an unlocked store; reseal in place, no re-prompt) ──────────

@@ -55,6 +55,7 @@ test("anthropicRouteEnv maps provider keys to the Anthropic env contract", () =>
   const glm = resolveRunnerProfile("glm-4.7");
   assert.deepEqual(store.anthropicRouteEnv(glm), {
     ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+    ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: "glm-key-1"
   });
   // secret_ref wins over the provider default key.
@@ -62,20 +63,26 @@ test("anthropicRouteEnv maps provider keys to the Anthropic env contract", () =>
   // Local servers route without a key (Ollama needs none).
   assert.deepEqual(
     store.anthropicRouteEnv({ provider: "local", base_url: "http://localhost:11434" }),
-    { ANTHROPIC_BASE_URL: "http://localhost:11434" }
+    { ANTHROPIC_BASE_URL: "http://localhost:11434", ANTHROPIC_API_KEY: "" }
   );
   // No base_url → no routing; subscription/ambient auth stays untouched.
   assert.deepEqual(store.anthropicRouteEnv({ provider: "anthropic", model: "sonnet" }), {});
 
   store.lock();
   // Locked store still routes the URL, just without a token.
-  assert.deepEqual(store.anthropicRouteEnv(glm), { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+  assert.deepEqual(store.anthropicRouteEnv(glm), { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY: "" });
 });
 
 test("GLM and Kimi presets are in the picker and resolve with base_url", () => {
   const providers = runnerCatalog().map((group) => group.provider);
   assert.ok(providers.includes("glm"));
   assert.ok(providers.includes("kimi"));
+  assert.ok(providers.includes("openrouter"));
+
+  const auto = resolveRunnerProfile("openrouter-auto");
+  assert.equal(auto.engine, "claude-agent");
+  assert.equal(auto.base_url, "https://openrouter.ai/api");
+  assert.equal(auto.model, "openrouter/auto");
 
   const kimi = resolveRunnerProfile("kimi-k2.7");
   assert.equal(kimi.engine, "claude-agent");
@@ -105,6 +112,7 @@ test("claude-agent routes env for base_url profiles and leaves others alone", as
   assert.equal(routed.options.model, "kimi-k2.7-code");
   assert.equal(routed.options.env.ANTHROPIC_BASE_URL, "https://api.moonshot.ai/anthropic");
   assert.equal(routed.options.env.ANTHROPIC_AUTH_TOKEN, "kimi-key");
+  assert.equal(routed.options.env.ANTHROPIC_API_KEY, "", "direct-Anthropic key is blanked on routed profiles");
   assert.equal(routed.options.env.PATH, process.env.PATH); // process env inherited, not replaced
 
   const plain = {};
@@ -122,6 +130,7 @@ test("discovered GLM/Kimi/local models become routed picker profiles", () => {
     providers: {
       glm: [{ model: "glm-4.7", label: "glm-4.7", efforts: [] }, { model: "glm-5.2", label: "glm-5.2", efforts: [] }],
       kimi: [{ model: "kimi-k2.7-code", label: "kimi-k2.7-code", efforts: [] }],
+      openrouter: [{ model: "qwen/qwen3-coder", label: "Qwen3 Coder", efforts: [] }],
       local: [
         { model: "qwen3-coder:30b", label: "qwen3-coder:30b", efforts: [], base_url: "http://localhost:11434" },
         { model: "no-server", label: "no-server", efforts: [] } // no base_url → skipped
@@ -136,6 +145,10 @@ test("discovered GLM/Kimi/local models become routed picker profiles", () => {
   const localQwen = resolveRunnerProfile("local-qwen3-coder-30b");
   assert.equal(localQwen.base_url, "http://localhost:11434");
   assert.equal(resolveRunnerProfile("local-no-server"), null);
+
+  const openrouter = resolveRunnerProfile("openrouter-qwen-qwen3-coder");
+  assert.equal(openrouter.base_url, "https://openrouter.ai/api");
+  assert.equal(openrouter.model, "qwen/qwen3-coder");
 
   const catalog = runnerCatalog();
   const glmGroup = catalog.find((group) => group.provider === "glm");
@@ -167,4 +180,59 @@ test("codex-agent passes baseUrl and apiKey only for routed profiles while isola
   assert.equal(seen[1].config.features.multi_agent, false);
   assert.equal(seen[1].config.memories.use_memories, false);
   assert.equal(seen[1].env.GH_TOKEN, undefined);
+});
+
+test("auth modes force subscription or API-key on the Claude engine", async () => {
+  store.unlock(PASSWORD);
+  store.setSecret("ANTHROPIC_API_KEY", "sk-ant-stored");
+  process.env.ANTHROPIC_API_KEY = "sk-ant-ambient";
+
+  const subscription = {};
+  await runTurn(
+    createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(subscription, [OK_RESULT]) }),
+    { id: "claude-sub", provider: "anthropic", model: "sonnet", auth: "subscription" }
+  );
+  assert.equal(subscription.options.env.ANTHROPIC_API_KEY, undefined, "subscription auth strips the ambient key");
+  assert.equal(subscription.options.env.PATH, process.env.PATH);
+
+  const keyed = {};
+  await runTurn(
+    createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(keyed, [OK_RESULT]) }),
+    { id: "claude-key", provider: "anthropic", model: "sonnet", auth: "api-key" }
+  );
+  assert.equal(keyed.options.env.ANTHROPIC_API_KEY, "sk-ant-stored", "api-key auth injects the stored key");
+
+  store.lock();
+  delete process.env.ANTHROPIC_API_KEY;
+  const failed = await new Promise((resolve) => {
+    createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery({}, [OK_RESULT]) })
+      .startTurn({ profile: { id: "claude-key", provider: "anthropic", auth: "api-key" }, workdir: "/tmp", role: "planner", mode: "propose", prompt: "p", onError: () => {}, onClose: resolve });
+  });
+  assert.equal(failed.code, 1);
+  assert.match(failed.stderr, /API-key auth but no Anthropic API key/);
+});
+
+test("auth modes force subscription or API-key on the Codex engine", async () => {
+  store.unlock(PASSWORD);
+  store.setSecret("OPENAI_API_KEY", "sk-openai-stored");
+  process.env.OPENAI_API_KEY = "sk-openai-ambient";
+
+  const seen = [];
+  class FakeCodex {
+    constructor(options = {}) { seen.push(options); }
+    startThread() { return { run: async () => ({ finalResponse: "OK" }) }; }
+  }
+  const engine = createCodexAgentEngine({ loadCodex: async () => FakeCodex });
+  await engine.healthcheck({ id: "codex-sub", provider: "openai", auth: "subscription" });
+  assert.equal(seen[0].apiKey, undefined);
+  assert.equal(seen[0].env.OPENAI_API_KEY, undefined, "subscription auth drops the ambient key from the runtime env");
+
+  await engine.healthcheck({ id: "codex-key", provider: "openai", auth: "api-key" });
+  assert.equal(seen[1].apiKey, "sk-openai-stored");
+
+  store.lock();
+  delete process.env.OPENAI_API_KEY;
+  const failed = await engine.healthcheck({ id: "codex-key", provider: "openai", auth: "api-key" });
+  assert.equal(failed.ok, false);
+  assert.match(failed.message, /API-key auth but no OpenAI API key/);
 });

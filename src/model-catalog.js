@@ -21,7 +21,9 @@ const FETCH_TIMEOUT_MS = 15000;
 // Key-gated vendors: discovery runs only while the secret store is unlocked.
 const OPENAI_COMPAT_PROVIDERS = {
   glm: { modelsUrl: "https://api.z.ai/api/paas/v4/models", secret: "GLM_API_KEY" },
-  kimi: { modelsUrl: "https://api.moonshot.ai/v1/models", secret: "MOONSHOT_API_KEY" }
+  kimi: { modelsUrl: "https://api.moonshot.ai/v1/models", secret: "MOONSHOT_API_KEY" },
+  // Server-side filter to tool-calling models: agent engines need tool use, and it keeps the picker sane.
+  openrouter: { modelsUrl: "https://openrouter.ai/api/v1/models?supported_parameters=tools", secret: "OPENROUTER_API_KEY" }
 };
 
 // The catalog sits next to the global runner registry, so a CREW_RUNNERS_FILE
@@ -65,6 +67,7 @@ export async function refreshModelCatalog({
   discoverCodex = discoverCodexModels,
   discoverGlm = () => discoverKeyedModels("glm"),
   discoverKimi = () => discoverKeyedModels("kimi"),
+  discoverOpenRouter = () => discoverKeyedModels("openrouter"),
   discoverLocal = discoverLocalModels
 } = {}) {
   const existing = loadModelCatalog();
@@ -78,6 +81,7 @@ export async function refreshModelCatalog({
     ["openai", "Codex", discoverCodex],
     ["glm", "GLM", discoverGlm],
     ["kimi", "Kimi", discoverKimi],
+    ["openrouter", "OpenRouter", discoverOpenRouter],
     ["local", "Local", discoverLocal]
   ];
   const results = await Promise.allSettled(jobs.map(([, , discover]) => discover()));
@@ -177,7 +181,12 @@ async function fetchJson(url, key) {
 export function openAiCompatEntries(parsed) {
   return (Array.isArray(parsed?.data) ? parsed.data : [])
     .filter((model) => typeof model?.id === "string" && model.id.trim())
-    .map((model) => ({ model: model.id.trim(), label: model.id.trim(), description: "", efforts: [] }));
+    .map((model) => ({
+      model: model.id.trim(),
+      label: String(model.name || model.id).trim(),
+      description: "",
+      efforts: []
+    }));
 }
 
 export function claudeCatalogEntries(models) {

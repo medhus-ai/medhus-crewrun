@@ -139,7 +139,8 @@ function containerCredentialEnv(profile = {}) {
   const ambientName = profile.provider === "openai" ? "OPENAI_API_KEY"
     : profile.provider === "anthropic" ? "ANTHROPIC_API_KEY"
       : profile.provider === "glm" ? "GLM_API_KEY"
-        : profile.provider === "kimi" ? "MOONSHOT_API_KEY" : "";
+        : profile.provider === "kimi" ? "MOONSHOT_API_KEY"
+          : profile.provider === "openrouter" ? "OPENROUTER_API_KEY" : "";
   return {
     ...stored,
     ...routed,
@@ -148,7 +149,7 @@ function containerCredentialEnv(profile = {}) {
 }
 
 function requiresApiCredential(profile = {}) {
-  return ["openai", "anthropic", "glm", "kimi"].includes(String(profile.provider || ""));
+  return ["openai", "anthropic", "glm", "kimi", "openrouter"].includes(String(profile.provider || ""));
 }
 
 function realpathOr(file) {

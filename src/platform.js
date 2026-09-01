@@ -2,6 +2,8 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync, readdir
 import os from "node:os";
 import path from "node:path";
 
+import { crewEnv } from "./crew-dirs.js";
+
 const SUPPORTED_PLATFORMS = new Set(["linux", "darwin", "win32"]);
 const MIN_NODE_MAJOR = 20;
 
@@ -124,7 +126,7 @@ export function knownToolDirs({ env = process.env, platform = process.platform }
     add(pathApi.join(env.ChocolateyInstall || "C:\\ProgramData\\chocolatey", "bin"));
   }
 
-  for (const dir of splitPath(env.CREW_EXTRA_PATH || env.GITCREW_EXTRA_PATH, platform)) add(dir);
+  for (const dir of splitPath(crewEnv("EXTRA_PATH", env), platform)) add(dir);
   return dirs.filter(Boolean);
 }
 

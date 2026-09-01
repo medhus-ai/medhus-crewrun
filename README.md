@@ -23,9 +23,8 @@ and keep a ledger of what every run cost.
 - **Everything is accounted for.** Token counts, reported cost, duration, and result per run,
   aggregated per month, project, engine, and runner — with cost estimates for subscription runs.
 
-crewrun is extracted from, and used by, [GitCrew](https://github.com/medhus-ai/medhus-gitcrew)
-(an engineering control plane) and Medhus's company-operations automation. It has no opinion
-about *what* your roles do.
+crewrun grew out of two very different hosts — an engineering control plane and a
+company-operations automation — and carries no opinion about *what* your roles do.
 
 ## Quick start
 
@@ -109,7 +108,7 @@ Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token
 crewrun has neutral defaults and no product identity; a host injects its own.
 
 - **State directory.** `.crew/` by default. Call `configureCrew({ dirName, legacyEnvPrefix })`
-  once before the first use to brand it (GitCrew uses `.gitcrew` and accepts `GITCREW_*` env).
+  once before the first use to brand it (a host might choose `.acme` and accept its older `ACME_*` env).
   The session cookie name follows it.
 - **Environment.** Every override reads `CREW_<NAME>` (then the configured legacy prefix):
   `HOME`, `SECRETS_FILE`, `RUNNERS_FILE`, `MODEL_CATALOG_FILE`, `AUTH_FILE`, `WORKSPACE`,

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { crewEnvNames } from "../crew-dirs.js";
 import { resolveExecutable, toolEnv } from "../platform.js";
 import { anthropicRouteEnv, secretEnvForRunner } from "../secret-store.js";
 
@@ -39,11 +40,8 @@ export function createCliEngine() {
           ...providerEnv,
           ...secretEnvForRunner(profile),
           ...anthropicRouteEnv(profile),
-          CREW_NODE_BIN: process.execPath,
-          CREW_PROMPT_FILE: promptPath,
-          // Legacy names kept for wrapper scripts written against the first consumer.
-          GITCREW_NODE_BIN: process.execPath,
-          GITCREW_PROMPT_FILE: promptPath
+          ...Object.fromEntries(crewEnvNames("NODE_BIN").map((name) => [name, process.execPath])),
+          ...Object.fromEntries(crewEnvNames("PROMPT_FILE").map((name) => [name, promptPath]))
         }
       });
 

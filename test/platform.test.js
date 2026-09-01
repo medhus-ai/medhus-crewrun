@@ -55,7 +55,7 @@ test("wslInfo identifies WSL1 as unsupported for container execution", () => {
 });
 
 test("resolveExecutable scans PATH without invoking a shell", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "gitcrew-platform-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "crew-platform-"));
   const file = await writeFakeExecutable(dir, "demo-tool");
 
   const result = resolveExecutable("demo-tool", { env: { PATH: dir } });
@@ -66,7 +66,7 @@ test("resolveExecutable scans PATH without invoking a shell", async () => {
 });
 
 test("resolveExecutable scans known extra tool dirs after PATH", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "gitcrew-platform-known-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "crew-platform-known-"));
   const file = await writeFakeExecutable(dir, "known-tool");
 
   const result = resolveExecutable("known-tool", { env: { PATH: "", CREW_EXTRA_PATH: dir } });
@@ -77,7 +77,7 @@ test("resolveExecutable scans known extra tool dirs after PATH", async () => {
 });
 
 test("resolveExecutable honors Windows PATHEXT without Unix execute bits", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "gitcrew-platform-win-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "crew-platform-win-"));
   const file = path.join(dir, "demo-tool.CMD");
   await writeFile(file, "@echo off\r\nexit /b 0\r\n", "utf8");
 

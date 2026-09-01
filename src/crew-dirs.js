@@ -31,6 +31,12 @@ export function crewEnv(name, env = process.env) {
   return config.legacyEnvPrefix ? env[`${config.legacyEnvPrefix}_${name}`] : undefined;
 }
 
+// Env names to publish for a value: CREW_<name>, plus the host's legacy name when configured,
+// so wrapper scripts written against a host's older prefix keep working.
+export function crewEnvNames(name) {
+  return config.legacyEnvPrefix ? [`CREW_${name}`, `${config.legacyEnvPrefix}_${name}`] : [`CREW_${name}`];
+}
+
 // Per-file env overrides (CREW_SECRETS_FILE, CREW_RUNNERS_FILE, ...) take precedence over this base.
 export function crewHome(env = process.env) {
   return path.resolve(crewEnv("HOME", env) || path.join(os.homedir(), crewDir()));

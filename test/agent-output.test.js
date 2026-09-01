@@ -6,13 +6,13 @@ import { finalAgentOutput, finalRepairOutput, finalReviewOutput } from "../src/a
 test("PR reviews publish only the final verdict block", () => {
   const transcript = [
     "I'll review this as pass 1 against the plan contract.",
-    "[mcp] gitcrew.plan_read (completed)",
+    "[mcp] crew.plan_read (completed)",
     "Plan evidence is loaded. I am checking the local branch.",
     "[cmd] /bin/bash -lc 'git diff --stat main...HEAD'",
     "The source largely matches the contract; I am running tests.",
     "[cmd] /bin/bash -lc 'npm test'",
     "I have completed the evidence pass.",
-    "[mcp] gitcrew.review_record_scorecard (completed)",
+    "[mcp] crew.review_record_scorecard (completed)",
     "",
     "{ \"verdict\": \"request-changes\" }",
     "Code Reviewer verdict",

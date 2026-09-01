@@ -18,7 +18,7 @@ const INSERT_SQL = `INSERT INTO budget_runs
   VALUES (@month, @timestamp, @workflow, @repository, @runner_id, @engine, @provider, @issue_or_pr, @actor, @result, @duration_seconds, @input_tokens, @output_tokens, @cost_usd)`;
 
 // `getDb` returns a better-sqlite3-compatible handle (prepare/exec); the host owns the file,
-// so GitCrew keeps its rows in cockpit.db and another host can use its own database.
+// so each host keeps its rows in its own database.
 export function createBudgetLedger({ getDb, describeSource = () => "", pricing = DEFAULT_PRICING } = {}) {
   if (typeof getDb !== "function") throw new Error("createBudgetLedger requires a getDb() handle");
 
@@ -142,7 +142,34 @@ export function createBudgetLedger({ getDb, describeSource = () => "", pricing =
     };
   }
 
-  return { recordRun, readRuns, report, source, estimateCostUsd };
+  return { recordRun, readRuns, report, deliveryReport, source, estimateCostUsd };
+}
+
+// Cost is only half a ratio. Pair a month's spend (a `report().current` row) with what it
+// delivered so "what did this buy" sits next to the invoice. `outcomes` is host-supplied:
+// { month, delivered, humanTouches, medianHoursToDelivery, byProject: [{ key, delivered, ... }] }
+// where `key` matches the ledger's repository column.
+export function deliveryReport(current, outcomes) {
+  const spend = (row) => numberOrZero(row?.costUsd) + numberOrZero(row?.estimatedCostUsd);
+  const perTask = (cost, delivered) => (delivered > 0 ? cost / delivered : null);
+  const costByProject = new Map((current?.byProject || []).map((row) => [row.key, spend(row)]));
+  const totalCost = spend(current?.totals);
+  const delivered = numberOrZero(outcomes?.delivered);
+  const humanTouches = numberOrZero(outcomes?.humanTouches);
+  return {
+    month: outcomes?.month ?? current?.month ?? null,
+    delivered,
+    humanTouches,
+    medianHoursToDelivery: outcomes?.medianHoursToDelivery ?? null,
+    touchesPerDelivered: delivered > 0 ? humanTouches / delivered : null,
+    costPerDelivered: perTask(totalCost, delivered),
+    costEstimated: numberOrZero(current?.totals?.costUsd) === 0 && numberOrZero(current?.totals?.estimatedCostUsd) > 0,
+    byProject: (outcomes?.byProject || []).map((row) => ({
+      ...row,
+      costUsd: costByProject.get(row.key) ?? 0,
+      costPerDelivered: perTask(costByProject.get(row.key) ?? 0, numberOrZero(row.delivered))
+    }))
+  };
 }
 
 function emptyTotals() {

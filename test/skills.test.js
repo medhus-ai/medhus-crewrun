@@ -7,7 +7,7 @@ import test from "node:test";
 import { listSkills, readSkill, skillIndexPrompt } from "../src/skills.js";
 
 test("skills resolve lazily with repository over workspace over user precedence", async () => {
-  const base = await mkdtemp(path.join(os.tmpdir(), "gitcrew-skills-"));
+  const base = await mkdtemp(path.join(os.tmpdir(), "crew-skills-"));
   const home = path.join(base, "home");
   const workspace = path.join(base, "workspace");
   const repo = path.join(workspace, "repo");

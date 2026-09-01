@@ -8,7 +8,7 @@ const Database = await import("better-sqlite3")
   .catch(() => null);
 const sqlite = Database ? test : test.skip;
 
-import { createBudgetLedger, DEFAULT_PRICING } from "../src/budget.js";
+import { createBudgetLedger, DEFAULT_PRICING, deliveryReport } from "../src/budget.js";
 
 function memoryLedger(options = {}) {
   const db = new Database(":memory:");
@@ -53,4 +53,25 @@ sqlite("pricing is host-overridable and getDb is required", () => {
   assert.equal(ledger.estimateCostUsd("my-runner", 1_000_000, 1_000_000), 3);
   assert.ok(DEFAULT_PRICING.some((rate) => rate.prefix === "claude-agent-sonnet"));
   assert.throws(() => createBudgetLedger({}), /getDb/);
+});
+
+test("deliveryReport pairs a month's spend with what it delivered", () => {
+  const current = {
+    month: "2026-08",
+    totals: { costUsd: 0, estimatedCostUsd: 12 },
+    byProject: [{ key: "a", costUsd: 0, estimatedCostUsd: 9 }, { key: "b", costUsd: 0, estimatedCostUsd: 3 }]
+  };
+  const report = deliveryReport(current, {
+    month: "2026-08",
+    delivered: 4,
+    humanTouches: 6,
+    medianHoursToDelivery: 5.5,
+    byProject: [{ key: "a", delivered: 3 }, { key: "c", delivered: 1 }]
+  });
+  assert.equal(report.costPerDelivered, 3);
+  assert.equal(report.touchesPerDelivered, 1.5);
+  assert.equal(report.costEstimated, true, "no reported cost, only estimates");
+  assert.deepEqual(report.byProject.map((row) => [row.key, row.costUsd, row.costPerDelivered]), [["a", 9, 3], ["c", 0, 0]]);
+  assert.equal(deliveryReport(null, { delivered: 0, humanTouches: 2, byProject: [] }).costPerDelivered, null);
+  assert.equal(memoryLedger().deliveryReport, deliveryReport);
 });

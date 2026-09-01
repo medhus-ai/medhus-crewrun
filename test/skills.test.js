@@ -11,12 +11,12 @@ test("skills resolve lazily with repository over workspace over user precedence"
   const home = path.join(base, "home");
   const workspace = path.join(base, "workspace");
   const repo = path.join(workspace, "repo");
-  await writeSkill(path.join(home, ".gitcrew/skills/review"), "user review", "[code-reviewer]");
-  await writeSkill(path.join(workspace, ".gitcrew/skills/review"), "workspace review", "[code-reviewer]");
-  await writeSkill(path.join(repo, ".gitcrew/skills/review"), "repository review", "[code-reviewer]");
-  await writeSkill(path.join(repo, ".gitcrew/skills/build"), "build only", "[engineer]");
+  await writeSkill(path.join(home, ".crew/skills/review"), "user review", "[code-reviewer]");
+  await writeSkill(path.join(workspace, ".crew/skills/review"), "workspace review", "[code-reviewer]");
+  await writeSkill(path.join(repo, ".crew/skills/review"), "repository review", "[code-reviewer]");
+  await writeSkill(path.join(repo, ".crew/skills/build"), "build only", "[engineer]");
 
-  const env = { CREW_HOME: path.join(home, ".gitcrew") };
+  const env = { CREW_HOME: path.join(home, ".crew") };
   const skills = listSkills({ targetRoot: repo, workspaceRoot: workspace, role: "code-reviewer", env });
   assert.deepEqual(skills.map((skill) => skill.id), ["review"]);
   assert.equal(skills[0].scope, "repository");

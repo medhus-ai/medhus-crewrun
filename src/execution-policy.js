@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { CREW_DIR } from "./crew-dirs.js";
+import { crewDir } from "./crew-dirs.js";
 
 const DEFAULTS = Object.freeze({
   runtime: "worktree",
@@ -14,7 +14,7 @@ const DEFAULTS = Object.freeze({
 });
 
 export function executionPolicyPath(root) {
-  return path.join(path.resolve(root), CREW_DIR, "memory", "execution.json");
+  return path.join(path.resolve(root), crewDir(), "memory", "execution.json");
 }
 
 export function readExecutionPolicy(root) {

@@ -19,10 +19,10 @@ function roleWithPointers(...pointers) {
   ].join("\n");
 }
 
-test("loadRoleMemory rejects relative and absolute paths outside .gitcrew", async () => {
+test("loadRoleMemory rejects relative and absolute paths outside .crew", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "crew-role-memory-"));
   const root = path.join(parent, "repo");
-  const allowed = path.join(root, ".gitcrew", "memory", "allowed.md");
+  const allowed = path.join(root, ".crew", "memory", "allowed.md");
   const outside = path.join(parent, "outside.md");
   await mkdir(path.dirname(allowed), { recursive: true });
   await writeFile(allowed, "allowed marker", "utf8");
@@ -30,7 +30,7 @@ test("loadRoleMemory rejects relative and absolute paths outside .gitcrew", asyn
 
   try {
     const sections = loadRoleMemory(root, roleWithPointers(
-      ".gitcrew/memory/allowed.md",
+      ".crew/memory/allowed.md",
       "../outside.md",
       outside
     ), { universal: [] });
@@ -43,7 +43,7 @@ test("loadRoleMemory rejects relative and absolute paths outside .gitcrew", asyn
 test("loadRoleMemory rejects a symlink that escapes the repository", async (t) => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "crew-role-symlink-"));
   const root = path.join(parent, "repo");
-  const memory = path.join(root, ".gitcrew", "memory");
+  const memory = path.join(root, ".crew", "memory");
   const outside = path.join(parent, "outside.md");
   const link = path.join(memory, "linked.md");
   await mkdir(memory, { recursive: true });
@@ -59,7 +59,7 @@ test("loadRoleMemory rejects a symlink that escapes the repository", async (t) =
       }
       throw error;
     }
-    assert.deepEqual(loadRoleMemory(root, roleWithPointers(".gitcrew/memory/linked.md"), { universal: [] }), []);
+    assert.deepEqual(loadRoleMemory(root, roleWithPointers(".crew/memory/linked.md"), { universal: [] }), []);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

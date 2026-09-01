@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-import { CREW_DIR } from "./crew-dirs.js";
+import { crewDir } from "./crew-dirs.js";
 import { createContainerEngine } from "./engines/container.js";
 import { getEngine } from "./engines/index.js";
 import { readExecutionPolicy } from "./execution-policy.js";
@@ -11,9 +11,9 @@ import { defaultRunnerProfileId, resolveRunnerProfile, roleRunnerId } from "./ru
 import { listSkills, skillIndexPrompt } from "./skills.js";
 import { createExecuteWorktree } from "./workspace.js";
 
-// Files always injected even if a role's frontmatter omits them — the universal floor.
-const DEFAULT_UNIVERSAL_MEMORY = ["lean-engineering.md"];
-const DEFAULT_MEMORY_TITLES = { "lean-engineering": "Lean & readable engineering" };
+// Hosts declare the memory files every role receives (`universalMemory`); the runtime injects none by default.
+const DEFAULT_UNIVERSAL_MEMORY = [];
+const DEFAULT_MEMORY_TITLES = {};
 const DEFAULT_NOISE = /^\s*(?:\[(cmd|edit|mcp|search|tool|worktree|subagent)\b|mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_]+$)/i;
 const EXECUTE_MODE_INSTRUCTION = "You may read and edit files inside your working directory, which is an isolated git worktree on a dedicated branch. Run commands only when your engine exposes a shell tool. Make the changes the user asks for; the user reviews the branch afterwards.";
 const PROPOSE_MODE_INSTRUCTION = "You have read-only tool access to the project. Propose changes as diffs or precise instructions in your reply; do not attempt to write files.";
@@ -28,7 +28,7 @@ export function runnerIdForRole(role, targetRoot) {
 
 function resolveConfiguredRunnerId(role, targetRoot) {
   try {
-    const text = readFileSync(path.join(targetRoot, `${CREW_DIR}/memory/ai-runners.json`), "utf8");
+    const text = readFileSync(path.join(targetRoot, `${crewDir()}/memory/ai-runners.json`), "utf8");
     const config = JSON.parse(text);
     return roleRunnerId(role, config.default_role_runners || {});
   } catch {
@@ -59,7 +59,7 @@ export function isLikelyStaleSessionError(value) {
 
 // Resolves the role's declared `memory_pointers` into prompt sections: a role carries only the
 // memory it lists, plus the universal floor. Glob/tool-fetched entries (`<task-id>`, `*`,
-// "(when active)") and missing files are skipped silently; paths outside CREW_DIR are refused.
+// "(when active)") and missing files are skipped silently; paths outside crewDir() are refused.
 export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVERSAL_MEMORY, extra = [], titles = {} } = {}) {
   const root = path.resolve(targetRoot);
   const paths = [];
@@ -67,9 +67,9 @@ export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVE
     const safePath = resolveRoleMemoryPath(root, candidate);
     if (safePath && !paths.includes(safePath)) paths.push(safePath);
   };
-  for (const name of universal) add(path.resolve(root, CREW_DIR, "memory", name));
+  for (const name of universal) add(path.resolve(root, crewDir(), "memory", name));
   for (const entry of parseMemoryPointers(roleText)) add(path.resolve(root, entry));
-  for (const name of extra) add(path.resolve(root, CREW_DIR, "memory", name));
+  for (const name of extra) add(path.resolve(root, crewDir(), "memory", name));
 
   const sections = [];
   for (const filePath of paths) {
@@ -153,7 +153,7 @@ export function createRoleRunner({
       : baseEngine;
     const resuming = Boolean(resumeSessionId) && engineId !== "cli";
 
-    const rolePrompt = readMaybe(path.join(targetRoot, `${CREW_DIR}/roles`, `${role}.md`));
+    const rolePrompt = readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
     const memory = loadRoleMemory(targetRoot, rolePrompt, { ...memoryOptions, extra: extraMemory(toolContext) });
     const roleOptions = toolContext?.roleOptions || {};
     const capabilities = capabilityProfile(role, roleOptions);
@@ -383,7 +383,7 @@ function contextSections({ rolePrompt, memory = [] }) {
 }
 
 function resolveRoleMemoryPath(root, candidate) {
-  const crewRoot = path.resolve(root, CREW_DIR);
+  const crewRoot = path.resolve(root, crewDir());
   const resolved = path.resolve(root, String(candidate || ""));
   if (!pathIsWithin(crewRoot, resolved)) return "";
   if (!existsSync(resolved)) return resolved;

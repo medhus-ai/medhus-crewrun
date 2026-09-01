@@ -315,11 +315,11 @@ test("runner profiles validate engines and checks dispatch to the engine healthc
 
 async function projectWithRole(name, role, runnerId, files = {}) {
   const target = path.join(tmpRoot, name);
-  await mkdir(path.join(target, ".gitcrew/roles"), { recursive: true });
-  await mkdir(path.join(target, ".gitcrew/memory"), { recursive: true });
-  await writeFile(path.join(target, `.gitcrew/roles/${role}.md`), `# ${role} role`, "utf8");
-  await writeFile(path.join(target, ".gitcrew/memory/ai-runners.json"), JSON.stringify({ version: 1, default_role_runners: { [role]: runnerId }, runners: [] }), "utf8");
-  for (const [rel, body] of Object.entries(files)) await writeFile(path.join(target, ".gitcrew", rel), body, "utf8");
+  await mkdir(path.join(target, ".crew/roles"), { recursive: true });
+  await mkdir(path.join(target, ".crew/memory"), { recursive: true });
+  await writeFile(path.join(target, `.crew/roles/${role}.md`), `# ${role} role`, "utf8");
+  await writeFile(path.join(target, ".crew/memory/ai-runners.json"), JSON.stringify({ version: 1, default_role_runners: { [role]: runnerId }, runners: [] }), "utf8");
+  for (const [rel, body] of Object.entries(files)) await writeFile(path.join(target, ".crew", rel), body, "utf8");
   return target;
 }
 
@@ -342,7 +342,7 @@ test("startRoleTurn routes engine turns with a system prompt and records the wor
   t.after(() => setEngineForTests("claude-agent", null));
 
   const lines = [];
-  const runner = createRoleRunner({ tools: demoBridge() });
+  const runner = createRoleRunner({ tools: demoBridge(), universalMemory: ["lean-engineering.md"], memoryTitles: { "lean-engineering": "Lean & readable engineering" } });
   const handle = runner.startRoleTurn({ targetRoot: target, role: "engineer", messages: [{ author: "user", content: "do the thing" }], onLine: (line) => lines.push(line) });
   assert.equal(handle.engineId, "claude-agent");
   assert.equal(handle.mode, "execute");

@@ -49,7 +49,7 @@ test("sessions carry a role, and the cookie name follows the crew directory", ()
   assert.equal(auth.isViewerSession(viewer), true);
   auth.destroySession(viewer);
   assert.equal(auth.hasSession(viewer), false);
-  assert.equal(auth.SESSION_COOKIE, `${(process.env.CREW_DIR_NAME || ".gitcrew").replace(/^\./, "")}_session`);
+  assert.equal(auth.sessionCookieName(), `${(process.env.CREW_DIR_NAME || ".crew").replace(/^\./, "")}_session`);
 });
 
 test("login throttling locks after repeated failures and clears on success", () => {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CREW_DIR } from "../src/crew-dirs.js";
+import { crewDir } from "../src/crew-dirs.js";
 import { createRoleCatalog } from "../src/roles.js";
 
 async function fixture() {
@@ -35,7 +35,7 @@ test("catalog lists, installs from templates or a generator, and refuses unknown
 
   const added = await catalog.addRole({ target, name: "ops" });
   assert.equal(added.action, "added");
-  assert.equal(await readFile(path.join(target, CREW_DIR, "roles", "ops.md"), "utf8"), "# Ops");
+  assert.equal(await readFile(path.join(target, crewDir(), "roles", "ops.md"), "utf8"), "# Ops");
   assert.equal((await catalog.addRole({ target, name: "ops" })).action, "already-installed");
 
   const generated = await catalog.addRole({ target, name: "gtm", custom: true });
@@ -56,7 +56,7 @@ test("removing a role archives its file and notifies the host", async () => {
   const result = await catalog.removeRole({ target, name: "ops" });
   assert.equal(result.action, "archived");
   assert.deepEqual(removed, ["ops"]);
-  const archived = await readdir(path.join(target, CREW_DIR, "roles", "_archived"));
+  const archived = await readdir(path.join(target, crewDir(), "roles", "_archived"));
   assert.equal(archived.length, 1);
   assert.match(archived[0], /^ops-\d{4}-\d{2}-\d{2}\.md$/);
   assert.deepEqual([...(await catalog.installedRoleNames(target))], []);

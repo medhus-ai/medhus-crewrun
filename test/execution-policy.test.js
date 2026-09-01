@@ -34,7 +34,7 @@ test("container runner drops privileges and mounts only repo, git metadata, and 
   assert.equal(args.includes("ALL"), true);
   assert.equal(args.includes("none"), true);
   assert.equal(args.some((arg) => arg.includes(`src=${workdir},dst=${workdir}`)), true);
-  assert.equal(args.some((arg) => arg.includes("/home/bharathc/.gitcrew")), false);
+  assert.equal(args.some((arg) => arg.includes("/home/bharathc/.crew")), false);
 });
 
 test("container runtime preflight verifies the exact repository bind mount", () => {

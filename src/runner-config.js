@@ -3,14 +3,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CREW_DIR, crewEnv, crewHome } from "./crew-dirs.js";
+import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 import { resolveExecutable, toolEnv } from "./platform.js";
 import { ENGINE_IDS, getEngine } from "./engines/index.js";
 import { loadModelCatalog } from "./model-catalog.js";
 
 const toolRequire = createRequire(import.meta.url);
 
-const RUNNERS_REL = `${CREW_DIR}/memory/ai-runners.json`;
+const runnersRel = () => `${crewDir()}/memory/ai-runners.json`;
 const RUNNER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const RUNNER_MODES = new Set(["propose", "execute"]);
 // Vendor-documented Anthropic-protocol endpoints (Claude Code integration).
@@ -260,7 +260,7 @@ export function loadRunnerConfig(targetRoot) {
 }
 
 export function loadProjectRunnerConfig(targetRoot) {
-  const file = path.join(targetRoot || "", RUNNERS_REL);
+  const file = path.join(targetRoot || "", runnersRel());
   if (!existsSync(file)) {
     return {
       version: 1,
@@ -313,14 +313,14 @@ export function saveGlobalRunnerConfig(config) {
 
 export function saveRunnerConfig(targetRoot, config) {
   const validated = validateRunnerConfig(config);
-  const file = path.join(targetRoot, RUNNERS_REL);
+  const file = path.join(targetRoot, runnersRel());
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
   return validated;
 }
 
 export function saveProjectRunnerConfig(targetRoot, config = {}) {
-  const file = path.join(targetRoot, RUNNERS_REL);
+  const file = path.join(targetRoot, runnersRel());
   const projectConfig = {
     ...config,
     version: config.version || 1,

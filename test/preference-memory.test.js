@@ -28,7 +28,7 @@ test("preference memory requires approval and applies scoped precedence", async 
   const memory = listPreferences({ targetRoot: repo, workspaceRoot: workspace, env });
   assert.equal(memory.effective.find((entry) => entry.key === "testing.order").statement, "run focused tests first");
   assert.equal(listPreferenceProposals({ targetRoot: repo }).length, 0);
-  const changelog = path.join(repo, ".gitcrew/memory/changelog.jsonl");
+  const changelog = path.join(repo, ".crew/memory/changelog.jsonl");
   assert.equal(existsSync(changelog), true);
   assert.match(readFileSync(changelog, "utf8"), /preference\.approved/);
 });

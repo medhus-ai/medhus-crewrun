@@ -5,12 +5,12 @@ updated: 2026-08-31
 status: active
 ---
 
-# medhus-router State
+# crewrun State
 
 ## Direction
 
 Extracted from GitCrew on 2026-08-31 so the company-org automation can share the agent
-runtime without depending on GitCrew. The kernel holds only host-neutral code; product
+runtime without depending on GitCrew; positioned as an open-source library (Apache-2.0, npm `crewrun`). The kernel holds only host-neutral code; product
 identity is injected (see README → Host contract). GitCrew is the first consumer and pins a
 tag; the org automation is the second.
 
@@ -21,17 +21,26 @@ tag; the org automation is the second.
 - Cockpit shell, pages, styles, control API — GitCrew (the generic pieces `auth`,
   `request-context`, `markdown`, `process` are here).
 - Persona roles and company control-file tooling — org automation.
+- Memory files (engineering doctrine, conventions) — each host's own; the runtime injects none.
+
+## Done since extraction
+
+- Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`) — both hosts use them.
 
 ## Candidates for a later move
 
-- Conversations/messages store (currently GitCrew `cockpit/src/store.js`) once a second host
-  needs durable chats. The budget ledger already follows the intended pattern: kernel schema and
-  math, host-owned database handle.
-- A markdown work-item source (tasks as files) — useful to both hosts.
+- Delivery/outcome reporting on top of the ledger, once a second host wants it.
 
 ## Last Check
 
-- (2) 2026-08-31 — Renamed to `medhus-router` / `@medhus/router` (was medhus-crewcore). Added:
+- (3) 2026-08-31 — Renamed `crewrun` (npm-available, describes the job), Apache-2.0 + NOTICE,
+  publishable manifest. Neutral defaults: `configureCrew()` replaces the `.gitcrew`/`GITCREW_*`
+  hardcoding (`crewDir()`, `sessionCookieName()`); the lean-engineering template returned to
+  GitCrew and the runner's universal memory defaults to none. Added `conversations` (schema +
+  CRUD + singleton get-or-create, GitCrew delegates to it) and `work-items` (tasks as markdown
+  files), plus `examples/brief.mjs` and an open-source README.
+
+- (2) 2026-08-31 — Renamed to `crewrun` / `crewrun` (was medhus-crewcore). Added:
   the shared token/cost budget ledger (`src/budget.js`, host-injected SQLite handle so GitCrew's
   rows stay in cockpit.db); OpenRouter as a provider (secret `OPENROUTER_API_KEY`, preset
   `openrouter-auto`, discovery filtered to tool-calling models, Anthropic-protocol route at

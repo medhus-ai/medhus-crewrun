@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createMcpBridge, mcpToolFullName, sanitizeToolName, toolError, toolResult } from "../src/mcp.js";
+import { configureCrew } from "../src/crew-dirs.js";
 import { buildMcpServer, loadMcpAuthEnv, mcpRoleFromEnv, readMcpContextData } from "../src/mcp-stdio.js";
 
 function demoRegistry(overrides = {}) {
@@ -123,9 +124,12 @@ test("stdio helpers rebuild the server and read the child environment", () => {
   const authFile = path.join(dir, "auth.json");
   writeFileSync(contextFile, JSON.stringify({ targetRoot: "/repo" }));
   writeFileSync(authFile, JSON.stringify({ DEMO_TOKEN: "tok", IGNORED: "x" }));
-  const env = { CREW_MCP_CONTEXT_FILE: contextFile, GITCREW_MCP_ROLE: "legacy-role", CREW_MCP_AUTH_FILE: authFile };
+  const env = { CREW_MCP_CONTEXT_FILE: contextFile, LEGACY_MCP_ROLE: "legacy-role", CREW_MCP_AUTH_FILE: authFile };
   assert.deepEqual(readMcpContextData(env), { targetRoot: "/repo" });
+  assert.equal(mcpRoleFromEnv(env), "", "legacy prefixes are opt-in");
+  configureCrew({ legacyEnvPrefix: "LEGACY" });
   assert.equal(mcpRoleFromEnv(env), "legacy-role");
+  configureCrew({ legacyEnvPrefix: "" });
   loadMcpAuthEnv(["DEMO_TOKEN"], env);
   assert.equal(env.DEMO_TOKEN, "tok");
   assert.equal(env.IGNORED, undefined);

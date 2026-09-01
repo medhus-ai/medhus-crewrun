@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { CREW_DIR, crewEnv, crewHome } from "./crew-dirs.js";
+import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
 
 const SKILL_ID = /^[a-z][a-z0-9-]{0,79}$/;
@@ -40,8 +40,8 @@ function skillScopes({ targetRoot, workspaceRoot, env }) {
   const workspace = path.resolve(workspaceRoot || crewEnv("WORKSPACE", env) || path.dirname(target));
   const values = [
     { scope: "user", dir: path.join(crewHome(env), "skills") },
-    { scope: "workspace", dir: path.join(workspace, CREW_DIR, "skills") },
-    { scope: "repository", dir: path.join(target, CREW_DIR, "skills") }
+    { scope: "workspace", dir: path.join(workspace, crewDir(), "skills") },
+    { scope: "repository", dir: path.join(target, crewDir(), "skills") }
   ];
   const selected = new Map();
   for (const entry of values) selected.set(path.resolve(entry.dir), entry);

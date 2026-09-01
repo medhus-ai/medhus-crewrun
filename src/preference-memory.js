@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { CREW_DIR, crewEnv, crewHome } from "./crew-dirs.js";
+import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 
 const SCOPES = new Set(["user", "workspace", "repository"]);
 const KEY_PATTERN = /^[a-z][a-z0-9._-]{1,79}$/;
@@ -104,18 +104,18 @@ function preferenceLocations({ targetRoot, workspaceRoot, env }) {
   const workspace = path.resolve(workspaceRoot || crewEnv("WORKSPACE", env) || path.dirname(root));
   const values = [
     { scope: "user", file: path.join(crewHome(env), "memory", "preferences.json") },
-    { scope: "workspace", file: path.join(workspace, CREW_DIR, "memory", "preferences.json") },
-    { scope: "repository", file: path.join(root, CREW_DIR, "memory", "preferences.json") }
+    { scope: "workspace", file: path.join(workspace, crewDir(), "memory", "preferences.json") },
+    { scope: "repository", file: path.join(root, crewDir(), "memory", "preferences.json") }
   ];
   return values;
 }
 
 function proposalFile(root) {
-  return path.join(root, CREW_DIR, "memory", "preference-proposals.json");
+  return path.join(root, crewDir(), "memory", "preference-proposals.json");
 }
 
 function appendAudit(root, event) {
-  const file = path.join(root, CREW_DIR, "memory", "changelog.jsonl");
+  const file = path.join(root, crewDir(), "memory", "changelog.jsonl");
   mkdirSync(path.dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, "utf8");
 }

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { CREW_DIR, crewEnv, crewHome } from "./crew-dirs.js";
+import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 import path from "node:path";
 
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };
@@ -10,8 +10,10 @@ const MIN_PASSWORD_LENGTH = 8;
 const MAX_LOGIN_FAILURES = 5;
 const LOGIN_LOCK_MS = 30000;
 
-// Cookie name follows the crew directory so two hosts on one browser origin never share a session.
-export const SESSION_COOKIE = `${CREW_DIR.replace(/^\./, "")}_session`;
+// Cookie name follows the crew directory so two hosts on one browser host never share a session.
+export function sessionCookieName() {
+  return `${crewDir().replace(/^\./, "")}_session`;
+}
 
 // Two credentials, one file. The operator password unlocks the secret store and
 // every mutation; the optional viewer password grants a session that can read

@@ -27,11 +27,18 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 
 - Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`) — both hosts use them.
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
+- Learning layers: skill proposals (`skill-proposals`), episodic recall (`recall` + `conversations.searchMessages`), per-role reflections (`reflections`).
 
 ## Candidates for a later move
 
 
 ## Last Check
+
+- (6) 2026-09-01 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
+  human approves into a scope; reuses the preference proposal/audit helpers), `recall`
+  (episodes = ask + outcome, by role / reference / mention; LIKE with escaped wildcards), and
+  `reflections` (per-role append-only journal, bounded read, prompt section). Hosts expose these
+  as tools and decide where to inject; the kernel ships no skill or memory content.
 
 - (5) 2026-09-01 — v0.1.2: `deliveryReport` on the ledger; no host is named anywhere in the repo;
   the `cli` engine publishes prompt-file env under `CREW_*` plus the configured legacy prefix;

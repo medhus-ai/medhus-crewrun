@@ -114,7 +114,7 @@ function proposalFile(root) {
   return path.join(root, crewDir(), "memory", "preference-proposals.json");
 }
 
-function appendAudit(root, event) {
+export function appendAudit(root, event) {
   const file = path.join(root, crewDir(), "memory", "changelog.jsonl");
   mkdirSync(path.dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, "utf8");
@@ -126,7 +126,7 @@ function appendScopeAudit(preferencesFile, event) {
   appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, "utf8");
 }
 
-function readJson(file, fallback) {
+export function readJson(file, fallback) {
   try {
     const value = JSON.parse(readFileSync(file, "utf8"));
     return value && typeof value === "object" ? value : structuredClone(fallback);
@@ -135,7 +135,7 @@ function readJson(file, fallback) {
   }
 }
 
-function writeJsonAtomic(file, value) {
+export function writeJsonAtomic(file, value) {
   mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");

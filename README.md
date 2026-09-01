@@ -75,7 +75,9 @@ choices never enter a repository.
 | `budget` | `createBudgetLedger({ getDb })` — per-run rows, monthly report, subscription cost estimates |
 | `conversations` | `createConversationStore({ getDb })` — durable chat threads and messages per project/role |
 | `work-items` | `createWorkItemSource({ dir })` — tasks as markdown files (frontmatter or bold bullets) |
-| `skills`, `preference-memory`, `execution-policy` | Scoped skills, approved preferences, container policy |
+| `skills`, `skill-proposals` | Scoped `SKILL.md` skills; agent-proposed skills that a human approves into a scope |
+| `preference-memory`, `reflections`, `recall` | Approved preferences; per-role journals; episodic recall over past conversations |
+| `execution-policy` | Container sandbox policy |
 | `auth`, `request-context`, `markdown`, `process`, `platform`, `frontmatter`, `agent-output` | Framework-free helpers for a host UI and OS |
 
 Import by subpath: `import { createRoleRunner } from "medhus-crewrun/runner"`.
@@ -102,6 +104,23 @@ Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token
 > permitted by those SDKs today, but the vendors set the rules and can change them. Read
 > Anthropic's and OpenAI's current terms before running unattended workloads on a
 > subscription, and prefer API keys for anything you operate for others.
+
+## Memory and learning
+
+crewrun's position on agent memory is *proposed → approved → versioned file*. Nothing an agent
+writes becomes durable context on its own; every layer is a plain file in the crew directory a
+human can read, edit, and revoke.
+
+| Layer | What it is | Who writes it |
+|---|---|---|
+| Role memory | Files named in a role's `memory_pointers`, injected into every turn (a doctrine, house rules, domain notes) | Humans; versioned with the repo |
+| Skills | `.crew/skills/<id>/SKILL.md` — reusable, scoped workflows (user → workspace → repository), indexed in the prompt and loaded on demand | Humans, or agents via **skill proposals** a human approves |
+| Preferences | Short approved statements with repository > workspace > user precedence | Agents propose (`preference-memory`), humans approve |
+| Reflections | A per-role append-only journal ("what worked, what to avoid"), read back bounded and injected as a prompt section | The role, at the end of a turn; humans review and prune |
+| Recall | "What happened last time this role touched this task or file" — a query over the conversation store, summarised to ask + outcome | Nobody; it is derived |
+
+What it deliberately does not do: unsupervised "remember everything" vector memory. Silent
+drift, no provenance, and nothing to revoke are the failure modes that model avoids.
 
 ## Host contract
 

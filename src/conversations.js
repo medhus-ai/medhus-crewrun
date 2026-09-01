@@ -184,6 +184,25 @@ export function createConversationStore({ getDb, singletonRoles = [], uniqueInde
     return Number(info.lastInsertRowid);
   }
 
+  // Full-text-ish lookup for recall: messages whose content mentions `query` (a path, an id, a
+  // phrase), newest first, joined with their conversation so callers can group by thread.
+  function searchMessages({ targetRoot, query, role, workItemId, issueId, limit = 20 } = {}) {
+    const conds = ["c.target_root = ?"];
+    const args = [normalizeRoot(targetRoot)];
+    const text = String(query || "").trim();
+    if (text) { conds.push("m.content LIKE ? ESCAPE '\\'"); args.push(`%${text.replace(/[\\%_]/g, "\\$&")}%`); }
+    if (role) { conds.push("c.role = ?"); args.push(role); }
+    if (workItemId != null) { conds.push("c.work_item_id = ?"); args.push(Number(workItemId)); }
+    if (issueId != null) { conds.push("c.issue_id = ?"); args.push(Number(issueId)); }
+    const n = Number(limit);
+    args.push(Number.isInteger(n) && n > 0 ? Math.min(n, 200) : 20);
+    return db().prepare(
+      `SELECT m.id, m.conversation_id, m.author, m.content, m.created_at, c.role, c.title, c.work_item_id, c.issue_id, c.purpose
+         FROM messages m JOIN conversations c ON c.id = m.conversation_id
+        WHERE ${conds.join(" AND ")} ORDER BY m.id DESC LIMIT ?`
+    ).all(...args).map((row) => ({ ...row, author: row.author === "human" ? "user" : row.author }));
+  }
+
   function listMessages(conversationId) {
     return db().prepare(
       "SELECT id, conversation_id, author, content, usage_json, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC"
@@ -206,7 +225,8 @@ export function createConversationStore({ getDb, singletonRoles = [], uniqueInde
     setConversationEngineSession,
     setConversationWorktree,
     appendMessage,
-    listMessages
+    listMessages,
+    searchMessages
   };
 }
 

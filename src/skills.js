@@ -35,7 +35,8 @@ export function skillIndexPrompt(skills = []) {
   ].join("\n");
 }
 
-function skillScopes({ targetRoot, workspaceRoot, env }) {
+// Skill directories in precedence order (user, workspace, repository).
+export function skillScopes({ targetRoot, workspaceRoot, env }) {
   const target = path.resolve(targetRoot || process.cwd());
   const workspace = path.resolve(workspaceRoot || crewEnv("WORKSPACE", env) || path.dirname(target));
   const values = [

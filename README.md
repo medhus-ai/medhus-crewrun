@@ -30,7 +30,7 @@ about *what* your roles do.
 ## Quick start
 
 ```bash
-npm install crewrun
+npm install medhus-crewrun
 node examples/brief.mjs        # a "CEO" role reads an inbox through a brokered tool and writes a brief
 ```
 
@@ -39,9 +39,9 @@ and `CREW_EXAMPLE_RUNNER=openrouter-auto` to run it on OpenRouter instead. What 
 order ([examples/brief.mjs](examples/brief.mjs)):
 
 ```js
-import { createMcpBridge } from "crewrun/mcp";
-import { createRoleRunner } from "crewrun/runner";
-import { createToolBroker } from "crewrun/tool-broker";
+import { createMcpBridge } from "medhus-crewrun/mcp";
+import { createRoleRunner } from "medhus-crewrun/runner";
+import { createToolBroker } from "medhus-crewrun/tool-broker";
 
 const broker = createToolBroker({ allowlists: { ceo: ["inbox.list"] } });
 const tools = createMcpBridge({
@@ -79,7 +79,7 @@ choices never enter a repository.
 | `skills`, `preference-memory`, `execution-policy` | Scoped skills, approved preferences, container policy |
 | `auth`, `request-context`, `markdown`, `process`, `platform`, `frontmatter`, `agent-output` | Framework-free helpers for a host UI and OS |
 
-Import by subpath: `import { createRoleRunner } from "crewrun/runner"`.
+Import by subpath: `import { createRoleRunner } from "medhus-crewrun/runner"`.
 
 ## Providers and auth
 

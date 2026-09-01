@@ -7,10 +7,10 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createMcpBridge } from "crewrun/mcp";
-import { createRoleRunner } from "crewrun/runner";
-import { createToolBroker } from "crewrun/tool-broker";
-import { createWorkItemSource } from "crewrun/work-items";
+import { createMcpBridge } from "medhus-crewrun/mcp";
+import { createRoleRunner } from "medhus-crewrun/runner";
+import { createToolBroker } from "medhus-crewrun/tool-broker";
+import { createWorkItemSource } from "medhus-crewrun/work-items";
 
 const RUNNER = process.env.CREW_EXAMPLE_RUNNER || "claude-agent-sonnet-high";
 

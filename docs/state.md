@@ -33,7 +33,7 @@ tag; the org automation is the second.
 
 ## Last Check
 
-- (3) 2026-08-31 — Renamed `crewrun` (npm-available, describes the job), Apache-2.0 + NOTICE,
+- (3) 2026-08-31 — Renamed `crewrun` (repo and npm package `medhus-crewrun`; the runtime calls itself crewrun), Apache-2.0 + NOTICE,
   publishable manifest. Neutral defaults: `configureCrew()` replaces the `.gitcrew`/`GITCREW_*`
   hardcoding (`crewDir()`, `sessionCookieName()`); the lean-engineering template returned to
   GitCrew and the runner's universal memory defaults to none. Added `conversations` (schema +

@@ -1,5 +1,5 @@
 {
-  "name": "crewrun",
+  "name": "medhus-crewrun",
   "version": "0.1.0",
   "description": "Run a crew of AI roles on the vendor agent runtimes you already pay for \u2014 Claude, Codex, OpenRouter, local \u2014 with brokered tools over MCP, sandboxed edits, and a cost ledger.",
   "keywords": [
@@ -12,13 +12,13 @@
     "roles",
     "runtime"
   ],
-  "homepage": "https://github.com/medhus-ai/crewrun#readme",
+  "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",
   "bugs": {
-    "url": "https://github.com/medhus-ai/crewrun/issues"
+    "url": "https://github.com/medhus-ai/medhus-crewrun/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/medhus-ai/crewrun.git"
+    "url": "git+https://github.com/medhus-ai/medhus-crewrun.git"
   },
   "license": "Apache-2.0",
   "type": "module",

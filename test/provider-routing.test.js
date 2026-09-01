@@ -17,6 +17,10 @@ const { createCodexAgentEngine } = await import("../src/engines/codex-agent.js")
 
 const PASSWORD = "routing test pass 1";
 
+// Windows exposes the search path as `Path`; compare whichever key the platform uses.
+const pathOf = (env) => env.PATH ?? env.Path;
+
+
 after(async () => {
   store.resetSecretStoreForTests();
   await rm(tmpRoot, { recursive: true, force: true });
@@ -113,7 +117,7 @@ test("claude-agent routes env for base_url profiles and leaves others alone", as
   assert.equal(routed.options.env.ANTHROPIC_BASE_URL, "https://api.moonshot.ai/anthropic");
   assert.equal(routed.options.env.ANTHROPIC_AUTH_TOKEN, "kimi-key");
   assert.equal(routed.options.env.ANTHROPIC_API_KEY, "", "direct-Anthropic key is blanked on routed profiles");
-  assert.equal(routed.options.env.PATH, process.env.PATH); // process env inherited, not replaced
+  assert.equal(pathOf(routed.options.env), pathOf(process.env)); // process env inherited, not replaced
 
   const plain = {};
   await runTurn(
@@ -193,7 +197,7 @@ test("auth modes force subscription or API-key on the Claude engine", async () =
     { id: "claude-sub", provider: "anthropic", model: "sonnet", auth: "subscription" }
   );
   assert.equal(subscription.options.env.ANTHROPIC_API_KEY, undefined, "subscription auth strips the ambient key");
-  assert.equal(subscription.options.env.PATH, process.env.PATH);
+  assert.equal(pathOf(subscription.options.env), pathOf(process.env));
 
   const keyed = {};
   await runTurn(

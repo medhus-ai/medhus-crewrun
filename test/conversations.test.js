@@ -3,7 +3,9 @@ import test from "node:test";
 
 // better-sqlite3 is a dev dependency with a native build; where it cannot load (a CI runner
 // without a prebuilt binary or a compiler) these tests skip instead of failing the runtime suite.
-const Database = await import("better-sqlite3").then((m) => m.default).catch(() => null);
+const Database = await import("better-sqlite3")
+  .then((m) => { new m.default(":memory:").close(); return m.default; })
+  .catch(() => null);
 const sqlite = Database ? test : test.skip;
 
 import { createConversationStore, ensureConversationSchema } from "../src/conversations.js";

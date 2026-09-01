@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import Database from "better-sqlite3";
+// better-sqlite3 is a dev dependency with a native build; where it cannot load (a CI runner
+// without a prebuilt binary or a compiler) these tests skip instead of failing the runtime suite.
+const Database = await import("better-sqlite3").then((m) => m.default).catch(() => null);
+const sqlite = Database ? test : test.skip;
 
 import { createConversationStore, ensureConversationSchema } from "../src/conversations.js";
 
@@ -10,7 +13,7 @@ function memoryStore(options = {}) {
   return { db, store: createConversationStore({ getDb: () => db, singletonRoles: ["manager"], ...options }) };
 }
 
-test("conversations and messages round-trip with usage and legacy author mapping", () => {
+sqlite("conversations and messages round-trip with usage and legacy author mapping", () => {
   const { db, store } = memoryStore();
   const id = store.createConversation({ targetRoot: "/repo", role: "ceo", title: "Brief" });
   store.appendMessage({ conversationId: id, author: "user", content: "hi" });
@@ -33,7 +36,7 @@ test("conversations and messages round-trip with usage and legacy author mapping
   assert.ok(Date.parse(row.updated_at) >= Date.parse(row.created_at));
 });
 
-test("singleton roles and purpose-scoped threads get exactly one conversation per reference", () => {
+sqlite("singleton roles and purpose-scoped threads get exactly one conversation per reference", () => {
   const { store } = memoryStore();
   const a = store.getOrCreateConversation({ targetRoot: "/repo", role: "manager", workItemId: 7 });
   const b = store.getOrCreateConversation({ targetRoot: "/repo", role: "manager", workItemId: 7, title: "later" });
@@ -54,7 +57,7 @@ test("singleton roles and purpose-scoped threads get exactly one conversation pe
   assert.deepEqual(store.listConversations({ targetRoot: "/repo", role: "planner", workItemId: 7, purpose: "setup" }).map((r) => r.id), [setup]);
 });
 
-test("schema upgrades a legacy table in place and unique indexes are optional", () => {
+sqlite("schema upgrades a legacy table in place and unique indexes are optional", () => {
   const db = new Database(":memory:");
   db.exec("CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, target_root TEXT NOT NULL, role TEXT NOT NULL, title TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
   db.exec("INSERT INTO conversations (target_root, role, created_at, updated_at) VALUES ('/r', 'manager', 'x', 'x'), ('/r', 'manager', 'x', 'x')");

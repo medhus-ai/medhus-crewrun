@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import Database from "better-sqlite3";
+// better-sqlite3 is a dev dependency with a native build; where it cannot load (a CI runner
+// without a prebuilt binary or a compiler) these tests skip instead of failing the runtime suite.
+const Database = await import("better-sqlite3").then((m) => m.default).catch(() => null);
+const sqlite = Database ? test : test.skip;
 
 import { createBudgetLedger, DEFAULT_PRICING } from "../src/budget.js";
 
@@ -10,7 +13,7 @@ function memoryLedger(options = {}) {
   return createBudgetLedger({ getDb: () => db, describeSource: () => ":memory:", ...options });
 }
 
-test("recordRun appends normalized rows and readRuns returns them in order", () => {
+sqlite("recordRun appends normalized rows and readRuns returns them in order", () => {
   const ledger = memoryLedger();
   ledger.recordRun({ workflow: "cockpit-chat", repository: "demo", runnerId: "claude-agent-sonnet-high", engine: "claude-agent", provider: "anthropic", ref: "chat-planner", actor: "b", result: "done", durationSeconds: 12, usage: { inputTokens: 1000, outputTokens: 200, costUsd: null } });
   ledger.recordRun({ repository: "demo", runnerId: "openrouter-auto", engine: "claude-agent", provider: "openrouter", result: "done", usage: { inputTokens: 10, outputTokens: 5, costUsd: 0.02 } });
@@ -23,7 +26,7 @@ test("recordRun appends normalized rows and readRuns returns them in order", () 
   assert.equal(ledger.source(), ":memory:");
 });
 
-test("report estimates subscription cost from pricing and aggregates by project, engine, runner", () => {
+sqlite("report estimates subscription cost from pricing and aggregates by project, engine, runner", () => {
   const ledger = memoryLedger();
   const month = "2026-08";
   const report = ledger.report([
@@ -43,7 +46,7 @@ test("report estimates subscription cost from pricing and aggregates by project,
   assert.equal(ledger.estimateCostUsd("unknown-runner", 100, 100), null);
 });
 
-test("pricing is host-overridable and getDb is required", () => {
+sqlite("pricing is host-overridable and getDb is required", () => {
   const ledger = memoryLedger({ pricing: [{ prefix: "my-", inputPerMtok: 1, outputPerMtok: 2 }] });
   assert.equal(ledger.estimateCostUsd("my-runner", 1_000_000, 1_000_000), 3);
   assert.ok(DEFAULT_PRICING.some((rate) => rate.prefix === "claude-agent-sonnet"));

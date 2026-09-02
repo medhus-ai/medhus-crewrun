@@ -56,10 +56,10 @@ const runner = createRoleRunner({ tools });
 const result = await runner.runRoleCapture({ root: project, role: "ceo", prompt: "Write today's brief." });
 ```
 
-A project is any directory with a `.crew/` folder: `roles/<role>.md` and
-`memory/ai-runners.json` (`{ "default_role_runners": { "ceo": "claude-agent-sonnet-high" } }`).
-Concrete runner profiles are machine-level, in `~/.crew/ai-runners.json`, so keys and vendor
-choices never enter a repository.
+A project is any directory with a `.crew/` folder holding `roles/<role>.md`. A role picks its
+runner in its own frontmatter (`runner: claude-agent-sonnet-high`); the legacy
+`memory/ai-runners.json` mapping still works as a fallback. Concrete runner profiles are
+machine-level, in `~/.crew/ai-runners.json`, so keys and vendor choices never enter a repository.
 
 ## What is inside
 

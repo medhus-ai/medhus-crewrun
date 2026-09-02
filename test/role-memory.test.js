@@ -68,3 +68,20 @@ test("loadRoleMemory rejects a symlink that escapes the repository", async (t) =
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test("runnerIdForRole prefers the role file's runner frontmatter over the legacy mapping", async () => {
+  const { runnerIdForRole } = await import("../src/runner.js");
+  const parent = await mkdtemp(path.join(os.tmpdir(), "crew-runner-id-"));
+  const root = path.join(parent, "repo");
+  try {
+    await mkdir(path.join(root, ".crew", "roles"), { recursive: true });
+    await mkdir(path.join(root, ".crew", "memory"), { recursive: true });
+    await writeFile(path.join(root, ".crew", "roles", "ops.md"), "---\nname: ops\nrunner: claude-agent-opus-high\n---\n# Ops\n", "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "ceo.md"), "---\nname: ceo\n---\n# CEO\n", "utf8");
+    await writeFile(path.join(root, ".crew", "memory", "ai-runners.json"), JSON.stringify({ default_role_runners: { ops: "claude-agent-sonnet-low", ceo: "claude-agent-sonnet-high" } }), "utf8");
+    assert.equal(runnerIdForRole("ops", root), "claude-agent-opus-high", "frontmatter wins");
+    assert.equal(runnerIdForRole("ceo", root), "claude-agent-sonnet-high", "legacy mapping still works as fallback");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});

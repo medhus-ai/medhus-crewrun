@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import { createContainerEngine } from "./engines/container.js";
 import { getEngine } from "./engines/index.js";
 import { readExecutionPolicy } from "./execution-policy.js";
@@ -20,11 +21,25 @@ const PROPOSE_MODE_INSTRUCTION = "You have read-only tool access to the project.
 const TITLE_TIMEOUT_MS = 45000;
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 
-// Returns "" only when nothing is configured and no vendor CLI is set up — resolution order: role's assigned profile → detected provider default.
+// Returns "" only when nothing is configured and no vendor CLI is set up. Resolution order:
+// the role file's own `runner:` frontmatter (the role spec is the per-role config surface) →
+// the project's legacy memory/ai-runners.json mapping → the detected provider default.
 export function runnerIdForRole(role, targetRoot) {
+  const declared = targetRoot ? roleDeclaredRunnerId(role, targetRoot) : "";
+  if (declared) return declared;
   const configured = targetRoot ? resolveConfiguredRunnerId(role, targetRoot) : "";
   if (configured) return configured;
   return defaultRunnerProfileId() || "";
+}
+
+function roleDeclaredRunnerId(role, targetRoot) {
+  if (!ROLE_SLUG.test(String(role || ""))) return "";
+  try {
+    const text = readFileSync(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`), "utf8");
+    return String(parseFrontmatter(text).runner || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function resolveConfiguredRunnerId(role, targetRoot) {

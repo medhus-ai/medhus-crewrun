@@ -32,6 +32,11 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 
 ## Candidates for a later move
 
+- `crewrun up <targetRoot>`: a kernel daemon CLI composing scheduler + handoff worker + pulse
+  (heartbeats/hooks, added v0.1.11) around a host module (tools, identity, delivery) — the way
+  stdioServerEntry and container.workerEntry already inject host entry points. Today each host
+  ships its own daemon; extract once the second host wants the loop.
+
 
 ## Review findings closed in v0.1.6
 

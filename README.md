@@ -78,6 +78,7 @@ choices never enter a repository.
 | `work-items` | `createWorkItemSource({ dir })` — tasks as markdown files (frontmatter or bold bullets) |
 | `handoffs` | `createHandoffQueue({ getDb })` — durable inputs for a role's thread: attach once, claim in leased batches, recover after a crash ("wake the manager") |
 | `schedules` | Cron-scheduled role turns: `<crew dir>/schedules.json`, `parseCron`, `dueSchedules`, `createScheduler({ run })` |
+| `pulse` | Role heartbeats (`heartbeat: 30m` frontmatter, 1s–1y, budget-capped, non-overlapping) and event hooks (`hooks: […]` → debounced enqueue), host-routed |
 | `skills`, `skill-proposals` | Scoped `SKILL.md` skills; agent-proposed skills that a human approves into a scope |
 | `preference-memory`, `reflections`, `recall` | Approved preferences; per-role journals; episodic recall over past conversations |
 | `execution-policy` | Container sandbox policy |

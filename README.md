@@ -24,8 +24,8 @@ and keep a ledger of what every run cost.
 - **Everything is accounted for.** Token counts, reported cost, duration, and result per run,
   aggregated per month, project, engine, and runner — with cost estimates for subscription runs.
 
-crewrun grew out of two very different hosts — an engineering control plane and a
-company-operations automation — and carries no opinion about *what* your roles do.
+crewrun was extracted from production hosts in two very different domains and carries no
+opinion about *what* your roles do.
 
 ## Quick start
 

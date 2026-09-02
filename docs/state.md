@@ -1,6 +1,6 @@
 ---
 type: implementation-state
-audience: founder + engineer + ai-agent
+audience: maintainer + ai-agent
 updated: 2026-08-31
 status: active
 ---
@@ -9,19 +9,20 @@ status: active
 
 ## Direction
 
-Extracted on 2026-08-31 from the first host (an engineering control plane) so a second host (a
-company-operations automation) can share the agent runtime without depending on the first; positioned
-as an open-source library (Apache-2.0, npm `medhus-crewrun`). The kernel holds only host-neutral code;
-product identity is injected (see README → Host contract). Hosts pin a tag.
+An open-source, host-neutral agent runtime (Apache-2.0, npm `medhus-crewrun`), extracted on
+2026-08-31 from its first production hosts so any application can share it. The kernel holds only
+host-neutral code; product identity is injected (see README → Host contract). Hosts pin a tag.
 
 ## Boundaries (what stays out)
 
-- Workflow state / SQLite store, dispatcher, plan pipeline, verification contract — the engineering host.
-- Forges (GitHub, Azure DevOps), PR sync, merge policy — the engineering host.
-- Cockpit shell, pages, styles, control API — the engineering host (the generic pieces `auth`,
-  `request-context`, `markdown`, `process` are here).
-- Persona roles and company control-file tooling — org automation.
-- Memory files (engineering doctrine, conventions) — each host's own; the runtime injects none.
+Anything with a product opinion belongs in a host, never in the kernel:
+
+- Workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
+  Azure DevOps), PR sync, and merge policy.
+- UI shells, pages, styles, and control APIs (the generic pieces `auth`, `request-context`,
+  `markdown`, `process` are here).
+- Role catalogs and domain-specific file tooling.
+- Memory files (doctrine, conventions) — each host's own; the runtime injects none.
 
 ## Done since extraction
 
@@ -29,7 +30,7 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
   a first CLI (`bin/crewrun.js`: up, roles check). Hosts inject runTurn/enqueue/routing/tick;
   without a host module, schedules and heartbeats run on a tool-less kernel runner.
 
-- Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`) — both hosts use them.
+- Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`).
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
 - Handoff queue (`handoffs`) and cron schedules for roles (`schedules`).
 - Learning layers: skill proposals (`skill-proposals`), episodic recall (`recall` + `conversations.searchMessages`), per-role reflections (`reflections`).
@@ -80,7 +81,7 @@ The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
   the `cli` engine publishes prompt-file env under `CREW_*` plus the configured legacy prefix;
   `EXTRA_PATH` reads through `crewEnv`; catalog cache keys on size + mtime.
 
-- (4) 2026-08-31 — v0.1.1: native-Windows runtime fixes ported from the engineering host (`resolveExecutable`
+- (4) 2026-08-31 — v0.1.1: native-Windows runtime fixes ported from a production host (`resolveExecutable`
   prefers PATHEXT launchers and the claude/codex `.exe` behind npm's `.cmd` shims, restores real
   file case; the `cli` engine resolves its command the same way). v0.1.0 stays as pushed.
 
@@ -88,7 +89,7 @@ The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
   publishable manifest. Neutral defaults: `configureCrew()` replaces the first host's directory/env
   hardcoding (`crewDir()`, `sessionCookieName()`); the engineering-doctrine template returned to
   its host and the runner's universal memory defaults to none. Added `conversations` (schema +
-  CRUD + singleton get-or-create; the engineering host delegates to it) and `work-items` (tasks as markdown
+  CRUD + singleton get-or-create) and `work-items` (tasks as markdown
   files), plus `examples/brief.mjs` and an open-source README.
 
 - (2) 2026-08-31 — Renamed to `crewrun` / `crewrun` (was medhus-crewcore). Added:

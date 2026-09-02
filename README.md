@@ -1,6 +1,11 @@
 # crewrun
 
-**Run a crew of AI roles on the agent runtimes you already pay for.**
+**The self-hosted, vendor-neutral, git-governed runtime for AI crews you're accountable for.**
+
+Run a crew of AI roles on the agent runtimes you already pay for — with every role, memory,
+skill, and schedule as a versioned file a human approves. Vendor-native schedules and
+coworker connectors are convenience on their infrastructure; crewrun is control on yours,
+and the two complement each other.
 
 crewrun is a small Node library for building your own multi-role agent system on top of the
 vendors' *agent* runtimes — the Claude Agent SDK, the Codex SDK, or any CLI — instead of raw

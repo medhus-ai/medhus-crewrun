@@ -220,7 +220,8 @@ function looksLikePath(value, platform = process.platform) {
 
 function resolveCandidate(candidate, options) {
   for (const file of [...nativeWindowsCliCandidates(candidate, options), ...candidateNames(candidate, options)]) {
-    if (isExecutableFile(file, options?.platform)) return actualFileCase(file, options?.platform);
+    const resolved = actualFileCase(file, options?.platform);
+    if (isExecutableFile(resolved, options?.platform)) return resolved;
   }
   return "";
 }

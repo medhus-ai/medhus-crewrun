@@ -90,8 +90,8 @@ export async function refreshModelCatalog({
   const results = await Promise.allSettled(jobs.map(([, , discover]) => discover()));
   for (const [index, [provider, label]] of jobs.entries()) {
     const result = results[index];
-    if (result.status === "fulfilled" && result.value === null) continue; // skipped
-    if (result.status === "fulfilled" && result.value.length) {
+    if (result.status === "fulfilled" && result.value == null) continue; // skipped
+    if (result.status === "fulfilled" && Array.isArray(result.value) && result.value.length) {
       providers[provider] = result.value;
       refreshedAny = true;
     } else {

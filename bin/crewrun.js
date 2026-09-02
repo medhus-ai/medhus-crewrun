@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadRoleSettings, validateRoleSettings } from "../src/pulse.js";
+import { writeSkillIndexFile, renderSkillIndexFile } from "../src/skills.js";
+import { approveSkill, listSkillProposals, rejectSkill } from "../src/skill-proposals.js";
+import { approvePreference, listPreferenceProposals, rejectPreference } from "../src/preference-memory.js";
 import { createUp, loadHostModule } from "../src/up.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +36,29 @@ if (command === "--version" || command === "-v") {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30); // keep the process alive; the loop's own timers are unref'd
+} else if (command === "skills" && rest[0] === "index") {
+  const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";
+  if (rest.includes("--write")) console.log(`wrote ${writeSkillIndexFile(targetRoot)}`);
+  else process.stdout.write(renderSkillIndexFile(targetRoot));
+} else if (command === "proposals") {
+  const sub = rest[0];
+  const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";
+  const id = rest.slice(1).filter((arg) => !arg.startsWith("-"))[1];
+  const skills = listSkillProposals({ targetRoot });
+  const prefs = listPreferenceProposals({ targetRoot });
+  if (sub === "list" || !sub) {
+    for (const proposal of skills) console.log(`skill  ${proposal.id}  ${proposal.skillId} — ${proposal.description} (by ${proposal.proposedBy})`);
+    for (const proposal of prefs) console.log(`pref   ${proposal.id}  ${proposal.key} — ${proposal.statement} (by ${proposal.proposedBy})`);
+    if (!skills.length && !prefs.length) console.log("no pending proposals");
+  } else if (sub === "approve" || sub === "reject") {
+    if (!id) fail(`usage: crewrun proposals ${sub} <targetRoot> <proposal-id>`);
+    const isSkill = skills.some((proposal) => proposal.id === id);
+    const fn = sub === "approve" ? (isSkill ? approveSkill : approvePreference) : (isSkill ? rejectSkill : rejectPreference);
+    const result = fn({ targetRoot, proposalId: id, approvedBy: "operator" });
+    console.log(`${sub}d ${id}${result?.installedAt ? ` → ${result.installedAt}` : ""}`);
+  } else {
+    fail("usage: crewrun proposals list|approve|reject <targetRoot> [proposal-id]");
+  }
 } else if (command === "roles" && rest[0] === "check") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-"));
   if (!targetRoot) fail("usage: crewrun roles check <targetRoot> [--host <module>]");
@@ -51,6 +77,8 @@ if (command === "--version" || command === "-v") {
 
   crewrun up <targetRoot> [--host <module>]           run the crew loop on a project
   crewrun roles check <targetRoot> [--host <module>]  validate role heartbeat/hook settings
+  crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
+  crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/preferences
   crewrun --version
 
 A host module (optional) injects tools, turn recording, hook routing, and housekeeping:

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
@@ -53,13 +53,17 @@ function readSkillDirectory({ scope, dir }) {
   if (!existsSync(dir)) return [];
   const out = [];
   for (const name of readdirSync(dir).sort()) {
-    if (!SKILL_ID.test(name)) continue;
-    const file = path.join(dir, name, "SKILL.md");
+    if (name.startsWith("_")) continue;
+    // Flat form (<id>.md) is preferred; the directory form (<id>/SKILL.md) remains for
+    // skills that ship assets.
+    const flat = name.endsWith(".md") && SKILL_ID.test(name.slice(0, -3));
+    if (!flat && !SKILL_ID.test(name)) continue;
+    const file = flat ? path.join(dir, name) : path.join(dir, name, "SKILL.md");
     if (!existsSync(file) || !statSync(file).isFile()) continue;
     const text = readFileSync(file, "utf8");
     const meta = parseFrontmatter(text);
     out.push({
-      id: SKILL_ID.test(meta.name || "") ? meta.name : name,
+      id: SKILL_ID.test(meta.name || "") ? meta.name : (flat ? name.slice(0, -3) : name),
       description: String(meta.description || "Reusable workflow").trim(),
       roles: parseInlineList(meta.roles),
       workProfiles: parseInlineList(meta.work_profiles),
@@ -74,4 +78,27 @@ function skillApplies(skill, { role, workProfile }) {
   if (skill.roles.length && role && !skill.roles.includes(role)) return false;
   if (skill.workProfiles.length && workProfile && !skill.workProfiles.includes(workProfile)) return false;
   return true;
+}
+
+// Generated index of the project's skills — one page, never hand-edited. Skills only:
+// brokered tools are advertised live by the tool bridge and belong to no index.
+export function renderSkillIndexFile(targetRoot, { workspaceRoot, env } = {}) {
+  const skills = listSkills({ targetRoot, workspaceRoot, env });
+  const lines = [
+    "# Skill Index",
+    "",
+    "> **Generated — do not hand-edit.** Rebuilt by `crewrun skills index --write` and whenever a proposed skill is approved. Load a skill with `skill.read`.",
+    "",
+    "| Skill | Description | Roles | Scope |",
+    "|---|---|---|---|",
+    ...skills.map((skill) => `| ${skill.id} | ${skill.description.replace(/\|/g, "/")} | ${skill.roles.join(", ") || "all"} | ${skill.scope} |`)
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+export function writeSkillIndexFile(targetRoot, options = {}) {
+  const file = path.join(path.resolve(targetRoot), crewDir(), "skills", "_index.md");
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, renderSkillIndexFile(targetRoot, options));
+  return file;
 }

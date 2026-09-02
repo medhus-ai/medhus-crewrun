@@ -2,6 +2,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createPulse } from "./pulse.js";
+import { createCrewToolsBridge } from "./crew-tools.js";
+import { listSkillProposals } from "./skill-proposals.js";
+import { listPreferenceProposals } from "./preference-memory.js";
 import { createRoleRunner } from "./runner.js";
 import { createScheduler } from "./schedules.js";
 
@@ -51,7 +54,9 @@ export function createUp({
 
   let fallbackRunner = null;
   const runTurn = host.runTurn || ((role, prompt, meta = {}) => {
-    fallbackRunner = fallbackRunner || createRoleRunner({});
+    // Hostless turns still complete the learning loop: the kernel's own bridge exposes
+    // skill.read / memory.reflect / skill.propose / prefs.propose over the crew memory stores.
+    fallbackRunner = fallbackRunner || createRoleRunner({ tools: createCrewToolsBridge({ targetRoot: root }) });
     return fallbackRunner.runRoleCapture({ root, role, prompt, label: meta.label || meta.workflow || role, log });
   });
 
@@ -104,6 +109,10 @@ export function createUp({
       timers.push(housekeeping);
     }
     await host.start?.({ emit: pulse.emit });
+    try {
+      const pending = listSkillProposals({ targetRoot: root }).length + listPreferenceProposals({ targetRoot: root }).length;
+      if (pending) log(`[up] ${pending} proposal${pending === 1 ? "" : "s"} pending operator review — crewrun proposals list ${root}`);
+    } catch { /* proposals are optional */ }
     log(`[up] crew loop running on ${root}`);
   }
 

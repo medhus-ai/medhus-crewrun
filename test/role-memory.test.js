@@ -86,32 +86,51 @@ test("runnerIdForRole prefers the role file's runner frontmatter over the legacy
   }
 });
 
-test("roles/runners.json registry drives runner, pointers, and settings; role.md becomes optional", async () => {
-  const { runnerIdForRole, roleRegistryEntry, loadRoleMemory } = await import("../src/runner.js");
+test("role .json specs drive runner, pointers, defaults, schedules, and settings; role.md becomes optional", async () => {
+  const { runnerIdForRole } = await import("../src/runner.js");
+  const { loadRoleSpec, listRoleSpecs } = await import("../src/role-spec.js");
   const { loadRoleSettings } = await import("../src/pulse.js");
-  const parent = await mkdtemp(path.join(os.tmpdir(), "crew-registry-"));
+  const { listSchedules, upsertSchedule } = await import("../src/schedules.js");
+  const parent = await mkdtemp(path.join(os.tmpdir(), "crew-rolespec-"));
   const root = path.join(parent, "repo");
   try {
     await mkdir(path.join(root, ".crew", "roles"), { recursive: true });
     await mkdir(path.join(root, "personas"), { recursive: true });
     await writeFile(path.join(root, "personas", "soul.md"), "soul marker", "utf8");
-    await writeFile(path.join(root, ".crew", "roles", "ops.md"), "# Ops prompt body\nno frontmatter needed", "utf8");
-    await writeFile(path.join(root, ".crew", "roles", "runners.json"), JSON.stringify({
-      ops: { runner: "claude-agent-opus-high", hooks: ["thing.happened"], heartbeat: "2h", memory_pointers: [".crew/roles/ops.md", "personas/soul.md"] },
-      ghost: { runner: "claude-agent-sonnet-low", memory_pointers: ["personas/soul.md"] }
+    await writeFile(path.join(root, ".crew", "roles", "_defaults.json"), JSON.stringify({
+      runner: "claude-agent-sonnet-high",
+      memory_pointers: ["personas/soul.md"]
     }), "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "ops.md"), "# Ops prompt body\nno frontmatter", "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "ops.json"), JSON.stringify({
+      runner: "claude-agent-opus-high",
+      hooks: ["thing.happened"],
+      heartbeat: "2h",
+      memory_pointers: [".crew/roles/ops.md"],
+      schedules: [{ id: "tick", cron: "* * * * *", prompt: "do the thing" }]
+    }), "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "ghost.json"), JSON.stringify({ reflections: false }), "utf8");
 
-    assert.equal(runnerIdForRole("ops", root), "claude-agent-opus-high");
-    assert.equal(runnerIdForRole("ghost", root), "claude-agent-sonnet-low", "a role with no .md at all still resolves");
-    const entry = roleRegistryEntry(root, "ops");
-    const sections = loadRoleMemory(root, null, { universal: [], pointers: entry.memory_pointers });
-    assert.deepEqual(sections.map((s) => s.body.trim().split("\n")[0]), ["# Ops prompt body", "soul marker"]);
+    assert.equal(runnerIdForRole("ops", root), "claude-agent-opus-high", "spec wins");
+    assert.equal(runnerIdForRole("ghost", root), "claude-agent-sonnet-high", "defaults fill gaps; a role needs no .md");
+
+    const spec = loadRoleSpec(root, "ops");
+    assert.deepEqual(spec.memory_pointers, ["personas/soul.md", ".crew/roles/ops.md"], "default pointers prepend");
+    assert.deepEqual(spec.reflections, { limit: 10 });
+    assert.equal(loadRoleSpec(root, "ghost").reflections, false);
+    assert.equal(Object.keys(listRoleSpecs(root)).length, 2);
 
     const settings = loadRoleSettings(root);
     assert.deepEqual(settings.ops.hooks, ["thing.happened"]);
     assert.equal(settings.ops.heartbeat.intervalSeconds, 7200);
-    assert.equal(settings.ops.front.runner, "claude-agent-opus-high");
-    assert.ok(settings.ghost, "registry-only roles appear in settings");
+
+    const schedules = listSchedules({ targetRoot: root });
+    assert.deepEqual(schedules.map((s) => [s.role, s.id]), [["ops", "tick"]]);
+    upsertSchedule({ targetRoot: root, schedule: { id: "tick", role: "ops", cron: "0 9 * * 1", prompt: "weekly now", enabled: false } });
+    const updated = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
+    assert.equal(updated.schedules.length, 1);
+    assert.equal(updated.schedules[0].cron, "0 9 * * 1", "upsert writes into the owning role's spec");
+    assert.equal(updated.schedules[0].role, undefined, "the role key is implied by the file");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

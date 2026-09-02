@@ -9,7 +9,7 @@ import { crewDir } from "../src/crew-dirs.js";
 import { approveSkill, listSkillProposals, proposeSkill, rejectSkill } from "../src/skill-proposals.js";
 import { listSkills, readSkill } from "../src/skills.js";
 
-test("a proposed skill becomes a scoped SKILL.md only after approval", async () => {
+test("a proposed skill becomes a scoped flat skill file only after approval", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "crew-skill-proposals-"));
   const workspace = path.join(base, "workspace");
   const repo = path.join(workspace, "repo");
@@ -31,7 +31,7 @@ test("a proposed skill becomes a scoped SKILL.md only after approval", async () 
 
   const approved = approveSkill({ targetRoot: repo, workspaceRoot: workspace, proposalId: proposal.id, approvedBy: "founder", env });
   assert.equal(approved.status, "approved");
-  assert.equal(approved.installedAt, path.join(workspace, crewDir(), "skills", "weekly-brief", "SKILL.md"));
+  assert.equal(approved.installedAt, path.join(workspace, crewDir(), "skills", "weekly-brief.md"), "approved skills install in the flat form");
   const file = readFileSync(approved.installedAt, "utf8");
   assert.match(file, /^---\nname: weekly-brief\ndescription: How this company writes the Monday brief\.\nroles: \[ceo\]\nproposed_by: ceo\napproved_by: founder\napproved_at: /);
   assert.match(file, /# Weekly brief\n\n1\. Read open items\./);

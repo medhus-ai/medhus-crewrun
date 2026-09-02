@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { writeSkillIndexFile } from "./skills.js";
 import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
@@ -61,10 +62,11 @@ function decideSkill({ targetRoot, workspaceRoot, proposalId, approvedBy, decisi
   if (decision === "approved") {
     const scope = skillScopes({ targetRoot: root, workspaceRoot, env }).find((entry) => entry.scope === proposal.scope);
     const dir = path.join(scope.dir, proposal.skillId);
-    installedAt = path.join(dir, "SKILL.md");
+    installedAt = `${dir}.md`;
     const existed = existsSync(installedAt);
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(path.dirname(installedAt), { recursive: true });
     writeFileSync(installedAt, renderSkill(proposal, { approvedBy: proposal.decidedBy, approvedAt: now }), "utf8");
+    try { writeSkillIndexFile(root); } catch { /* index is regenerable */ }
     proposal.installedAt = installedAt;
     proposal.superseded = existed;
   }

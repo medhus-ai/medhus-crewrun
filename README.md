@@ -18,9 +18,9 @@ and keep a ledger of what every run cost.
   and local servers work too. Choose per role.
 - **One key, any model.** OpenRouter's whole catalog is a provider; local Ollama / LM Studio /
   llama.cpp servers are another.
-- **Roles are files.** A role is a Markdown prompt plus a role → runner mapping.
-  `memory_pointers` is kernel context; other frontmatter is available to the host. No framework
-  classes.
+- **Roles are files.** A role is one JSON spec — `.crew/roles/<role>.json` holds its runner,
+  memory pointers, hooks, heartbeat, and schedules, with `_defaults.json` supplying the shared
+  floor — plus optional Markdown prose injected via its own pointers. No framework classes.
 - **Tools are brokered.** A per-role allowlist decides what the model can call; the bridge
   serves host-defined tools to Claude in-process and to Codex over a stdio MCP server. The model
   never sees a tool it is not allowed to use.
@@ -61,10 +61,28 @@ const runner = createRoleRunner({ tools });
 const result = await runner.runRoleCapture({ root: project, role: "ceo", prompt: "Write today's brief." });
 ```
 
-A project is any directory with a `.crew/` folder holding `roles/<role>.md`. A role picks its
-runner in its own frontmatter (`runner: claude-agent-sonnet-high`); the legacy
-`memory/ai-runners.json` mapping still works as a fallback. Concrete runner profiles are
-machine-level, in `~/.crew/ai-runners.json`, so keys and vendor choices never enter a repository.
+A project is any directory with a `.crew/` folder. Each role is a spec at
+`roles/<role>.json`:
+
+```json
+{
+  "title": "Analyst",
+  "runner": "claude-agent-sonnet-high",
+  "memory_pointers": [".crew/roles/analyst.md", "docs/analyst-notes.md"],
+  "reflections": { "limit": 10 },
+  "hooks": ["task.assigned"],
+  "heartbeat": "off",
+  "schedules": [{ "id": "brief", "cron": "30 8 * * 1-5", "prompt": "…", "enabled": true }]
+}
+```
+
+`roles/_defaults.json` supplies values every role inherits (its `memory_pointers` prepend as the
+shared floor). Pointers may name any file in the repository — including the role's own optional
+`.md` prose, which is read only when listed. A bounded window of the role's own reflections
+(`memory.reflect`) is injected back each turn, closing the learning loop. Legacy projects keep
+working: `.md` frontmatter, `memory/ai-runners.json`, and a global `schedules.json` all still
+resolve. Concrete runner profiles are machine-level, in `~/.crew/ai-runners.json`, so keys and
+vendor choices never enter a repository.
 
 ## What is inside
 
@@ -154,17 +172,13 @@ A host module is a plain object (or `createHost({ targetRoot, log })` factory) w
 `runTurn`, `runSchedule`, `enqueue` (hook delivery — hooks disable politely without it),
 `routeEvent`, `renderEvent`, `spentToday`, `tick` (housekeeping), and `start`/`stop`.
 
-**Heartbeats and hooks** are declared per role, in the same frontmatter the runner reads —
-flat keys, absent means off:
+**Heartbeats and hooks** are declared in the role spec — absent means off:
 
-```yaml
-heartbeat: 30m                       # off | 1s … 1y (s|m|h|d|w|mo|y) — a duration enables the pulse
-heartbeat_prompt: optional override
-heartbeat_budget_usd_per_day: 2      # optional daily cap via the host's spentToday
-hooks: [task.assigned, run.failed]   # event names are the host's; the kernel routes and debounces
+```json
+{ "heartbeat": { "interval": "30m", "budget_usd_per_day": 2 }, "hooks": ["task.assigned"] }
 ```
 
-A heartbeat is a periodic autonomous turn: missed windows fire once, a pulse never overlaps
+(`"heartbeat": "30m"` shorthand works; intervals 1s … 1y as s|m|h|d|w|mo|y.) A heartbeat is a periodic autonomous turn: missed windows fire once, a pulse never overlaps
 itself, and run state lives in the crew home. A hook firing is delivered through the host's
 enqueue with a debounced externalId, so bursts and retries coalesce (`pulse` module).
 

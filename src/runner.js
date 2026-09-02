@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
 import { parseFrontmatter } from "./frontmatter.js";
+import { loadRoleSpec } from "./role-spec.js";
+import { readReflections, reflectionsPrompt } from "./reflections.js";
 import { createContainerEngine } from "./engines/container.js";
 import { getEngine } from "./engines/index.js";
 import { readExecutionPolicy } from "./execution-policy.js";
@@ -22,43 +24,15 @@ const TITLE_TIMEOUT_MS = 45000;
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 
 // Returns "" only when nothing is configured and no vendor CLI is set up. Resolution order:
-// the role registry (<crew>/roles/runners.json: { role: { runner, hooks, memory_pointers } })
-// → the role file's `runner:` frontmatter → the legacy memory/ai-runners.json mapping →
-// the detected provider default.
-export function readRoleRegistry(targetRoot) {
-  try {
-    const text = readFileSync(path.join(path.resolve(targetRoot), crewDir(), "roles", "runners.json"), "utf8");
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-export function roleRegistryEntry(targetRoot, role) {
-  if (!ROLE_SLUG.test(String(role || ""))) return null;
-  const entry = readRoleRegistry(targetRoot)[role];
-  return entry && typeof entry === "object" ? entry : null;
-}
-
+// the role spec (<crew>/roles/<role>.json merged over _defaults.json; legacy .md frontmatter
+// honored when no .json exists) → the legacy memory/ai-runners.json mapping → the detected
+// provider default.
 export function runnerIdForRole(role, targetRoot) {
-  const registry = targetRoot ? String(roleRegistryEntry(targetRoot, role)?.runner || "").trim() : "";
-  if (registry) return registry;
-  const declared = targetRoot ? roleDeclaredRunnerId(role, targetRoot) : "";
+  const declared = targetRoot ? String(loadRoleSpec(targetRoot, role)?.runner || "").trim() : "";
   if (declared) return declared;
   const configured = targetRoot ? resolveConfiguredRunnerId(role, targetRoot) : "";
   if (configured) return configured;
   return defaultRunnerProfileId() || "";
-}
-
-function roleDeclaredRunnerId(role, targetRoot) {
-  if (!ROLE_SLUG.test(String(role || ""))) return "";
-  try {
-    const text = readFileSync(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`), "utf8");
-    return String(parseFrontmatter(text).runner || "").trim();
-  } catch {
-    return "";
-  }
 }
 
 function resolveConfiguredRunnerId(role, targetRoot) {
@@ -195,16 +169,29 @@ export function createRoleRunner({
       : baseEngine;
     const resuming = Boolean(resumeSessionId) && engineId !== "cli";
 
-    // A registry entry (<crew>/roles/runners.json) makes the role's .md optional: the prompt
-    // becomes whatever the entry's memory_pointers name (which may include the .md itself, or
-    // any other file in the repository).
-    const registryEntry = roleRegistryEntry(targetRoot, role);
-    const rolePrompt = registryEntry ? null : readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
+    // A .json spec makes the role's .md optional: the prompt is whatever the spec's
+    // memory_pointers name (which may include the .md itself, or any repo file). Roles
+    // without a spec file keep the legacy behavior: the .md is the Role section.
+    const spec = loadRoleSpec(targetRoot, role);
+    const specDriven = Boolean(spec?.hasSpecFile);
+    const rolePrompt = specDriven ? null : readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
     const memory = loadRoleMemory(targetRoot, rolePrompt, {
       ...memoryOptions,
-      pointers: Array.isArray(registryEntry?.memory_pointers) ? registryEntry.memory_pointers : [],
+      // Spec pointers replace the host's universal floor entirely when a spec file exists.
+      ...(specDriven ? { universal: [] } : {}),
+      pointers: specDriven ? spec.memory_pointers : [],
       extra: extraMemory(toolContext)
     });
+    // The closed learning loop: a bounded window of the role's own reflections rides along.
+    if (spec && spec.reflections !== false) {
+      const entries = readReflections({ targetRoot, role, limit: spec.reflections.limit });
+      if (entries.length) {
+        memory.push({
+          title: "Your recent reflections",
+          body: reflectionsPrompt(entries, { role }).split("\n").slice(1).join("\n")
+        });
+      }
+    }
     const roleOptions = toolContext?.roleOptions || {};
     const capabilities = capabilityProfile(role, roleOptions);
     const workProfile = String(toolContext?.workProfile?.kind || "");

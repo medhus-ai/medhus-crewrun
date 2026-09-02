@@ -25,17 +25,16 @@ product identity is injected (see README → Host contract). Hosts pin a tag.
 
 ## Done since extraction
 
+- `crewrun up` (v0.2.0): the crew loop as a library (`src/up.js`, createUp + loadHostModule) and
+  a first CLI (`bin/crewrun.js`: up, roles check). Hosts inject runTurn/enqueue/routing/tick;
+  without a host module, schedules and heartbeats run on a tool-less kernel runner.
+
 - Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`) — both hosts use them.
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
 - Handoff queue (`handoffs`) and cron schedules for roles (`schedules`).
 - Learning layers: skill proposals (`skill-proposals`), episodic recall (`recall` + `conversations.searchMessages`), per-role reflections (`reflections`).
 
 ## Candidates for a later move
-
-- `crewrun up <targetRoot>`: a kernel daemon CLI composing scheduler + handoff worker + pulse
-  (heartbeats/hooks, added v0.1.11) around a host module (tools, identity, delivery) — the way
-  stdioServerEntry and container.workerEntry already inject host entry points. Today each host
-  ships its own daemon; extract once the second host wants the loop.
 
 
 ## Review findings closed in v0.1.6

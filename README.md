@@ -8,16 +8,17 @@ model APIs. Define roles as markdown files, route each role to a provider and mo
 exactly the tools that role may call over MCP, sandbox edits in a git worktree or a container,
 and keep a ledger of what every run cost.
 
-- **Your subscriptions work.** Claude Pro/Max and ChatGPT sign-ins drive turns through the
-  official SDKs; API keys (Anthropic, OpenAI, OpenRouter, GLM, Kimi) and local servers work
-  too. Choose per role.
+- **Your local sign-ins work.** Operator-owned Claude and ChatGPT/Codex subscriptions can drive
+  local turns through the official SDKs; API keys (Anthropic, OpenAI, OpenRouter, GLM, Kimi)
+  and local servers work too. Choose per role.
 - **One key, any model.** OpenRouter's whole catalog is a provider; local Ollama / LM Studio /
   llama.cpp servers are another.
-- **Roles are files.** A role is a markdown prompt with frontmatter (`memory_pointers`,
-  `file_scope`, `triggers`) plus a role → runner mapping. No framework classes.
+- **Roles are files.** A role is a Markdown prompt plus a role → runner mapping.
+  `memory_pointers` is kernel context; other frontmatter is available to the host. No framework
+  classes.
 - **Tools are brokered.** A per-role allowlist decides what the model can call; the bridge
-  serves those tools to Claude in-process and to Codex over a stdio MCP server. The model never
-  sees a tool it is not allowed to use.
+  serves host-defined tools to Claude in-process and to Codex over a stdio MCP server. The model
+  never sees a tool it is not allowed to use.
 - **Edits are isolated.** Execute-mode turns run in a dedicated git worktree on a fresh branch,
   or inside a locked-down Docker container. Propose mode is read-only.
 - **Everything is accounted for.** Token counts, reported cost, duration, and result per run,
@@ -66,7 +67,7 @@ choices never enter a repository.
 |---|---|
 | `runner` | `createRoleRunner(host)` → `startRoleTurn`, `runRoleCapture`, prompt assembly, `loadRoleMemory` |
 | `engines/*` | `cli` (any vendor CLI), `claude-agent`, `codex-agent`, `container` (Docker sandbox) |
-| `mcp`, `mcp-stdio` | `createMcpBridge(registry)` — in-process server for Claude, stdio server for Codex |
+| `mcp`, `mcp-stdio` | `createMcpBridge(registry)` — host-tool MCP server bridge: in-process for Claude, stdio for Codex |
 | `tool-broker` | `createToolBroker({ allowlists, … })` — role → tool allowlist enforcement |
 | `role-capabilities` | Subagent policy per role kind; Claude subagent definitions |
 | `roles`, `templates` | Role catalog installer; template reader |
@@ -90,9 +91,9 @@ A runner profile names an engine, a provider, a model, a thinking effort, and ho
 
 | `auth` | Behaviour |
 |---|---|
-| *(absent — auto)* | Stored or ambient API key if present, otherwise the vendor CLI's subscription login |
-| `"subscription"` | Forces vendor login (Claude Pro/Max, ChatGPT) by stripping ambient API keys from the turn |
-| `"api-key"` | Forces the stored key (`secret_ref` or the provider default) and fails loudly if none exists |
+| *(absent — auto)* | Leaves the vendor runtime's normal credential resolution in place |
+| `"subscription"` | For native Claude/Codex SDK profiles, forces local vendor sign-in by stripping ambient API keys |
+| `"api-key"` | For direct native-provider profiles, forces the stored key (`secret_ref` or provider default) and fails loudly if none exists |
 
 Routed profiles (`base_url`) speak the Anthropic protocol at a third-party endpoint with a
 Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token always wins:
@@ -102,10 +103,29 @@ Bearer token (`ANTHROPIC_AUTH_TOKEN`) and blank `ANTHROPIC_API_KEY` so the token
   `/api/v1/models?supported_parameters=tools` (tool-calling models only).
 - **GLM** (`api.z.ai`), **Kimi** (`api.moonshot.ai`), **local servers** (Ollama, LM Studio, llama.cpp).
 
-> **Terms of service.** Driving a consumer subscription through a vendor's agent SDK is
-> permitted by those SDKs today, but the vendors set the rules and can change them. Read
-> Anthropic's and OpenAI's current terms before running unattended workloads on a
-> subscription, and prefer API keys for anything you operate for others.
+> **Authentication scope.** Subscription auth is for an operator using their own local vendor
+> sign-in. Anthropic permits ordinary use of Claude Code/Agent SDK under eligible subscriptions,
+> but third-party products and services must use API keys or a supported cloud provider: they may
+> not offer Claude.ai login or route Free, Pro, or Max credentials for their users. See
+> [Anthropic's policy](https://code.claude.com/docs/en/legal-and-compliance). Codex officially
+> supports local ChatGPT subscription login as well as API-key login; see [OpenAI's
+> authentication documentation](https://learn.chatgpt.com/docs/auth).
+
+## Live integration tests
+
+`npm test` skips all live-provider and Docker tests. They are opt-in, make real calls, and never
+run from normal CI by accident. The subscription checks force `auth: "subscription"`, so they
+exercise the signed-in local Claude or Codex client rather than an ambient API key.
+
+```bash
+CREW_LIVE_E2E=1 CREW_LIVE_CLAUDE=1 node --test test/live-e2e.test.js
+CREW_LIVE_E2E=1 CREW_LIVE_CODEX=1 node --test test/live-e2e.test.js
+CREW_LIVE_E2E=1 CREW_LIVE_OPENROUTER=1 OPENROUTER_API_KEY=… node --test test/live-e2e.test.js
+CREW_LIVE_E2E=1 CREW_LIVE_DOCKER=1 node --test test/live-e2e.test.js
+```
+
+`CREW_LIVE_OPENROUTER_MODEL` selects a model for the OpenRouter run;
+`CREW_LIVE_DOCKER_IMAGE` selects the Docker image.
 
 ## Handoffs and schedules
 
@@ -120,9 +140,11 @@ Two ways work reaches a role without a person typing in a chat:
   (numeric five-field cron in local time; `*`, lists, ranges, and steps are supported).
   `createScheduler({ targetRoot, run })` ticks, fires each due schedule once (a schedule that
   missed several windows fires once, not per window), and records outcomes under the crew home
-  so the repository never churns. Run one scheduler per project (run state is a JSON file, not a
-  cross-process lock); a run whose process died is released after an hour by default
-  (`staleAfterMs`). `run(schedule)` is the host's role turn — typically `runner.runRoleCapture`.
+  so the repository never churns. Scheduling is deliberately **host-owned**: this helper is for
+  one scheduler process per project, not distributed claiming. A multi-process host must elect
+  one scheduler owner or claim scheduled work transactionally in its own database/queue before
+  it calls `runner.runRoleCapture`; `handoffs` shows the token-and-expiry claim pattern. A run
+  whose scheduler process died becomes due after an hour by default (`staleAfterMs`).
 
 ## Memory and learning
 
@@ -141,7 +163,10 @@ human can read, edit, and revoke.
 What it deliberately does not do: unsupervised "remember everything" vector memory. Silent
 drift, no provenance, and nothing to revoke are the failure modes that model avoids.
 
-## Host contract
+## Host integration
+
+The supported embedding boundary is [Host API and schema contract v1](docs/host-api-v1.md).
+The notes below explain the host-owned pieces behind that contract.
 
 crewrun has neutral defaults and no product identity; a host injects its own.
 

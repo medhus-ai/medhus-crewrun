@@ -90,7 +90,7 @@ test("remove and lock revoke injected provider env while preserving ambient valu
   delete process.env.OPENAI_API_KEY;
 });
 
-test("secretEnvForRunner resolves by provider and by secret_ref", () => {
+test("secretEnvForRunner resolves stored and ambient keys by provider and secret_ref", () => {
   store.unlock(PASSWORD);
   store.setSecret("OPENAI_API_KEY", "sk-default");
   store.setSecret("openai-work", "sk-work");
@@ -106,6 +106,11 @@ test("secretEnvForRunner resolves by provider and by secret_ref", () => {
   assert.deepEqual(store.secretEnvForRunner({ provider: "custom" }), {});
   store.lock();
   assert.deepEqual(store.secretEnvForRunner({ provider: "openai" }), {});
+
+  process.env.OPENROUTER_API_KEY = "sk-or-ambient";
+  assert.equal(store.secretValueForRunner({ provider: "openrouter" }), "sk-or-ambient");
+  assert.deepEqual(store.secretEnvForRunner({ provider: "openrouter" }), { OPENROUTER_API_KEY: "sk-or-ambient" });
+  delete process.env.OPENROUTER_API_KEY;
 });
 
 test("writes require an unlocked store and names are validated", () => {

@@ -158,7 +158,7 @@ export function customSecretNames() {
   return Object.keys(cache).filter((name) => !known.has(name));
 }
 
-// Empty when locked or no secret stored — subscription/ambient auth still applies, so this never forces API-key auth on an SDK engine.
+// Empty when no stored or ambient provider key — subscription auth still applies, so this never forces API-key auth on an SDK engine.
 export function secretEnvForRunner(runner) {
   const envVar = RUNTIME_PROVIDER_ENV[runner?.provider];
   if (!envVar) return {};
@@ -166,10 +166,17 @@ export function secretEnvForRunner(runner) {
   return value ? { [envVar]: value } : {};
 }
 
-// Raw stored key for a runner (secret_ref wins over the provider default); "" when locked or unset.
+// Raw key for a runner (secret_ref wins over the provider default). A host may keep
+// keys in the encrypted store, but command-line and reference-host deployments can
+// also provide the documented provider env var without first unlocking that store.
 export function secretValueForRunner(runner) {
-  if (!cache || !runner) return "";
-  return (runner.secret_ref && cache[runner.secret_ref]) || cache[PROVIDER_ENV[runner.provider]] || "";
+  if (!runner) return "";
+  const named = String(runner.secret_ref || "").trim();
+  const providerEnv = PROVIDER_ENV[runner.provider];
+  return (named && cache?.[named])
+    || (providerEnv && cache?.[providerEnv])
+    || (providerEnv && process.env[providerEnv])
+    || "";
 }
 
 // Anthropic-protocol routing: a runner with base_url speaks the Anthropic API at a

@@ -16,6 +16,7 @@ const EFFORT_MAP = {
 };
 
 const NO_TOOLS = Object.freeze({ available: false, transport: "mcp", mcp: true });
+const HEALTHCHECK_TIMEOUT_MS = 60_000;
 
 // Routed profiles target an OpenAI-compatible endpoint (e.g. vLLM) with their own
 // key; without base_url the ambient subscription/env auth stays untouched.
@@ -211,7 +212,7 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
       };
     },
 
-    async healthcheck(profile) {
+    async healthcheck(profile, { timeoutMs = HEALTHCHECK_TIMEOUT_MS } = {}) {
       try {
         const Codex = await load();
         const codex = new Codex(codexClientOptions(profile));
@@ -221,7 +222,9 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
           ...(profile.model ? { model: profile.model } : {})
         });
         const abortController = new AbortController();
-        const timer = setTimeout(() => abortController.abort(), 120000);
+        // Keep this shorter than callers' test/UI deadlines so an unreachable
+        // provider reports a failed check instead of consuming the whole turn.
+        const timer = setTimeout(() => abortController.abort(), timeoutMs);
         let turn;
         try {
           turn = await thread.run("Respond with the word OK and nothing else.", { signal: abortController.signal });

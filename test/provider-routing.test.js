@@ -240,3 +240,49 @@ test("auth modes force subscription or API-key on the Codex engine", async () =>
   assert.equal(failed.ok, false);
   assert.match(failed.message, /API-key auth but no OpenAI API key/);
 });
+
+test("Codex healthchecks abort before a caller deadline", async () => {
+  let aborted = false;
+  class FakeCodex {
+    startThread() {
+      return {
+        run(_prompt, { signal }) {
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => {
+              aborted = true;
+              reject(signal.reason || new Error("aborted"));
+            }, { once: true });
+          });
+        }
+      };
+    }
+  }
+
+  const result = await createCodexAgentEngine({ loadCodex: async () => FakeCodex }).healthcheck(
+    { id: "codex-bounded", provider: "openai", auth: "subscription" },
+    { timeoutMs: 1 }
+  );
+  assert.equal(aborted, true);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /healthcheck failed/);
+});
+
+test("Claude healthchecks abort before a caller deadline", async () => {
+  let aborted = false;
+  const query = async function* ({ options }) {
+    await new Promise((_resolve, reject) => {
+      options.abortController.signal.addEventListener("abort", () => {
+        aborted = true;
+        reject(options.abortController.signal.reason || new Error("aborted"));
+      }, { once: true });
+    });
+  };
+
+  const result = await createClaudeAgentEngine({ loadQuery: async () => query }).healthcheck(
+    { id: "claude-bounded", provider: "anthropic", auth: "subscription" },
+    { timeoutMs: 1 }
+  );
+  assert.equal(aborted, true);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /healthcheck failed/);
+});

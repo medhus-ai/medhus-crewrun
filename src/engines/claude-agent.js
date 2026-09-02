@@ -15,6 +15,7 @@ const EFFORT_MAP = {
   max: "max"
 };
 
+const HEALTHCHECK_TIMEOUT_MS = 60_000;
 
 // Subprocess env for the SDK. Routed profiles (base_url) speak the Anthropic protocol with a
 // Bearer token; otherwise `auth` forces subscription (strip ambient keys so CLI login is used)
@@ -190,12 +191,14 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
       };
     },
 
-    async healthcheck(profile) {
+    async healthcheck(profile, { timeoutMs = HEALTHCHECK_TIMEOUT_MS } = {}) {
       try {
         const sdk = await load();
         const query = sdk.query;
         const abortController = new AbortController();
-        const timer = setTimeout(() => abortController.abort(), 120000);
+        // Keep this shorter than callers' test/UI deadlines so an unreachable
+        // provider reports a failed check instead of consuming the whole turn.
+        const timer = setTimeout(() => abortController.abort(), timeoutMs);
         let resultMessage = null;
         try {
           const stream = query({

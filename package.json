@@ -29,6 +29,7 @@
   "files": [
     "src",
     "examples",
+    "docs",
     "README.md",
     "LICENSE",
     "NOTICE"

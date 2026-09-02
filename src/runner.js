@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
+import { createCrewOnlyBridge } from "./mcp.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadRoleSpec } from "./role-spec.js";
 import { readReflections, reflectionsPrompt } from "./reflections.js";
@@ -96,7 +97,7 @@ export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVE
 // Host hooks give the runtime its product identity: prompt boilerplate, role display names,
 // universal memory, worktree branch naming, the MCP tool bridge, and the container worker entry.
 export function createRoleRunner({
-  tools = null,
+  tools = createCrewOnlyBridge(),
   displayRoleName = (role) => role,
   universalMemory = DEFAULT_UNIVERSAL_MEMORY,
   memoryTitles = {},

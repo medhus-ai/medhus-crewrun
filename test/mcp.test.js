@@ -15,6 +15,7 @@ function demoRegistry(overrides = {}) {
     calls,
     registry: {
       serverName: "demo",
+    crewTools: false,
       label: "Demo",
       instructions: "Demo tools.",
       toolsForRole: (role) => (role === "reader" ? ["doc.read"] : ["doc.read", "doc.write"]),
@@ -137,4 +138,44 @@ test("stdio helpers rebuild the server and read the child environment", () => {
   assert.equal(env.IGNORED, undefined);
   assert.deepEqual(readMcpContextData({ CREW_MCP_CONTEXT: "{\"role\":\"r\"}" }), { role: "r" });
   assert.deepEqual(readMcpContextData({ CREW_MCP_CONTEXT: "not json" }), {});
+});
+
+test("every bridge carries the kernel's built-in crew tools unless a host overrides or opts out", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const pathMod = await import("node:path");
+  const root = mkdtempSync(pathMod.join(os.tmpdir(), "crew-merge-"));
+
+  const bridge = createMcpBridge({
+    serverName: "hosty",
+    toolsForRole: () => ["inbox.list", "memory.reflect"],
+    describe: (name) => `host ${name}`,
+    inputSchema: () => ({}),
+    call: async ({ toolName }) => ({ from: "host", toolName })
+  });
+  const handlers = bridge.toolHandlers({ role: "ops", toolContext: { targetRoot: root } });
+  const names = handlers.map((handler) => handler.toolName);
+  assert.deepEqual(names, ["inbox.list", "memory.reflect", "skill.read", "skill.propose", "prefs.propose"],
+    "crew tools append; the host's memory.reflect overrides the built-in");
+  const hostReflect = await handlers.find((handler) => handler.toolName === "memory.reflect").invoke({});
+  assert.deepEqual(hostReflect.structuredContent, { from: "host", toolName: "memory.reflect" });
+  const kernelReflectHandler = createMcpBridge({
+    serverName: "bare",
+    toolsForRole: () => [],
+    describe: () => "",
+    inputSchema: () => ({}),
+    call: async () => ({})
+  }).toolHandlers({ role: "ops", toolContext: { targetRoot: root } }).find((handler) => handler.toolName === "memory.reflect");
+  const written = await kernelReflectHandler.invoke({ text: "kernel loop works" });
+  assert.equal(written.isError, undefined, "built-in reflect writes to the crew memory store");
+
+  const optedOut = createMcpBridge({
+    serverName: "strict",
+    crewTools: false,
+    toolsForRole: () => ["only.this"],
+    describe: () => "",
+    inputSchema: () => ({}),
+    call: async () => ({})
+  });
+  assert.deepEqual(optedOut.toolHandlers({ role: "ops", toolContext: { targetRoot: root } }).map((handler) => handler.toolName), ["only.this"]);
 });

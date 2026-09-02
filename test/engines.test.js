@@ -46,6 +46,7 @@ function fakeClaudeSdk(captured, messages) {
 function demoBridge() {
   return createMcpBridge({
     serverName: "demo",
+    crewTools: false,
     label: "Demo",
     toolLineMarker: "[demo-tool]",
     toolsForRole: (role) => (role === "reader" ? ["doc.read"] : ["doc.read", "doc.write"]),

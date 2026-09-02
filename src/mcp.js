@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { z as zod } from "zod";
 
+import { crewToolDefinitions } from "./crew-tools.js";
+
 // Function-call tool names disallow dots: codebase.search_code -> codebase_search_code.
 export function sanitizeToolName(toolName) {
   return String(toolName || "").replace(/[^A-Za-z0-9_-]/g, "_");
@@ -46,29 +48,44 @@ export function createMcpBridge(registry) {
   const serializeContext = registry.serializeContext
     || ((toolContext) => defaultSerialize(toolContext, registry.serializableContextKeys || []));
 
+  const includeCrewTools = registry.crewTools !== false;
+
   function toolNamesFor(role, toolContext = {}) {
-    return registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
+    const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
+    if (!includeCrewTools) return hostNames;
+    // The kernel's built-in tools are always present; a host tool with the same name wins.
+    return [...hostNames, ...crewToolDefinitions.names.filter((name) => !hostNames.includes(name))];
+  }
+
+  function isCrewTool(role, toolName, toolContext = {}) {
+    if (!includeCrewTools) return false;
+    const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
+    return !hostNames.includes(toolName) && crewToolDefinitions.names.includes(toolName);
   }
 
   function toolHandlers({ role, toolContext = {}, schemaApi = zod, onToolCall } = {}) {
     const roleOptions = toolContext.roleOptions || {};
-    return toolNamesFor(role, toolContext).map((toolName) => ({
-      toolName,
-      name: sanitizeToolName(toolName),
-      description: registry.describe(toolName),
-      inputSchema: registry.inputSchema(toolName, schemaApi),
-      alwaysLoad: Boolean(registry.alwaysLoad?.(toolName)),
-      invoke: async (args = {}) => {
-        onToolCall?.(toolName);
-        const validation = registry.validate ? registry.validate(toolName, args) : { ok: true, input: args };
-        if (!validation.ok) return toolError(new Error(validation.error));
-        try {
-          return toolResult(await registry.call({ role, toolName, input: validation.input, context: toolContext, roleOptions }));
-        } catch (error) {
-          return toolError(error);
+    return toolNamesFor(role, toolContext).map((toolName) => {
+      const crew = isCrewTool(role, toolName, toolContext);
+      const source = crew ? crewToolDefinitions : registry;
+      return {
+        toolName,
+        name: sanitizeToolName(toolName),
+        description: source.describe(toolName),
+        inputSchema: source.inputSchema(toolName, schemaApi),
+        alwaysLoad: Boolean(source.alwaysLoad?.(toolName)),
+        invoke: async (args = {}) => {
+          onToolCall?.(toolName);
+          const validation = !crew && registry.validate ? registry.validate(toolName, args) : { ok: true, input: args };
+          if (!validation.ok) return toolError(new Error(validation.error));
+          try {
+            return toolResult(await source.call({ role, toolName, input: validation.input, context: toolContext, roleOptions }));
+          } catch (error) {
+            return toolError(error);
+          }
         }
-      }
-    }));
+      };
+    });
   }
 
   function createClaudeMcp({ sdk, role, targetRoot, toolContext = {}, onToolCall } = {}) {
@@ -109,12 +126,13 @@ export function createMcpBridge(registry) {
     const names = toolNamesFor(role, toolContext);
     if (names.length === 0) return "";
     if (registry.toolInstructions) return registry.toolInstructions(role, toolContext, names);
+    const describeFor = (name) => (isCrewTool(role, name, toolContext) ? crewToolDefinitions.describe(name) : registry.describe(name));
     return [
       `## ${label} MCP tools`,
       `You have ${label} MCP tools in addition to the built-in Read/Grep/Glob tools. If this section is present, do not claim that only file-read tools are available.`,
       "",
       `Available ${label} tools:`,
-      ...names.map((name) => `- ${name} (${mcpToolFullName(serverName, name)}): ${registry.describe(name)}`)
+      ...names.map((name) => `- ${name} (${mcpToolFullName(serverName, name)}): ${describeFor(name)}`)
     ].join("\n");
   }
 
@@ -220,4 +238,16 @@ function stringify(value) {
   } catch {
     return String(value);
   }
+}
+
+// The kernel's own bridge: nothing but the built-in crew tools. Used automatically by
+// createRoleRunner when a host supplies no bridge of its own.
+export function createCrewOnlyBridge() {
+  return createMcpBridge({
+    serverName: "crew",
+    toolsForRole: () => [],
+    describe: (toolName) => crewToolDefinitions.describe(toolName),
+    inputSchema: (toolName, z) => crewToolDefinitions.inputSchema(toolName, z),
+    call: (request) => crewToolDefinitions.call(request)
+  });
 }

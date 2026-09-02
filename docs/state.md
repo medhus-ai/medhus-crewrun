@@ -26,6 +26,14 @@ Anything with a product opinion belongs in a host, never in the kernel:
 
 ## Done since extraction
 
+- Console (v0.4.0): `crewrun console <root>` / `crewrun up --console` — a local operator UI
+  (127.0.0.1, node:http, zero deps; shell/pages/navigation structure) over one project's
+  .crew/: dashboard + validation, role spec editing and add-role, schedule toggles and
+  run-now (when attached to a loop), the skill index, and proposal approve/reject. An
+  operations surface by design — no chat, no assistant UX. The kernel's built-in tools
+  (crew-tools.js) are now merged into every bridge automatically (host names win;
+  `crewTools: false` opts out) and the default runner carries them.
+
 - Role specs (v0.3.0): `.crew/roles/<role>.json` (+ `_defaults.json`) holds runner, pointers,
   reflections knob, hooks, heartbeat, and that role's schedules; role `.md` is optional prose
   read via pointers; reflections auto-inject (bounded) closing the learning loop; skills go

@@ -13,6 +13,7 @@ import { writeSkillIndexFile, renderSkillIndexFile } from "../src/skills.js";
 import { approveSkill, listSkillProposals, rejectSkill } from "../src/skill-proposals.js";
 import { approvePreference, listPreferenceProposals, rejectPreference } from "../src/preference-memory.js";
 import { createUp, loadHostModule } from "../src/up.js";
+import { createConsole } from "../src/console/server.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
@@ -32,10 +33,19 @@ if (command === "--version" || command === "-v") {
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
   const up = createUp({ targetRoot, host, log });
   await up.start();
+  if (rest.includes("--console")) {
+    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
+  }
   const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30); // keep the process alive; the loop's own timers are unref'd
+} else if (command === "console") {
+  const targetRoot = rest.find((arg) => !arg.startsWith("-"));
+  if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--host <module>]");
+  const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
+  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], port: Number(argValue(rest, "--port")) || 4400, log }).listen();
+  setInterval(() => {}, 1 << 30);
 } else if (command === "skills" && rest[0] === "index") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";
   if (rest.includes("--write")) console.log(`wrote ${writeSkillIndexFile(targetRoot)}`);
@@ -75,7 +85,8 @@ if (command === "--version" || command === "-v") {
 } else {
   console.log(`crewrun — run a crew of AI roles on the runtimes you already pay for
 
-  crewrun up <targetRoot> [--host <module>]           run the crew loop on a project
+  crewrun up <targetRoot> [--host <module>] [--console]   run the crew loop on a project (+ local console)
+  crewrun console <targetRoot> [--port N]             the local operator UI without the loop
   crewrun roles check <targetRoot> [--host <module>]  validate role heartbeat/hook settings
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/preferences

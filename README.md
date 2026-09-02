@@ -157,7 +157,9 @@ CREW_LIVE_E2E=1 CREW_LIVE_DOCKER=1 node --test test/live-e2e.test.js
 Run everything with one command — or compose the same loop from the library:
 
 ```bash
-npx crewrun up <targetRoot>                      # schedules + heartbeats on the kernel's tool-less runner
+npx crewrun up <targetRoot> --console            # the loop + the local operator UI (127.0.0.1:4400)
+npx crewrun console <targetRoot>                 # the UI alone: roles, schedules, skills, proposal approvals
+npx crewrun up <targetRoot>                      # schedules + heartbeats on the kernel runner (built-in tools attached)
 npx crewrun up <targetRoot> --host ./host.mjs    # your tools, turn recording, hook routing, lifecycle
 npx crewrun roles check <targetRoot>             # validate role heartbeat/hook settings
 ```

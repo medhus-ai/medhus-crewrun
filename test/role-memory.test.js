@@ -19,22 +19,26 @@ function roleWithPointers(...pointers) {
   ].join("\n");
 }
 
-test("loadRoleMemory rejects relative and absolute paths outside .crew", async () => {
+test("loadRoleMemory allows any path inside the repository and rejects paths outside it", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "crew-role-memory-"));
   const root = path.join(parent, "repo");
   const allowed = path.join(root, ".crew", "memory", "allowed.md");
+  const identity = path.join(root, "personas", "ceo", "SOUL.md");
   const outside = path.join(parent, "outside.md");
   await mkdir(path.dirname(allowed), { recursive: true });
+  await mkdir(path.dirname(identity), { recursive: true });
   await writeFile(allowed, "allowed marker", "utf8");
+  await writeFile(identity, "identity marker", "utf8");
   await writeFile(outside, "outside marker", "utf8");
 
   try {
     const sections = loadRoleMemory(root, roleWithPointers(
       ".crew/memory/allowed.md",
+      "personas/ceo/SOUL.md",
       "../outside.md",
       outside
     ), { universal: [] });
-    assert.deepEqual(sections.map((section) => section.body), ["allowed marker"]);
+    assert.deepEqual(sections.map((section) => section.body), ["allowed marker", "identity marker"]);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

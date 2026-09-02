@@ -60,7 +60,9 @@ export function isLikelyStaleSessionError(value) {
 
 // Resolves the role's declared `memory_pointers` into prompt sections: a role carries only the
 // memory it lists, plus the universal floor. Glob/tool-fetched entries (`<task-id>`, `*`,
-// "(when active)") and missing files are skipped silently; paths outside crewDir() are refused.
+// "(when active)") and missing files are skipped silently; paths outside the target repository
+// are refused (lexically and via realpath, so a symlink cannot escape it). Role files are
+// reviewed repo content, so any file inside the repo is fair injection material.
 export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVERSAL_MEMORY, extra = [], titles = {} } = {}) {
   const root = path.resolve(targetRoot);
   const paths = [];
@@ -386,9 +388,9 @@ function contextSections({ rolePrompt, memory = [] }) {
 }
 
 function resolveRoleMemoryPath(root, candidate) {
-  const crewRoot = path.resolve(root, crewDir());
+  const repoRoot = path.resolve(root);
   const resolved = path.resolve(root, String(candidate || ""));
-  if (!pathIsWithin(crewRoot, resolved)) return "";
+  if (!pathIsWithin(repoRoot, resolved)) return "";
   if (!existsSync(resolved)) return resolved;
   try {
     const realRoot = realpathSync(root);

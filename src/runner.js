@@ -22,9 +22,28 @@ const TITLE_TIMEOUT_MS = 45000;
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 
 // Returns "" only when nothing is configured and no vendor CLI is set up. Resolution order:
-// the role file's own `runner:` frontmatter (the role spec is the per-role config surface) →
-// the project's legacy memory/ai-runners.json mapping → the detected provider default.
+// the role registry (<crew>/roles/runners.json: { role: { runner, hooks, memory_pointers } })
+// → the role file's `runner:` frontmatter → the legacy memory/ai-runners.json mapping →
+// the detected provider default.
+export function readRoleRegistry(targetRoot) {
+  try {
+    const text = readFileSync(path.join(path.resolve(targetRoot), crewDir(), "roles", "runners.json"), "utf8");
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function roleRegistryEntry(targetRoot, role) {
+  if (!ROLE_SLUG.test(String(role || ""))) return null;
+  const entry = readRoleRegistry(targetRoot)[role];
+  return entry && typeof entry === "object" ? entry : null;
+}
+
 export function runnerIdForRole(role, targetRoot) {
+  const registry = targetRoot ? String(roleRegistryEntry(targetRoot, role)?.runner || "").trim() : "";
+  if (registry) return registry;
   const declared = targetRoot ? roleDeclaredRunnerId(role, targetRoot) : "";
   if (declared) return declared;
   const configured = targetRoot ? resolveConfiguredRunnerId(role, targetRoot) : "";
@@ -78,7 +97,7 @@ export function isLikelyStaleSessionError(value) {
 // "(when active)") and missing files are skipped silently; paths outside the target repository
 // are refused (lexically and via realpath, so a symlink cannot escape it). Role files are
 // reviewed repo content, so any file inside the repo is fair injection material.
-export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVERSAL_MEMORY, extra = [], titles = {} } = {}) {
+export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVERSAL_MEMORY, extra = [], titles = {}, pointers = [] } = {}) {
   const root = path.resolve(targetRoot);
   const paths = [];
   const add = (candidate) => {
@@ -86,6 +105,9 @@ export function loadRoleMemory(targetRoot, roleText, { universal = DEFAULT_UNIVE
     if (safePath && !paths.includes(safePath)) paths.push(safePath);
   };
   for (const name of universal) add(path.resolve(root, crewDir(), "memory", name));
+  for (const entry of pointers) {
+    if (typeof entry === "string" && entry.endsWith(".md") && !/[<>*]/.test(entry)) add(path.resolve(root, entry));
+  }
   for (const entry of parseMemoryPointers(roleText)) add(path.resolve(root, entry));
   for (const name of extra) add(path.resolve(root, crewDir(), "memory", name));
 
@@ -118,7 +140,7 @@ export function createRoleRunner({
 
   function buildPromptBody({ role, rolePrompt, memory = [], messages, context, capabilities, skills = [], preferences = [] }) {
     const lines = [
-      `You are the ${displayRoleName(role)}. Follow the role file below exactly.`,
+      rolePrompt ? `You are the ${displayRoleName(role)}. Follow the role file below exactly.` : `You are the ${displayRoleName(role)}. Follow your memory sections below exactly.`,
       "",
       ...contextSections({ rolePrompt, memory }),
       ...contextBlock(preferencePrompt(preferences)),
@@ -137,7 +159,7 @@ export function createRoleRunner({
 
   function buildSystemPrompt({ role, rolePrompt, memory = [], mode, context, capabilities, skills = [], preferences = [] }) {
     const lines = [
-      `You are the ${displayRoleName(role)} for this project. Follow the role file below exactly.`,
+      rolePrompt ? `You are the ${displayRoleName(role)} for this project. Follow the role file below exactly.` : `You are the ${displayRoleName(role)} for this project. Follow your memory sections below exactly.`,
       "",
       ...contextSections({ rolePrompt, memory }),
       ...contextBlock(preferencePrompt(preferences)),
@@ -173,8 +195,16 @@ export function createRoleRunner({
       : baseEngine;
     const resuming = Boolean(resumeSessionId) && engineId !== "cli";
 
-    const rolePrompt = readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
-    const memory = loadRoleMemory(targetRoot, rolePrompt, { ...memoryOptions, extra: extraMemory(toolContext) });
+    // A registry entry (<crew>/roles/runners.json) makes the role's .md optional: the prompt
+    // becomes whatever the entry's memory_pointers name (which may include the .md itself, or
+    // any other file in the repository).
+    const registryEntry = roleRegistryEntry(targetRoot, role);
+    const rolePrompt = registryEntry ? null : readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
+    const memory = loadRoleMemory(targetRoot, rolePrompt, {
+      ...memoryOptions,
+      pointers: Array.isArray(registryEntry?.memory_pointers) ? registryEntry.memory_pointers : [],
+      extra: extraMemory(toolContext)
+    });
     const roleOptions = toolContext?.roleOptions || {};
     const capabilities = capabilityProfile(role, roleOptions);
     const workProfile = String(toolContext?.workProfile?.kind || "");
@@ -395,7 +425,8 @@ function cleanTitle(raw) {
 }
 
 function contextSections({ rolePrompt, memory = [] }) {
-  const out = ["## Role", rolePrompt || "(role file missing)", ""];
+  const out = rolePrompt ? ["## Role", rolePrompt, ""] : [];
+  if (!rolePrompt && memory.length === 0) out.push("## Role", "(role file missing)", "");
   for (const section of memory) {
     out.push(`## ${section.title}`, section.body, "");
   }

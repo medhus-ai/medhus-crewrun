@@ -85,3 +85,34 @@ test("runnerIdForRole prefers the role file's runner frontmatter over the legacy
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test("roles/runners.json registry drives runner, pointers, and settings; role.md becomes optional", async () => {
+  const { runnerIdForRole, roleRegistryEntry, loadRoleMemory } = await import("../src/runner.js");
+  const { loadRoleSettings } = await import("../src/pulse.js");
+  const parent = await mkdtemp(path.join(os.tmpdir(), "crew-registry-"));
+  const root = path.join(parent, "repo");
+  try {
+    await mkdir(path.join(root, ".crew", "roles"), { recursive: true });
+    await mkdir(path.join(root, "personas"), { recursive: true });
+    await writeFile(path.join(root, "personas", "soul.md"), "soul marker", "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "ops.md"), "# Ops prompt body\nno frontmatter needed", "utf8");
+    await writeFile(path.join(root, ".crew", "roles", "runners.json"), JSON.stringify({
+      ops: { runner: "claude-agent-opus-high", hooks: ["thing.happened"], heartbeat: "2h", memory_pointers: [".crew/roles/ops.md", "personas/soul.md"] },
+      ghost: { runner: "claude-agent-sonnet-low", memory_pointers: ["personas/soul.md"] }
+    }), "utf8");
+
+    assert.equal(runnerIdForRole("ops", root), "claude-agent-opus-high");
+    assert.equal(runnerIdForRole("ghost", root), "claude-agent-sonnet-low", "a role with no .md at all still resolves");
+    const entry = roleRegistryEntry(root, "ops");
+    const sections = loadRoleMemory(root, null, { universal: [], pointers: entry.memory_pointers });
+    assert.deepEqual(sections.map((s) => s.body.trim().split("\n")[0]), ["# Ops prompt body", "soul marker"]);
+
+    const settings = loadRoleSettings(root);
+    assert.deepEqual(settings.ops.hooks, ["thing.happened"]);
+    assert.equal(settings.ops.heartbeat.intervalSeconds, 7200);
+    assert.equal(settings.ops.front.runner, "claude-agent-opus-high");
+    assert.ok(settings.ghost, "registry-only roles appear in settings");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});

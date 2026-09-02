@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { crewDir, crewHome } from "./crew-dirs.js";
 import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
+import { readRoleRegistry } from "./runner.js";
 
 // Heartbeats and event hooks for roles, declared in the same role frontmatter the runner
 // already reads. Flat keys, absent = off, so every existing role file keeps its behavior:
@@ -33,14 +34,26 @@ export function parseInterval(value) {
   return Number.isFinite(seconds) ? Math.round(seconds) : NaN;
 }
 
+// A role's settings come from the registry entry (<crew>/roles/runners.json) merged over its
+// optional .md frontmatter — registry wins where both speak.
 export function loadRoleSettings(targetRoot) {
   const dir = path.join(path.resolve(targetRoot), crewDir(), "roles");
+  const registry = readRoleRegistry(targetRoot);
   const settings = {};
-  if (!existsSync(dir)) return settings;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md") || name.startsWith("_")) continue;
-    const role = name.slice(0, -3);
-    const front = parseFrontmatter(readFileSync(path.join(dir, name), "utf8"));
+  const fronts = {};
+  if (existsSync(dir)) {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".md") || name.startsWith("_")) continue;
+      fronts[name.slice(0, -3)] = parseFrontmatter(readFileSync(path.join(dir, name), "utf8"));
+    }
+  }
+  for (const role of new Set([...Object.keys(registry), ...Object.keys(fronts)])) {
+    const entry = registry[role] && typeof registry[role] === "object" ? registry[role] : {};
+    const front = { ...(fronts[role] || {}) };
+    for (const key of ["runner", "heartbeat", "heartbeat_prompt", "heartbeat_budget_usd_per_day"]) {
+      if (entry[key] !== undefined) front[key] = String(entry[key]);
+    }
+    const hooks = Array.isArray(entry.hooks) ? entry.hooks.map(String) : parseInlineList(front.hooks);
     const intervalSeconds = parseInterval(front.heartbeat);
     settings[role] = {
       role,
@@ -49,7 +62,7 @@ export function loadRoleSettings(targetRoot) {
         prompt: front.heartbeat_prompt || "",
         budgetUsdPerDay: front.heartbeat_budget_usd_per_day ? Number(front.heartbeat_budget_usd_per_day) : null
       } : null,
-      hooks: parseInlineList(front.hooks),
+      hooks,
       front
     };
   }

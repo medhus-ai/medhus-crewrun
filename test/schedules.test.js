@@ -46,7 +46,7 @@ test("schedules persist in the project file and state lives in the crew home", a
   assert.equal(removeSchedule({ targetRoot: root, id: "nope" }), false);
   assert.equal(removeSchedule({ targetRoot: root, id: "stale-digest" }), true);
   assert.ok(scheduleStatePath(root, env).startsWith(path.join(env.CREW_HOME, "schedules")));
-  assert.equal(existsSync(path.join(root, ".crew", "schedules.json")) || existsSync(path.join(root, process.env.CREW_DIR_NAME || ".crew", "schedules.json")), true);
+  assert.equal(existsSync(path.join(root, ".crew", "roles", "schedules.json")), true, "new schedules land beside the role specs");
 });
 
 test("the scheduler runs due schedules once, records outcomes, and never double-fires", async () => {

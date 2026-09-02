@@ -62,8 +62,15 @@ export function nextRun(expression, from = new Date()) {
   return null;
 }
 
+// Schedules live beside the role specs (<crew>/roles/schedules.json); the legacy
+// <crew>/schedules.json location is honored when it is the one that exists.
 export function schedulesPath(targetRoot) {
-  return path.join(path.resolve(targetRoot || process.cwd()), crewDir(), "schedules.json");
+  const root = path.resolve(targetRoot || process.cwd());
+  const preferred = path.join(root, crewDir(), "roles", "schedules.json");
+  const legacy = path.join(root, crewDir(), "schedules.json");
+  if (existsSync(preferred)) return preferred;
+  if (existsSync(legacy)) return legacy;
+  return preferred;
 }
 
 export function listSchedules({ targetRoot } = {}) {

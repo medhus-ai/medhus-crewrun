@@ -129,9 +129,41 @@ CREW_LIVE_E2E=1 CREW_LIVE_DOCKER=1 node --test test/live-e2e.test.js
 `CREW_LIVE_OPENROUTER_MODEL` selects a model for the OpenRouter run;
 `CREW_LIVE_DOCKER_IMAGE` selects the Docker image.
 
-## Handoffs and schedules
+## The crew loop: schedules, heartbeats, hooks, handoffs
 
-Two ways work reaches a role without a person typing in a chat:
+Run everything with one command — or compose the same loop from the library:
+
+```bash
+npx crewrun up <targetRoot>                      # schedules + heartbeats on the kernel's tool-less runner
+npx crewrun up <targetRoot> --host ./host.mjs    # your tools, turn recording, hook routing, lifecycle
+npx crewrun roles check <targetRoot>             # validate role heartbeat/hook settings
+```
+
+```js
+import { createUp, loadHostModule } from "medhus-crewrun/up";
+const up = createUp({ targetRoot, host: await loadHostModule("./host.mjs", { targetRoot }) });
+await up.start();
+```
+
+A host module is a plain object (or `createHost({ targetRoot, log })` factory) with optional
+`runTurn`, `runSchedule`, `enqueue` (hook delivery — hooks disable politely without it),
+`routeEvent`, `renderEvent`, `spentToday`, `tick` (housekeeping), and `start`/`stop`.
+
+**Heartbeats and hooks** are declared per role, in the same frontmatter the runner reads —
+flat keys, absent means off:
+
+```yaml
+heartbeat: 30m                       # off | 1s … 1y (s|m|h|d|w|mo|y) — a duration enables the pulse
+heartbeat_prompt: optional override
+heartbeat_budget_usd_per_day: 2      # optional daily cap via the host's spentToday
+hooks: [task.assigned, run.failed]   # event names are the host's; the kernel routes and debounces
+```
+
+A heartbeat is a periodic autonomous turn: missed windows fire once, a pulse never overlaps
+itself, and run state lives in the crew home. A hook firing is delivered through the host's
+enqueue with a debounced externalId, so bursts and retries coalesce (`pulse` module).
+
+Four ways work reaches a role without a person typing in a chat — hooks and heartbeats above, plus:
 
 - **Handoffs** — `enqueueHandoff({ targetRoot, conversationId, taskKey, body, externalId })` queues an input
   for a role's singleton thread (a task's manager conversation). A worker claims a bounded

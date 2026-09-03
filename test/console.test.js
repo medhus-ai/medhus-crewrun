@@ -50,6 +50,10 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(dashboard, /class="sidebar"/, "console uses the persistent workspace rail");
     assert.match(dashboard, /aria-label="Dashboard"/, "the dashboard link remains named for assistive technology");
     assert.match(dashboard, /class="nav-icon"/, "menu icons are inline and dependency-free");
+    assert.match(dashboard, /class="sidebar-resizer"/, "the sidebar has a mouse resize handle");
+    assert.match(dashboard, /role="separator" aria-orientation="vertical" aria-label="Resize sidebar"/, "the resize handle is announced correctly");
+    assert.match(dashboard, /aria-controls="sidebar"/, "the separator identifies the navigation it resizes");
+    assert.match(dashboard, /crewrun\.console\.sidebar-width/, "the chosen sidebar width is kept locally");
     assert.match(dashboard, /--sidebar: #f3f3f3/, "the reference light shell is rendered with the page");
     assert.doesNotMatch(dashboard, /Back to Crew/, "the top rail no longer repeats a back-to-crew control");
     assert.doesNotMatch(dashboard, /Manage roles/, "the dashboard does not duplicate the role directory");

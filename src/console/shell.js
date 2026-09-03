@@ -33,12 +33,16 @@ function workspaceName(root) {
 }
 
 const STYLES = `
-:root { color-scheme: light; --bg: #f5f5f5; --sidebar: #f3f3f3; --panel: #fcfcfc; --panel-raised: #fff; --line: #e2e2e2; --line-soft: #ececec; --text: #171719; --muted: #656b75; --faint: #8a8e96; --blue: #3f6fbe; --blue-strong: #1f5fb8; --green: #237a48; --yellow: #976d19; --red: #b3394d; }
+:root { color-scheme: light; --bg: #f5f5f5; --sidebar: #f3f3f3; --sidebar-width: 278px; --panel: #fcfcfc; --panel-raised: #fff; --line: #e2e2e2; --line-soft: #ececec; --text: #171719; --muted: #656b75; --faint: #8a8e96; --blue: #3f6fbe; --blue-strong: #1f5fb8; --green: #237a48; --yellow: #976d19; --red: #b3394d; }
 * { box-sizing: border-box; }
 html { background: var(--bg); }
 body { min-height: 100vh; margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; }
 a { color: inherit; }
-.sidebar { position: sticky; top: 0; z-index: 2; display: flex; width: 278px; height: 100vh; flex: 0 0 278px; flex-direction: column; padding: 16px 8px 12px; overflow-y: auto; background: var(--sidebar); border-right: 1px solid var(--line); }
+.sidebar { position: sticky; top: 0; z-index: 2; display: flex; width: var(--sidebar-width); height: 100vh; flex: 0 0 var(--sidebar-width); flex-direction: column; padding: 16px 8px 12px; overflow-y: auto; background: var(--sidebar); border-right: 1px solid var(--line); }
+.sidebar-resizer { position: fixed; top: 0; bottom: 0; left: calc(var(--sidebar-width) - 5px); z-index: 3; width: 10px; cursor: col-resize; touch-action: none; }
+.sidebar-resizer::before { position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: transparent; content: ""; transition: background .12s ease, left .12s ease, width .12s ease; }
+.sidebar-resizer:hover::before, .sidebar-resizer:focus-visible::before, .sidebar-resizing .sidebar-resizer::before { left: 3px; width: 3px; background: #91a4bd; }
+.sidebar-resizing, .sidebar-resizing * { cursor: col-resize !important; user-select: none; }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 9px 14px; }
 .back-link { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; color: #3f4854; text-decoration: none; }
 .back-link:hover { color: var(--text); }
@@ -152,8 +156,74 @@ summary { color: var(--muted); cursor: pointer; font-size: 12px; }
 .connector-card .capabilities { margin-top: 4px; color: var(--faint); font-size: 11px; }
 .usage-amount { color: #15171a; font-size: 22px; font-weight: 600; letter-spacing: -.035em; }
 footer { margin-top: 36px; color: #8b9098; font-size: 11px; }
-@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .search-glyph, .sidebar-account { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } }
+@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-resizer { display: none; } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .search-glyph, .sidebar-account { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .hero { flex-direction: column; gap: 13px; } .form-grid, .form-grid.three { grid-template-columns: 1fr; } .role-grid { grid-template-columns: 1fr; } .summary-grid { gap: 8px; } .metric { min-height: 84px; } .connector-card { padding-right: 16px; } .connector-card .card-footer { position: static; margin-top: 13px; } th, td { padding: 9px 10px; } }
+`;
+
+const RESIZER_SCRIPT = `
+(() => {
+  const sidebar = document.querySelector(".sidebar");
+  const handle = document.querySelector(".sidebar-resizer");
+  if (!sidebar || !handle || !window.matchMedia("(min-width: 851px)").matches) return;
+
+  const storageKey = "crewrun.console.sidebar-width";
+  const defaultWidth = 278;
+  const minWidth = 220;
+  const maxWidth = () => Math.min(420, Math.max(minWidth, window.innerWidth - 360));
+  const clamp = (value) => Math.min(maxWidth(), Math.max(minWidth, Number(value) || defaultWidth));
+  const setWidth = (value, persist = false) => {
+    const width = Math.round(clamp(value));
+    document.documentElement.style.setProperty("--sidebar-width", String(width) + "px");
+    handle.setAttribute("aria-valuenow", String(width));
+    handle.setAttribute("aria-valuetext", String(width) + " pixels wide");
+    if (persist) {
+      try { window.localStorage.setItem(storageKey, String(width)); } catch {}
+    }
+  };
+
+  try {
+    const saved = Number(window.localStorage.getItem(storageKey));
+    if (saved) setWidth(saved);
+  } catch {}
+
+  let activePointer = null;
+  const finish = (event) => {
+    if (activePointer === null || event.pointerId !== activePointer) return;
+    const pointerId = activePointer;
+    activePointer = null;
+    if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+    document.body.classList.remove("sidebar-resizing");
+    setWidth(sidebar.getBoundingClientRect().width, true);
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    activePointer = event.pointerId;
+    handle.setPointerCapture(activePointer);
+    document.body.classList.add("sidebar-resizing");
+    event.preventDefault();
+  });
+  window.addEventListener("pointermove", (event) => {
+    if (event.pointerId === activePointer) setWidth(event.clientX - sidebar.getBoundingClientRect().left);
+  });
+  window.addEventListener("pointerup", finish);
+  window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
+  handle.addEventListener("dblclick", () => setWidth(defaultWidth, true));
+  handle.addEventListener("keydown", (event) => {
+    const current = sidebar.getBoundingClientRect().width;
+    const amount = event.shiftKey ? 40 : 16;
+    const next = event.key === "ArrowLeft" ? current - amount
+      : event.key === "ArrowRight" ? current + amount
+        : event.key === "Home" ? minWidth
+          : event.key === "End" ? maxWidth()
+            : null;
+    if (next === null) return;
+    event.preventDefault();
+    setWidth(next, true);
+  });
+  window.addEventListener("resize", () => setWidth(sidebar.getBoundingClientRect().width));
+})();
 `;
 
 export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "" } = {}) {
@@ -171,7 +241,7 @@ export function renderPage(page, content, { targetRoot, version = "", backHref =
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>crewrun console</title><style>${STYLES}</style></head>
 <body>
-<aside class="sidebar">
+<aside id="sidebar" class="sidebar">
   <div class="sidebar-top">
     ${back}
     <span class="search-glyph" aria-hidden="true">${icon("search", "utility-icon")}</span>
@@ -183,9 +253,11 @@ export function renderPage(page, content, { targetRoot, version = "", backHref =
     <span class="workspace-more" aria-hidden="true">${icon("more", "utility-icon")}</span>
   </div>
 </aside>
+<div class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-controls="sidebar" aria-valuemin="220" aria-valuemax="420" aria-valuenow="278" aria-valuetext="278 pixels wide" tabindex="0" title="Drag to resize the sidebar; double-click to reset"></div>
 <main id="main-content">
 ${content}
 <footer>crewrun console${version ? ` v${esc(version)}` : ""} · configuration is written to this project’s <code>.crew/</code> files.</footer>
 </main>
+<script>${RESIZER_SCRIPT}</script>
 </body></html>`;
 }

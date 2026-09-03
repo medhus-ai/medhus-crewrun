@@ -85,7 +85,7 @@ A project is any directory with a `.crew/` folder. Each role is a spec at
   "hooks": ["task.assigned"],
   "heartbeat": "off",
   "web": { "allow": ["*.arxiv.org", "github.com"] },
-  "schedules": [{ "id": "brief", "cron": "30 8 * * 1-5", "prompt": "…", "enabled": true }],
+  "scheduled": [{ "id": "brief", "cron": "30 8 * * 1-5", "prompt": "…", "enabled": true }],
   "contract": {
     "version": 1,
     "revision": 1,
@@ -247,10 +247,11 @@ Four ways work reaches a role without a person typing in a chat — hooks and he
   `fromRole` from the authenticated turn context (never from model-provided input); the queue
   resolves the receiver from the conversation and checks both contracts. Omitting `fromRole`
   preserves the existing trusted host/webhook ingress path, which is not a role-to-role handoff.
-- **Schedules** — role specs hold `{ id, role, cron, prompt, enabled }` entries (numeric
-  five-field cron in local time; `*`, lists, ranges, and steps are supported); the older
-  `<crew dir>/schedules.json` remains readable. `createScheduler({ targetRoot, run })` ticks,
-  fires each due schedule once (a schedule that missed several windows fires once, not per
+- **Scheduled tasks** — role specs hold `{ id, role, cron, prompt, enabled }` entries under
+  `"scheduled"` (numeric five-field cron in local time; `*`, lists, ranges, and steps are
+  supported); the older role key `"schedules"` and
+  `<crew dir>/schedules.json` remain readable. `createScheduler({ targetRoot, run })` ticks,
+  fires each due task once (a task that missed several windows fires once, not per
   window), and records outcomes under the crew home so the repository never churns. Scheduling
   is deliberately **host-owned**: this helper is for one scheduler process per project, not
   distributed claiming. A multi-process host must elect one scheduler owner or claim scheduled

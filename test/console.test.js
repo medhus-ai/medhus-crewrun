@@ -22,7 +22,7 @@ async function project() {
     web: { allow: ["example.com"] }
   }, null, 2), "utf8");
   await writeFile(path.join(root, ".crew", "roles", "ops.json"), JSON.stringify({
-    title: "Operations", hooks: [], memory_pointers: ["docs/ops.md"], schedules: [{ id: "tick", cron: "0 9 * * 1", prompt: "weekly", enabled: false }]
+    title: "Operations", hooks: [], memory_pointers: ["docs/ops.md"], scheduled: [{ id: "tick", cron: "0 9 * * 1", prompt: "weekly", enabled: false }]
   }, null, 2), "utf8");
   await writeFile(path.join(root, ".crew", "skills", "file-a-task.md"), "---\nname: file-a-task\ndescription: How to file\n---\n# File\n", "utf8");
   return { parent, root };
@@ -149,7 +149,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(contractedOps.contract.mandate, "Coordinate the operational response.");
     assert.deepEqual(contractedOps.contract.authority.tools.map((tool) => tool.name), ["knowledge.search", "slack.replyToMention"]);
 
-    // The normal role form updates only the fields it owns, preserving schedules
+    // The normal role form updates only the fields it owns, preserving scheduled tasks
     // and other reviewed spec fields instead of making JSON the primary UI.
     await fetch(base + "/roles/update", {
       method: "POST",
@@ -165,18 +165,37 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(updatedOps.title, "Operations Lead");
     assert.equal(updatedOps.runner, "codex-agent-high");
     assert.deepEqual(updatedOps.memory_pointers, ["docs/ops.md", "notes/on-call.md"]);
-    assert.equal(updatedOps.schedules[0].id, "tick", "the form preserves unrelated role settings");
+    assert.equal(updatedOps.scheduled[0].id, "tick", "the form preserves unrelated role settings");
 
-    const schedules = await (await fetch(base + "/schedules")).text();
-    assert.match(schedules, /ops:tick/);
-    assert.match(schedules, /disabled/);
-    assert.match(schedules, /Every Monday at 9:00 AM/);
-    assert.match(schedules, /Runs in this host’s local time/);
-    assert.match(schedules, /Add a schedule/);
-    assert.match(schedules, /Run now/);
-    assert.doesNotMatch(schedules, /name="cron"/, "schedule timing is expressed through friendly controls");
+    const stableRole = await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8");
+    const invalidTaskKeys = await fetch(base + "/roles/save", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ role: "ops", json: JSON.stringify({ scheduled: [], schedules: [] }) })
+    });
+    assert.equal(invalidTaskKeys.status, 400, "advanced JSON cannot define both task keys");
+    assert.equal(await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"), stableRole);
 
-    const runNow = await fetch(base + "/schedules/run", {
+    const scheduled = await (await fetch(base + "/scheduled")).text();
+    assert.match(scheduled, /aria-label="Scheduled"/);
+    assert.match(scheduled, /<h1>Scheduled tasks<\/h1>/);
+    assert.match(scheduled, /ops:tick/);
+    assert.match(scheduled, /disabled/);
+    assert.match(scheduled, /Every Monday at 9:00 AM/);
+    assert.match(scheduled, /New task/);
+    assert.match(scheduled, /Run task/);
+    assert.doesNotMatch(scheduled, /Task ID/, "the task editor opens only when needed");
+
+    const newTask = await (await fetch(base + "/scheduled?new=1")).text();
+    assert.match(newTask, /Runs in this host’s local time/);
+    assert.match(newTask, /Task ID/);
+    assert.match(newTask, /action="\/scheduled\/save"/);
+    assert.doesNotMatch(newTask, /name="cron"/, "task timing is expressed through friendly controls");
+
+    const legacyScheduled = await (await fetch(base + "/schedules")).text();
+    assert.match(legacyScheduled, /Scheduled tasks/, "old schedule URLs remain usable");
+
+    const runNow = await fetch(base + "/scheduled/run", {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -185,13 +204,13 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(runNow.status, 303);
     assert.deepEqual(manualRuns, [{ role: "ops", id: "tick" }]);
 
-    // toggle the schedule on → written into the role's spec
-    await fetch(base + "/schedules/toggle", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=ops&id=tick&enabled=1" });
+    // Toggle the task on → written into the role's spec.
+    await fetch(base + "/scheduled/toggle", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=ops&id=tick&enabled=1" });
     const spec = JSON.parse(await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
-    assert.equal(spec.schedules[0].enabled, true);
+    assert.equal(spec.scheduled[0].enabled, true);
 
-    // Schedules use a simple cadence and time, then save canonical cron back to the role spec.
-    await fetch(base + "/schedules/save", {
+    // Tasks use a simple cadence and time, then save canonical cron back to the role spec.
+    await fetch(base + "/scheduled/save", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -208,7 +227,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
       })
     });
     const scheduledOps = JSON.parse(await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
-    assert.ok(scheduledOps.schedules.some((entry) => entry.id === "daily-brief" && entry.enabled && entry.cron === "30 8 * * 1-5"));
+    assert.ok(scheduledOps.scheduled.some((entry) => entry.id === "daily-brief" && entry.enabled && entry.cron === "30 8 * * 1-5"));
 
     // approve the proposal → flat skill file + index regenerated
     await fetch(base + "/proposals/decide", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `id=${proposal.id}&kind=skill&action=approve` });

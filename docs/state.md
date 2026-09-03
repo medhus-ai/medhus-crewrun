@@ -68,7 +68,7 @@ Anything with a product opinion belongs in a host, never in the kernel:
   `crewTools: false` opts out) and the default runner carries them.
 
 - Role specs (v0.3.0): `.crew/roles/<role>.json` (+ `_defaults.json`) holds runner, pointers,
-  reflections knob, hooks, heartbeat, and that role's schedules; role `.md` is optional prose
+  reflections knob, hooks, heartbeat, and that role's scheduled tasks; role `.md` is optional prose
   read via pointers; reflections auto-inject (bounded) closing the learning loop; skills go
   flat (`skills/<id>.md`) with a generated `_index.md`; `crewrun proposals list|approve|reject`
   gives the operator a native approval surface, and hostless `crewrun up` attaches the kernel's

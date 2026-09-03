@@ -67,7 +67,7 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
 export function renderPartial(page, models, options = {}) {
   switch (page) {
     case "roles": return renderRoles(models, options);
-    case "schedules": return renderSchedules(models, options);
+    case "scheduled": return renderScheduledTasks(models, options);
     case "skills": return renderSkills(models);
     case "approvals":
     case "proposals": return renderApprovals(models, options);
@@ -82,7 +82,7 @@ export function renderPartial(page, models, options = {}) {
 function renderDashboard(models) {
   const { problems, warnings } = models.validation;
   const roles = Object.values(models.specs);
-  const enabledSchedules = models.schedules.filter((schedule) => schedule.enabled).length;
+  const enabledTasks = models.schedules.filter((task) => task.enabled).length;
   const pending = models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length + models.operations.approvals.filter((entry) => entry.status === "pending").length;
   const usage = currentUsage(models.operations.usage);
   const spend = usage ? spendFor(usage.totals) : null;
@@ -102,7 +102,7 @@ function renderDashboard(models) {
 </section>
 <section class="summary-grid" aria-label="Crew summary">
   ${metric("Roles", roles.length, `${roles.length} roles`, "reviewable contracts")}
-  ${metric("Schedules", enabledSchedules, `${enabledSchedules} schedules enabled`, `${models.schedules.length} declared`) }
+  ${metric("Scheduled tasks", enabledTasks, `${enabledTasks} task${enabledTasks === 1 ? "" : "s"} enabled`, `${models.schedules.length} total`) }
   ${metric("Approvals", pending, `${pending} proposal${pending === 1 ? "" : "s"} pending`, pending ? "operator attention needed" : "queue clear", pending ? "warn" : "success")}
   ${metric("This month", spend === null ? "—" : formatCurrency(spend), "usage and subscription estimate", usage ? `${usage.totals?.runs || 0} recorded runs` : "no ledger attached", usage ? "info" : "")}
 </section>
@@ -170,7 +170,7 @@ function renderRoleCard(spec, models) {
   </div>
   <div class="role-meta">
     <div>Model <code>${esc(runner)}</code></div>
-    <div>Memory ${spec.memory_pointers.length ? `${spec.memory_pointers.length} pointer${spec.memory_pointers.length === 1 ? "" : "s"}` : "none"} · ${spec.schedules.length} schedule${spec.schedules.length === 1 ? "" : "s"}</div>
+    <div>Memory ${spec.memory_pointers.length ? `${spec.memory_pointers.length} pointer${spec.memory_pointers.length === 1 ? "" : "s"}` : "none"} · ${spec.schedules.length} scheduled task${spec.schedules.length === 1 ? "" : "s"}</div>
     <div>Heartbeat <span class="pill ${settings?.heartbeat ? "on" : ""}">${esc(heartbeat)}</span></div>
     ${contract?.summary ? `<div>${esc(contract.summary)}</div>` : ""}
   </div>
@@ -184,7 +184,7 @@ function renderRoleEditor(spec, models) {
   const ownPointers = Array.isArray(own.memory_pointers) ? own.memory_pointers.map(String) : [];
   return `
 <section id="role-detail" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>${esc(spec.role)} — ${esc(spec.title || "Untitled role")}</h2><span class="muted">Role contract basics</span></div><a class="button secondary tiny" href="/schedules?role=${encodeURIComponent(spec.role)}">Edit schedules</a></div>
+  <div class="section-heading" style="margin-top:0"><div><h2>${esc(spec.role)} — ${esc(spec.title || "Untitled role")}</h2><span class="muted">Role contract basics</span></div><a class="button secondary tiny" href="/scheduled?role=${encodeURIComponent(spec.role)}">Manage tasks</a></div>
   <form method="post" action="/roles/update">
     <input type="hidden" name="role" value="${esc(spec.role)}">
     <div class="form-grid">
@@ -294,9 +294,9 @@ function defaultsJson(targetRoot, defaults) {
   }
 }
 
-function renderSchedules(models, { canRunNow = false, selectedRole = "", selectedSchedule = "" } = {}) {
-  const selected = models.schedules.find((schedule) => schedule.role === selectedRole && schedule.id === selectedSchedule) || null;
-  const schedule = selected || {
+function renderScheduledTasks(models, { canRunNow = false, selectedRole = "", selectedTask = "", showTaskEditor = false } = {}) {
+  const selected = models.schedules.find((task) => task.role === selectedRole && task.id === selectedTask) || null;
+  const task = selected || {
     role: selectedRole && models.specs[selectedRole] ? selectedRole : Object.keys(models.specs)[0] || "",
     id: "",
     title: "",
@@ -304,73 +304,74 @@ function renderSchedules(models, { canRunNow = false, selectedRole = "", selecte
     prompt: "",
     enabled: true
   };
-  const recurrence = recurrenceFromCron(schedule.cron);
+  const recurrence = recurrenceFromCron(task.cron);
+  const enabledTasks = models.schedules.filter((entry) => entry.enabled).length;
   return `
 <section class="hero">
-  <div><p class="eyebrow">Schedules</p><h1>Schedules</h1><p class="sub">The spec defines what should run; the host owns the scheduler process and execution state.</p></div>
-  <a class="button" href="#schedule-editor">Add schedule</a>
+  <div><p class="eyebrow">Scheduled</p><h1>Scheduled tasks</h1><p class="sub">Run tasks on a schedule or whenever you need them.</p></div>
+  <a class="button" href="/scheduled?new=1#task-editor">New task</a>
 </section>
-<section class="section-heading"><h2>Declared schedules</h2><span class="muted">${models.schedules.filter((entry) => entry.enabled).length} enabled</span></section>
-${renderScheduleTable(models.schedules, { canRunNow, actions: true })}
-${canRunNow ? notice("Run once now starts this scheduled task immediately. It does not enable a disabled schedule.") : notice("Run now is available when the crew host is running. The saved timing still uses this host’s local time.", "warn")}
-${renderScheduleForm(models, { schedule, selected, recurrence })}`;
+<section class="section-heading"><h2>Tasks</h2><span class="muted">${enabledTasks} enabled · ${models.schedules.length} total</span></section>
+${renderTaskTable(models.schedules, { canRunNow, actions: true })}
+${canRunNow ? notice("Run task now starts this task immediately. It does not enable a disabled task.") : notice("Run task now is available when the crew host is running. Saved timing uses this host’s local time.", "warn")}
+${selected || showTaskEditor ? renderTaskForm(models, { task, selected, recurrence }) : ""}`;
 }
 
-function renderScheduleForm(models, { schedule, selected, recurrence }) {
+function renderTaskForm(models, { task, selected, recurrence }) {
   const cadenceOptions = [
     ["daily", "Every day"],
     ["weekdays", "Weekdays"],
     ["weekly", "Every week"],
     ["monthly", "Every month"],
     ["every-days", "Every N days"],
-    ...(recurrence.cadence === "advanced" ? [["advanced", "Keep existing advanced schedule"]] : [])
+    ...(recurrence.cadence === "advanced" ? [["advanced", "Keep existing advanced timing"]] : [])
   ];
   return `
-<section id="schedule-editor" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit ${esc(selected.role)}:${esc(selected.id)}` : "Add a schedule"}</h2><span class="muted">Runs in this host’s local time</span></div></div>
-  ${recurrence.cadence === "advanced" ? notice("This schedule already uses an advanced repeat rule. Keep that option to preserve it, or choose a standard repeat rule below to replace it.", "warn") : ""}
-  ${Object.keys(models.specs).length ? `<form method="post" action="/schedules/save">
+<section id="task-editor" class="card" style="margin-top:16px">
+  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit task: ${esc(selected.title || selected.id)}` : "New task"}</h2><span class="muted">Runs in this host’s local time</span></div></div>
+  ${recurrence.cadence === "advanced" ? notice("This task already uses advanced timing. Keep that option to preserve it, or choose a standard repeat rule below to replace it.", "warn") : ""}
+  ${Object.keys(models.specs).length ? `<form method="post" action="/scheduled/save">
     <input type="hidden" name="previous_role" value="${esc(selected?.role || "")}"><input type="hidden" name="previous_id" value="${esc(selected?.id || "")}"><input type="hidden" name="existing_cron" value="${esc(recurrence.existingCron)}">
     <div class="form-grid three">
-      <div class="field"><label for="schedule-role">Role</label>${roleSelect(models, schedule.role, "schedule-role")}</div>
-      <div class="field"><label for="schedule-id">Schedule ID</label><input id="schedule-id" name="id" value="${esc(schedule.id)}" placeholder="daily-brief" pattern="[a-z][a-z0-9-]*" required></div>
-      <div class="field"><label for="schedule-title">Title</label><input id="schedule-title" name="title" value="${esc(schedule.title || "")}" placeholder="Daily brief"></div>
+      <div class="field"><label for="task-role">Role</label>${roleSelect(models, task.role, "task-role")}</div>
+      <div class="field"><label for="task-id">Task ID</label><input id="task-id" name="id" value="${esc(task.id)}" placeholder="daily-brief" pattern="[a-z][a-z0-9-]*" required></div>
+      <div class="field"><label for="task-title">Task title</label><input id="task-title" name="title" value="${esc(task.title || "")}" placeholder="Daily brief"></div>
     </div>
     <div class="form-grid three" style="margin-top:12px">
-      <div class="field"><label for="schedule-recurrence">Runs</label><select id="schedule-recurrence" name="recurrence">${cadenceOptions.map(([value, label]) => `<option value="${value}"${value === recurrence.cadence ? " selected" : ""}>${label}</option>`).join("")}</select></div>
-      <div class="field"><label for="schedule-time">At</label><input id="schedule-time" name="time" type="time" value="${esc(recurrence.time)}" required></div>
-      <div class="field"><label for="schedule-weekday">Weekly on</label><select id="schedule-weekday" name="weekday">${SCHEDULE_WEEKDAYS.map((day) => `<option value="${day.value}"${day.value === recurrence.weekday ? " selected" : ""}>${day.label}</option>`).join("")}</select></div>
-      <div class="field"><label for="schedule-month-day">Monthly on day</label><input id="schedule-month-day" name="day_of_month" type="number" min="1" max="31" value="${esc(recurrence.dayOfMonth)}"></div>
-      <div class="field"><label for="schedule-interval">Every N days</label><input id="schedule-interval" name="interval_days" type="number" min="2" max="31" value="${esc(recurrence.intervalDays)}"></div>
+      <div class="field"><label for="task-recurrence">Runs</label><select id="task-recurrence" name="recurrence">${cadenceOptions.map(([value, label]) => `<option value="${value}"${value === recurrence.cadence ? " selected" : ""}>${label}</option>`).join("")}</select></div>
+      <div class="field"><label for="task-time">At</label><input id="task-time" name="time" type="time" value="${esc(recurrence.time)}" required></div>
+      <div class="field"><label for="task-weekday">Weekly on</label><select id="task-weekday" name="weekday">${SCHEDULE_WEEKDAYS.map((day) => `<option value="${day.value}"${day.value === recurrence.weekday ? " selected" : ""}>${day.label}</option>`).join("")}</select></div>
+      <div class="field"><label for="task-month-day">Monthly on day</label><input id="task-month-day" name="day_of_month" type="number" min="1" max="31" value="${esc(recurrence.dayOfMonth)}"></div>
+      <div class="field"><label for="task-interval">Every N days</label><input id="task-interval" name="interval_days" type="number" min="2" max="31" value="${esc(recurrence.intervalDays)}"></div>
       <div class="field"><span class="help">Pick the field that matches “Runs.” Only that setting is used.</span></div>
     </div>
-    <div class="field" style="margin-top:12px"><label for="schedule-prompt">What should this role do?</label><textarea id="schedule-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(schedule.prompt)}</textarea></div>
-    <label class="checkbox" style="margin-top:12px"><input type="checkbox" name="enabled" value="1"${schedule.enabled ? " checked" : ""}> Enable this schedule</label>
-    <div class="button-row" style="margin-top:13px"><button>${selected ? "Save schedule" : "Create schedule"}</button>${selected ? `<a class="button secondary" href="/schedules">Cancel</a>` : ""}</div>
-  </form>` : empty("Create a role before adding a schedule.", "Add role", "/roles/new")}
+    <div class="field" style="margin-top:12px"><label for="task-prompt">What should this role do?</label><textarea id="task-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(task.prompt)}</textarea></div>
+    <label class="checkbox" style="margin-top:12px"><input type="checkbox" name="enabled" value="1"${task.enabled ? " checked" : ""}> Enable this task</label>
+    <div class="button-row" style="margin-top:13px"><button>${selected ? "Save task" : "Create task"}</button><a class="button secondary" href="/scheduled">Cancel</a></div>
+  </form>` : empty("Create a role before adding a task.", "Add role", "/roles/new")}
 </section>`;
 }
 
-function renderScheduleTable(schedules, { compact = false, canRunNow = false, actions = false } = {}) {
-  const rows = schedules.map((schedule) => {
-    const manage = actions ? `<a class="button secondary tiny" href="/schedules?role=${encodeURIComponent(schedule.role)}&schedule=${encodeURIComponent(schedule.id)}#schedule-editor">Edit</a>
-      <form class="inline" method="post" action="/schedules/toggle"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><input type="hidden" name="enabled" value="${schedule.enabled ? "" : "1"}"><button class="subtle tiny">${schedule.enabled ? "Disable" : "Enable"}</button></form>
-      <form class="inline" method="post" action="/schedules/delete"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><button class="danger tiny">Delete</button></form>
+function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = false } = {}) {
+  const rows = tasks.map((task) => {
+    const manage = actions ? `<a class="button secondary tiny" href="/scheduled?role=${encodeURIComponent(task.role)}&task=${encodeURIComponent(task.id)}#task-editor">Edit task</a>
+      <form class="inline" method="post" action="/scheduled/toggle"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><input type="hidden" name="enabled" value="${task.enabled ? "" : "1"}"><button class="subtle tiny">${task.enabled ? "Disable task" : "Enable task"}</button></form>
+      <form class="inline" method="post" action="/scheduled/delete"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="danger tiny">Delete task</button></form>
       ${canRunNow
-        ? `<form class="inline" method="post" action="/schedules/run"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><button class="tiny">Run now</button></form>`
-        : `<span class="button secondary tiny disabled" title="Start the crew host to run this now">Run now</span>`}` : "";
+        ? `<form class="inline" method="post" action="/scheduled/run"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="tiny">Run task</button></form>`
+        : `<span class="button secondary tiny disabled" title="Start the crew host to run this task now">Run task</span>`}` : "";
     return [
-      `<code>${esc(schedule.role)}:${esc(schedule.id)}</code>${schedule.title && schedule.title !== schedule.id ? `<div class="faint">${esc(schedule.title)}</div>` : ""}`,
-      `${esc(describeScheduleRecurrence(schedule.cron))}<div class="faint">host local time</div>`,
-      pill(schedule.enabled ? "enabled" : "disabled", schedule.enabled ? "success" : ""),
-      compact ? when(schedule.nextRunAt) : `${esc(schedule.lastStatus || "never ran")}<div class="faint">${when(schedule.lastRunAt)}</div>`,
-      compact ? "" : when(schedule.nextRunAt),
+      `<strong>${esc(task.title || task.id)}</strong><div class="faint"><code>${esc(task.role)}:${esc(task.id)}</code></div>`,
+      `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">host local time</div>`,
+      pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
+      compact ? when(task.nextRunAt) : `${esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
+      compact ? "" : when(task.nextRunAt),
       manage
     ];
   });
-  const headers = compact ? ["schedule", "timing", "state", "next run"] : ["schedule", "timing", "state", "last outcome", "next run", ""];
+  const headers = compact ? ["task", "timing", "state", "next run"] : ["task", "timing", "state", "last outcome", "next run", ""];
   const renderedRows = compact ? rows.map((row) => row.slice(0, 4)) : rows;
-  return table(headers, renderedRows, "No schedules declared in any role spec.");
+  return table(headers, renderedRows, "No scheduled tasks yet.");
 }
 
 function renderSkills(models) {

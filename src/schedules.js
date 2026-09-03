@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 
 import { crewDir, crewHome } from "./crew-dirs.js";
-import { listRoleSpecs } from "./role-spec.js";
+import { listRoleSpecs, roleScheduledEntries } from "./role-spec.js";
 
 // Cron-scheduled role turns. Definitions live in the project (`<crew dir>/schedules.json`,
 // versioned like roles); run state lives in the crew home so a repository never churns with
@@ -168,13 +168,13 @@ export function nextRun(expression, from = new Date()) {
   return null;
 }
 
-// Legacy global file; new projects keep schedules inside each role's spec instead.
+// Legacy global file; new projects keep scheduled tasks inside each role's spec instead.
 export function schedulesPath(targetRoot) {
   return path.join(path.resolve(targetRoot || process.cwd()), crewDir(), "schedules.json");
 }
 
-// Schedules come from every role's spec (roles/<role>.json "schedules": [...]) plus the
-// legacy global file; IDs are unique per role, and run-state keys are "role:id".
+// Scheduled tasks come from every role's spec (roles/<role>.json "scheduled": [...]) plus
+// the legacy global file; IDs are unique per role, and run-state keys are "role:id".
 export function listSchedules({ targetRoot } = {}) {
   const out = [];
   const seen = new Set();
@@ -213,15 +213,17 @@ export function saveSchedules({ targetRoot, schedules = [] } = {}) {
   return normalized;
 }
 
-// Writes land in the owning role's spec when it exists; otherwise the legacy global file.
+// Writes land in the owning role's spec as `scheduled` when it exists; otherwise the legacy
+// global file keeps its established `schedules` format.
 export function upsertSchedule({ targetRoot, schedule } = {}) {
   const next = normalizeSchedule(schedule);
   const specFile = roleSpecPath(targetRoot, next.role);
   if (specFile) {
     const spec = JSON.parse(readFileSync(specFile, "utf8"));
-    const schedules = (Array.isArray(spec.schedules) ? spec.schedules : []).filter((entry) => entry.id !== next.id);
+    const scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== next.id);
     const { role, ...entry } = next;
-    spec.schedules = [...schedules, entry];
+    spec.scheduled = [...scheduled, entry];
+    delete spec.schedules;
     writeJsonAtomic(specFile, spec);
     return next;
   }
@@ -248,7 +250,8 @@ export function removeSchedule({ targetRoot, id, role } = {}) {
   const specFile = roleSpecPath(targetRoot, match.role);
   if (specFile) {
     const spec = JSON.parse(readFileSync(specFile, "utf8"));
-    spec.schedules = (Array.isArray(spec.schedules) ? spec.schedules : []).filter((entry) => entry.id !== id);
+    spec.scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== id);
+    delete spec.schedules;
     writeJsonAtomic(specFile, spec);
     return true;
   }

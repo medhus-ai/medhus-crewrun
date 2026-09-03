@@ -310,10 +310,11 @@ All paths below use the configured crew directory (`.crew` by default).
 ### Role file
 
 `<targetRoot>/.crew/roles/<role>.json` is the primary role specification. It may contain
-`title`, `runner`, `memory_pointers`, `reflections`, `hooks`, `heartbeat`, `web`, `schedules`, and
+`title`, `runner`, `memory_pointers`, `reflections`, `hooks`, `heartbeat`, `web`, `scheduled`, and
 the governed `contract` above. `<targetRoot>/.crew/roles/_defaults.json` supplies a shared
 defaults floor; role memory pointers append to that floor, while contract approvals and budgets
-cannot be weakened.
+cannot be weakened. The older `schedules` role key remains readable for compatibility; new
+task edits write `scheduled`.
 
 An optional `<role>.md` is ordinary prompt prose and is read only when a `memory_pointers` entry
 names it. Legacy `.md` frontmatter remains readable for compatibility, but new hosts should write

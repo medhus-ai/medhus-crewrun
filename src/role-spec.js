@@ -8,7 +8,8 @@ import { normalizeWeb } from "./web.js";
 
 // The role spec: <crew>/roles/<role>.json holds everything about how one role runs —
 // runner, title, memory_pointers, reflections knob, hooks, heartbeat, web access, and that
-// role's schedules. <crew>/roles/_defaults.json supplies values every role inherits (its
+// role's scheduled tasks. New specs use `scheduled`; legacy `schedules` stays readable. The
+// <crew>/roles/_defaults.json supplies values every role inherits (its
 // memory_pointers PREPEND — the shared floor loads first; scalar values are overridden).
 // A role's .md is pure prompt prose, read only when a spec's memory_pointers lists it.
 // Roles without a .json fall back to legacy .md frontmatter so existing projects keep working.
@@ -36,6 +37,17 @@ export function readRoleDefaults(targetRoot) {
 export function readRoleSpecFile(targetRoot, role) {
   if (!ROLE_SLUG.test(String(role || ""))) return null;
   return readJson(path.join(rolesDir(targetRoot), `${role}.json`));
+}
+
+// A role spec has one task list. Do not merge the old and new keys: duplicate
+// IDs could otherwise run a task twice. Writers lazily migrate legacy specs.
+export function roleScheduledEntries(spec) {
+  const source = spec && typeof spec === "object" && !Array.isArray(spec) ? spec : {};
+  const hasScheduled = Object.hasOwn(source, "scheduled");
+  const hasLegacySchedules = Object.hasOwn(source, "schedules");
+  if (hasScheduled && hasLegacySchedules) throw new Error('role spec cannot contain both "scheduled" and legacy "schedules"');
+  if (hasScheduled) return Array.isArray(source.scheduled) ? source.scheduled : [];
+  return Array.isArray(source.schedules) ? source.schedules : [];
 }
 
 function legacySpecFromFrontmatter(targetRoot, role) {
@@ -104,7 +116,7 @@ export function loadRoleSpec(targetRoot, role) {
     heartbeat: normalizeHeartbeat(own?.heartbeat ?? defaults.heartbeat ?? null),
     // Web access is off unless the role (or the defaults floor) opts in — see web.js.
     web: normalizeWeb(own?.web ?? defaults.web ?? false),
-    schedules: (Array.isArray(own?.schedules) ? own.schedules : []).map((entry) => ({ ...entry, role })),
+    schedules: roleScheduledEntries(own).map((entry) => ({ ...entry, role })),
     contract,
     contractSummary: summarizeRoleContract(contract, { role }),
     hasSpecFile: Boolean(specFile),

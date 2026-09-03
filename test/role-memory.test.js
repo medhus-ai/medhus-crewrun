@@ -86,9 +86,9 @@ test("runnerIdForRole prefers the role file's runner frontmatter over the legacy
   }
 });
 
-test("role .json specs drive runner, pointers, defaults, schedules, and settings; role.md becomes optional", async () => {
+test("role .json specs drive runner, pointers, defaults, scheduled tasks, and settings; role.md becomes optional", async () => {
   const { runnerIdForRole } = await import("../src/runner.js");
-  const { loadRoleSpec, listRoleSpecs } = await import("../src/role-spec.js");
+  const { loadRoleSpec, listRoleSpecs, roleScheduledEntries } = await import("../src/role-spec.js");
   const { loadRoleSettings } = await import("../src/pulse.js");
   const { listSchedules, upsertSchedule } = await import("../src/schedules.js");
   const parent = await mkdtemp(path.join(os.tmpdir(), "crew-rolespec-"));
@@ -126,11 +126,13 @@ test("role .json specs drive runner, pointers, defaults, schedules, and settings
 
     const schedules = listSchedules({ targetRoot: root });
     assert.deepEqual(schedules.map((s) => [s.role, s.id]), [["ops", "tick"]]);
+    assert.throws(() => roleScheduledEntries({ scheduled: [], schedules: [] }), /both "scheduled" and legacy "schedules"/);
     upsertSchedule({ targetRoot: root, schedule: { id: "tick", role: "ops", cron: "0 9 * * 1", prompt: "weekly now", enabled: false } });
     const updated = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
-    assert.equal(updated.schedules.length, 1);
-    assert.equal(updated.schedules[0].cron, "0 9 * * 1", "upsert writes into the owning role's spec");
-    assert.equal(updated.schedules[0].role, undefined, "the role key is implied by the file");
+    assert.equal(updated.scheduled.length, 1);
+    assert.equal(updated.scheduled[0].cron, "0 9 * * 1", "upsert writes the canonical task key into the owning role's spec");
+    assert.equal(updated.scheduled[0].role, undefined, "the role key is implied by the file");
+    assert.equal("schedules" in updated, false, "a task edit migrates the legacy role key");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

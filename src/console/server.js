@@ -10,6 +10,7 @@ import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
 import { approveAction, getActionApproval, listActionApprovals, rejectAction } from "../action-approvals.js";
 import { normalizeRoleContract } from "../role-contract.js";
+import { roleScheduledEntries } from "../role-spec.js";
 import { validateRoleSettings, loadRoleSettings } from "../pulse.js";
 import { renderPage } from "./shell.js";
 import { pageFromUrl } from "./navigation.js";
@@ -150,11 +151,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
   }
 
   async function handleAction(pathname, form) {
+    // Keep old console forms and bookmarks working while the operator surface
+    // calls these Scheduled tasks.
+    pathname = pathname.replace(/^\/schedules(?=\/|$)/, "/scheduled");
     if (pathname === "/roles/save") {
       const role = String(form.role || "");
       if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("role spec must be a JSON object");
+      roleScheduledEntries(parsed);
       writeSpec(specPath(root, role), parsed);
       const { problems } = validateRoleSettings(loadRoleSettings(root), { knownEvents });
       if (problems.length) log(`[console] saved ${role}.json with validation problems: ${problems.join("; ")}`);
@@ -244,12 +249,12 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (problems.length) log("[console] saved _defaults.json with validation problems: " + problems.join("; "));
       return roleUrl(role);
     }
-    if (pathname === "/schedules/save") {
+    if (pathname === "/scheduled/save") {
       const role = String(form.role || "").trim();
       const id = String(form.id || "").trim();
       const previousRole = String(form.previous_role || "").trim();
       const previousId = String(form.previous_id || "").trim();
-      // Validate before replacing a renamed schedule, so a typo in cron never
+      // Validate before replacing a renamed task, so a typo in cron never
       // destroys the existing declaration.
       const cron = form.recurrence
         ? cronFromRecurrence({
@@ -261,7 +266,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
           existingCron: form.existing_cron
         })
         : String(form.cron || "").trim();
-      const schedule = normalizeSchedule({
+      const task = normalizeSchedule({
         role,
         id,
         title: String(form.title || "").trim(),
@@ -272,26 +277,26 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (previousId && (previousRole !== role || previousId !== id)) {
         removeSchedule({ targetRoot: root, role: previousRole, id: previousId });
       }
-      upsertSchedule({ targetRoot: root, schedule });
-      return `/schedules?role=${encodeURIComponent(role)}&schedule=${encodeURIComponent(id)}`;
+      upsertSchedule({ targetRoot: root, schedule: task });
+      return `/scheduled?role=${encodeURIComponent(role)}&task=${encodeURIComponent(id)}`;
     }
-    if (pathname === "/schedules/toggle") {
+    if (pathname === "/scheduled/toggle") {
       const role = String(form.role || "").trim();
       const id = String(form.id || "").trim();
-      const schedule = listSchedules({ targetRoot: root }).find((entry) => entry.id === id && (!role || entry.role === role));
-      if (!schedule) throw new Error(`schedule ${id} was not found`);
-      upsertSchedule({ targetRoot: root, schedule: { ...schedule, enabled: form.enabled === "1" } });
-      return "/schedules";
+      const task = listSchedules({ targetRoot: root }).find((entry) => entry.id === id && (!role || entry.role === role));
+      if (!task) throw new Error(`task ${id} was not found`);
+      upsertSchedule({ targetRoot: root, schedule: { ...task, enabled: form.enabled === "1" } });
+      return "/scheduled";
     }
-    if (pathname === "/schedules/delete") {
+    if (pathname === "/scheduled/delete") {
       const removed = removeSchedule({ targetRoot: root, role: String(form.role || ""), id: String(form.id || "") });
-      if (!removed) throw new Error("schedule was not found");
-      return "/schedules";
+      if (!removed) throw new Error("task was not found");
+      return "/scheduled";
     }
-    if (pathname === "/schedules/run") {
-      if (!up?.scheduler?.runNow) throw new Error("run-now needs the console attached to a running crew loop");
+    if (pathname === "/scheduled/run") {
+      if (!up?.scheduler?.runNow) throw new Error("run task now needs the console attached to a running crew loop");
       void up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") }).catch((error) => log(`[console] run-now failed: ${error.message}`));
-      return "/schedules";
+      return "/scheduled";
     }
     if (pathname === "/proposals/decide") {
       const approve = form.action === "approve";
@@ -347,7 +352,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         canRunNow: Boolean(up?.scheduler?.runNow),
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
-        selectedSchedule: String(url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
+        selectedTask: String(url.searchParams.get("task") || url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
+        showTaskEditor: url.searchParams.get("new") === "1",
         canConnect: Boolean(operation(["connect", "connectConnector"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))

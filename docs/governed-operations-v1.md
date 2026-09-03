@@ -129,7 +129,7 @@ until a host has the appropriate consent, privacy, and compliance controls.
 
 `crewrun console` is a local control surface, not a chat client. It presents
 roles as operational cards and supports normal edits for role identity, runner,
-memory pointers, schedules, connector status, approvals, provider readiness,
+memory pointers, scheduled tasks, connector status, approvals, provider readiness,
 audit, and usage. It never displays raw secret values or accepts OAuth tokens from a
 model. Hosts can add their own connector/usage snapshots through the stable
 host API.

@@ -178,4 +178,21 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
     call: async () => ({})
   });
   assert.deepEqual(optedOut.toolHandlers({ role: "ops", toolContext: { targetRoot: root } }).map((handler) => handler.toolName), ["only.this"]);
+
+  // Web tools appear only for roles whose spec enables them.
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(pathMod.join(root, ".crew", "roles"), { recursive: true });
+  writeFileSync(pathMod.join(root, ".crew", "roles", "scout.json"), JSON.stringify({ web: { allow: ["example.com"], search: false } }));
+  writeFileSync(pathMod.join(root, ".crew", "roles", "surfer.json"), JSON.stringify({ web: true }));
+  const bare = createMcpBridge({ serverName: "bare2", toolsForRole: () => [], describe: () => "", inputSchema: () => ({}), call: async () => ({}) });
+  const namesOf = (role) => bare.toolHandlers({ role, toolContext: { targetRoot: root } }).map((handler) => handler.toolName);
+  assert.ok(!namesOf("ops").includes("web.fetch"), "no web tools without opt-in");
+  assert.deepEqual(namesOf("scout").filter((name) => name.startsWith("web.")), ["web.fetch"], "search:false drops web.search");
+  assert.deepEqual(namesOf("surfer").filter((name) => name.startsWith("web.")), ["web.fetch", "web.search"]);
+  const fetchImpl = async (url) => ({ status: 200, ok: true, headers: new Map([["content-type", "text/html"]]), text: async () => `<html><title>T</title><body><p>hello ${url}</p></body></html>` });
+  const scoutFetch = bare.toolHandlers({ role: "scout", toolContext: { targetRoot: root, fetchImpl } }).find((handler) => handler.toolName === "web.fetch");
+  const ok = await scoutFetch.invoke({ url: "https://example.com/x" });
+  assert.equal(ok.structuredContent.text, "hello https://example.com/x");
+  const denied = await scoutFetch.invoke({ url: "https://evil.test/x" });
+  assert.equal(denied.isError, true, "allowlist enforced");
 });

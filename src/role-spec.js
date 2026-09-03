@@ -3,10 +3,11 @@ import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
 import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
+import { normalizeWeb } from "./web.js";
 
 // The role spec: <crew>/roles/<role>.json holds everything about how one role runs —
-// runner, title, memory_pointers, reflections knob, hooks, heartbeat, and that role's
-// schedules. <crew>/roles/_defaults.json supplies values every role inherits (its
+// runner, title, memory_pointers, reflections knob, hooks, heartbeat, web access, and that
+// role's schedules. <crew>/roles/_defaults.json supplies values every role inherits (its
 // memory_pointers PREPEND — the shared floor loads first; scalar values are overridden).
 // A role's .md is pure prompt prose, read only when a spec's memory_pointers lists it.
 // Roles without a .json fall back to legacy .md frontmatter so existing projects keep working.
@@ -97,6 +98,8 @@ export function loadRoleSpec(targetRoot, role) {
     reflections,
     hooks: Array.isArray(own?.hooks) ? own.hooks.map(String) : Array.isArray(defaults.hooks) ? defaults.hooks.map(String) : [],
     heartbeat: normalizeHeartbeat(own?.heartbeat ?? defaults.heartbeat ?? null),
+    // Web access is off unless the role (or the defaults floor) opts in — see web.js.
+    web: normalizeWeb(own?.web ?? defaults.web ?? false),
     schedules: (Array.isArray(own?.schedules) ? own.schedules : []).map((entry) => ({ ...entry, role })),
     hasSpecFile: Boolean(specFile),
     hasMd

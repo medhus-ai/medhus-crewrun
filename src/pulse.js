@@ -67,6 +67,8 @@ export function validateRoleSettings(settings, { knownEvents = [] } = {}) {
       else if (seconds !== null && (seconds < MIN_INTERVAL_S || seconds > MAX_INTERVAL_S)) problems.push(`${entry.role}: heartbeat must be between 1s and 1y`);
       else if (seconds !== null && seconds < 60) warnings.push(`${entry.role}: a sub-minute heartbeat (${seconds}s) spends real money fast — set heartbeat_budget_usd_per_day`);
     }
+    const web = entry.spec?.web;
+    if (web && !web.allow.length) warnings.push(`${entry.role}: web access is open (no allowlist) — add "web": { "allow": [...] } to restrict hosts`);
     if (knownEvents.length) {
       for (const event of entry.hooks) {
         if (!knownEvents.includes(event)) problems.push(`${entry.role}: unknown hook event "${event}" (known: ${knownEvents.join(", ")})`);

@@ -26,6 +26,12 @@ Anything with a product opinion belongs in a host, never in the kernel:
 
 ## Done since extraction
 
+- Web access (v0.5.0): roles opt in with `"web": true | { allow, search, max_chars }` in their
+  spec; the kernel's built-in `web.fetch` (read-only GET, redirect hops re-checked, private
+  addresses refused, HTML→text, capped) and `web.search` (DuckDuckGo HTML, no key) then ride the
+  role's bridge. Off by default — the tools are not even advertised to roles without `web`.
+  `roles check` warns on open (allowlist-less) access; the console shows the setting per role.
+
 - Console (v0.4.0): `crewrun console <root>` / `crewrun up --console` — a local operator UI
   (127.0.0.1, node:http, zero deps; shell/pages/navigation structure) over one project's
   .crew/: dashboard + validation, role spec editing and add-role, schedule toggles and

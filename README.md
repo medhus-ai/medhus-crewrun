@@ -72,9 +72,17 @@ A project is any directory with a `.crew/` folder. Each role is a spec at
   "reflections": { "limit": 10 },
   "hooks": ["task.assigned"],
   "heartbeat": "off",
+  "web": { "allow": ["*.arxiv.org", "github.com"] },
   "schedules": [{ "id": "brief", "cron": "30 8 * * 1-5", "prompt": "…", "enabled": true }]
 }
 ```
+
+**Web access** is off unless a role opts in. `"web": true` gives the role the built-in
+`web.fetch` (read-only GET, HTML stripped, capped) and `web.search` (DuckDuckGo, no key) tools;
+`{ "allow": [...] }` restricts fetches to matching hosts (`*.example.com` covers subdomains),
+`"search": false` drops search, `"max_chars"` caps page text. Fetches refuse private and loopback
+addresses and re-check every redirect hop against the allowlist. Roles without `web` never see the
+tools, so the model cannot be talked into browsing.
 
 `roles/_defaults.json` supplies values every role inherits (its `memory_pointers` prepend as the
 shared floor). Pointers may name any file in the repository — including the role's own optional
@@ -92,6 +100,7 @@ vendor choices never enter a repository.
 | `engines/*` | `cli` (any vendor CLI), `claude-agent`, `codex-agent`, `container` (Docker sandbox) |
 | `mcp`, `mcp-stdio` | `createMcpBridge(registry)` — host-tool MCP server bridge: in-process for Claude, stdio for Codex |
 | `tool-broker` | `createToolBroker({ allowlists, … })` — role → tool allowlist enforcement |
+| `crew-tools`, `web` | Built-in tools on every bridge: the learning trio + `skill.read`, and per-role gated `web.fetch` / `web.search` |
 | `role-capabilities` | Subagent policy per role kind; Claude subagent definitions |
 | `roles`, `templates` | Role catalog installer; template reader |
 | `runner-config`, `model-catalog` | Runner profiles (global + per-project role mapping), live model discovery |

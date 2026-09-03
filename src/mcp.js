@@ -53,14 +53,15 @@ export function createMcpBridge(registry) {
   function toolNamesFor(role, toolContext = {}) {
     const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
     if (!includeCrewTools) return hostNames;
-    // The kernel's built-in tools are always present; a host tool with the same name wins.
-    return [...hostNames, ...crewToolDefinitions.names.filter((name) => !hostNames.includes(name))];
+    // The kernel's built-in tools ride along (the gated ones only when the role's spec enables
+    // them); a host tool with the same name wins.
+    return [...hostNames, ...crewToolDefinitions.namesFor(role, toolContext).filter((name) => !hostNames.includes(name))];
   }
 
   function isCrewTool(role, toolName, toolContext = {}) {
     if (!includeCrewTools) return false;
     const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
-    return !hostNames.includes(toolName) && crewToolDefinitions.names.includes(toolName);
+    return !hostNames.includes(toolName) && crewToolDefinitions.namesFor(role, toolContext).includes(toolName);
   }
 
   function toolHandlers({ role, toolContext = {}, schemaApi = zod, onToolCall } = {}) {

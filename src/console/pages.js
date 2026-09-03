@@ -7,7 +7,7 @@ import { listSkills } from "../skills.js";
 import { listSkillProposals } from "../skill-proposals.js";
 import { listPreferenceProposals, listPreferences } from "../preference-memory.js";
 import { runnerIdForRole } from "../runner.js";
-import { CREW_TOOL_NAMES } from "../crew-tools.js";
+import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
 import { esc } from "./shell.js";
 
 export function collectModels(targetRoot, { knownEvents = [] } = {}) {
@@ -70,7 +70,7 @@ ${problems.length || warnings.length
 <h2>Approved preferences</h2>
 ${table(["Key", "Scope", "Statement"], models.preferences.map((entry) => [esc(entry.key), esc(entry.scope), esc(entry.statement)]), "No approved preferences yet.")}
 <h2>Built-in tools</h2>
-<p class="muted">Always available to every role (a host tool with the same name overrides): ${CREW_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}. Host tools advertise themselves live at turn time.</p>`;
+<p class="muted">Always available to every role (a host tool with the same name overrides): ${LEARNING_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}. Per role, when its spec sets <code>"web"</code>: ${WEB_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}. Host tools advertise themselves live at turn time.</p>`;
 }
 
 function renderRoles(models) {
@@ -86,7 +86,8 @@ function renderRoles(models) {
   <p class="muted">runner <code>${esc(models.runnerFor(spec.role) || "(provider default)")}</code>
    · heartbeat <span class="pill ${settings?.heartbeat ? "on" : ""}">${esc(heartbeat)}</span>
    · hooks ${spec.hooks.length ? spec.hooks.map((hook) => `<code>${esc(hook)}</code>`).join(" ") : '<span class="muted">none</span>'}
-   · reflections ${spec.reflections === false ? "off" : `last ${spec.reflections.limit}`}</p>
+   · reflections ${spec.reflections === false ? "off" : `last ${spec.reflections.limit}`}
+   · web <span class="pill ${spec.web ? "on" : ""}">${spec.web ? esc(`${spec.web.search ? "fetch + search" : "fetch"}${spec.web.allow.length ? ` · ${spec.web.allow.join(", ")}` : " · open"}`) : "off"}</span></p>
   <p class="muted">pointers: ${spec.memory_pointers.map((pointer) => `<code>${esc(pointer)}</code>`).join(" ") || "none"}</p>
   <form method="post" action="/roles/save">
     <input type="hidden" name="role" value="${esc(spec.role)}">

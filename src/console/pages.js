@@ -125,12 +125,21 @@ ${problems.length || warnings.length ? `<section><div class="section-heading"><h
 </section>`;
 }
 
-function renderRoles(models, { selectedRole = "", roleView = "list" } = {}) {
+function renderRoles(models, { selectedRole = "", roleView = "list", roleTab = "manage" } = {}) {
   const roles = Object.values(models.specs);
   const selected = roles.find((spec) => spec.role === selectedRole) || null;
+  const detail = roleView === "detail";
+  const title = roleView === "create" ? "Add role" : detail ? "Manage role" : "Roles";
+  const subtitle = roleView === "create"
+    ? "Create a focused, versioned role specification."
+    : detail && roleTab === "defaults"
+      ? "Edit the global baseline shared by every role."
+      : detail
+        ? "Edit this role’s operating surface and reviewed authority."
+        : "Define each role’s operating surface and review its authority.";
   return `
 <section class="hero">
-  <div><p class="eyebrow">Roles</p><h1>${roleView === "create" ? "Add role" : roleView === "detail" ? "Manage role" : "Roles"}</h1><p class="sub">${roleView === "create" ? "Create a focused, versioned role specification." : roleView === "detail" ? "Edit this role’s operating surface and reviewed authority." : "Define each role’s operating surface and review its authority."}</p></div>
+  <div><p class="eyebrow">Roles</p><h1>${title}</h1><p class="sub">${subtitle}</p>${detail && selected ? renderRoleTabs(selected, roleTab) : ""}</div>
   ${roleView === "list" ? `<a class="button" href="/roles/new">Add role</a>` : ""}
 </section>
 ${roleView === "list" ? `
@@ -150,7 +159,16 @@ ${roleView === "create" ? `
   </form>
 </section>
 ` : ""}
-${roleView === "detail" && selected ? renderRoleEditor(selected, models) : roleView === "detail" ? empty("This role was not found.", "Back to roles", "/roles") : ""}`;
+${detail && selected ? roleTab === "defaults" ? renderDefaultsEditor(selected, models) : renderRoleEditor(selected, models) : detail ? empty("This role was not found.", "Back to roles", "/roles") : ""}`;
+}
+
+function renderRoleTabs(spec, active) {
+  const manage = `/roles/${encodeURIComponent(spec.role)}`;
+  const defaults = `${manage}?tab=defaults`;
+  return `<nav class="role-tabs" aria-label="Role settings">
+    <a class="role-tab${active === "manage" ? " active" : ""}" href="${manage}"${active === "manage" ? ' aria-current="page"' : ""}>Manage</a>
+    <a class="role-tab${active === "defaults" ? " active" : ""}" href="${defaults}"${active === "defaults" ? ' aria-current="page"' : ""}>Shared defaults</a>
+  </nav>`;
 }
 
 function renderRoleCard(spec, models) {
@@ -196,7 +214,6 @@ function renderRoleEditor(spec, models) {
   </form>
   ${renderContractSummary(spec)}
   ${renderContractEditor(spec, own)}
-  ${renderDefaultsEditor(spec, models)}
   <details>
     <summary>Advanced role JSON editor</summary>
     <p class="help" style="margin:8px 0">Use this only for reviewed fields not represented above. Saving preserves exactly this JSON object.</p>
@@ -263,8 +280,9 @@ function renderDefaultsEditor(spec, models) {
   const defaults = models.defaults || {};
   const pointers = Array.isArray(defaults.memory_pointers) ? defaults.memory_pointers.map(String) : [];
   const raw = defaultsJson(models.targetRoot, defaults);
+  const tabUrl = `/roles/${encodeURIComponent(spec.role)}?tab=defaults`;
   return `
-<section class="card flat" style="margin-top:12px">
+<section id="shared-defaults" class="card">
   <div class="section-heading" style="margin-top:0"><div><h3>Shared defaults</h3><span class="muted">Global baseline for every role; role-specific settings may override or extend it.</span></div></div>
   <form method="post" action="/roles/defaults/update">
     <input type="hidden" name="role" value="${esc(spec.role)}">
@@ -272,7 +290,7 @@ function renderDefaultsEditor(spec, models) {
       <div class="field"><label for="defaults-runner">Default model / runner</label>${runnerSelect(models, String(defaults.runner || ""), "defaults-runner", "No shared model")}<span class="help">Roles without their own runner use this model.</span></div>
       <div class="field wide"><label for="defaults-memory">Shared memory pointers</label><textarea id="defaults-memory" name="memory_pointers" placeholder=".crew/memory/doctrine.md&#10;.crew/memory/org-map.md">${esc(pointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. These load before each role’s own memory pointers.</span></div>
     </div>
-    <div class="button-row" style="margin-top:13px"><button class="subtle">Save shared defaults</button><a class="button secondary" href="/roles/${encodeURIComponent(spec.role)}">Discard changes</a></div>
+    <div class="button-row" style="margin-top:13px"><button class="subtle">Save shared defaults</button><a class="button secondary" href="${tabUrl}">Discard changes</a></div>
   </form>
   <details>
     <summary>Advanced shared defaults JSON</summary>

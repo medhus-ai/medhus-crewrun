@@ -87,19 +87,21 @@ function persistedContract(contract) {
   return value;
 }
 
-function roleUrl(role) {
-  return "/roles/" + encodeURIComponent(role);
+function roleUrl(role, tab = "manage") {
+  const href = "/roles/" + encodeURIComponent(role);
+  return tab === "defaults" ? href + "?tab=defaults" : href;
 }
 
 function roleRoute(url) {
   const segments = url.pathname.split("/").filter(Boolean);
   if (segments[0] !== "roles") return null;
+  const roleTab = url.searchParams.get("tab") === "defaults" ? "defaults" : "manage";
   if (segments.length === 1) {
     const selectedRole = String(url.searchParams.get("role") || "");
-    return ROLE_SLUG.test(selectedRole) ? { view: "detail", selectedRole } : { view: "list", selectedRole: "" };
+    return ROLE_SLUG.test(selectedRole) ? { view: "detail", selectedRole, roleTab } : { view: "list", selectedRole: "", roleTab: "manage" };
   }
-  if (segments.length === 2 && segments[1] === "new") return { view: "create", selectedRole: "" };
-  if (segments.length === 2 && ROLE_SLUG.test(segments[1])) return { view: "detail", selectedRole: segments[1] };
+  if (segments.length === 2 && segments[1] === "new") return { view: "create", selectedRole: "", roleTab: "manage" };
+  if (segments.length === 2 && ROLE_SLUG.test(segments[1])) return { view: "detail", selectedRole: segments[1], roleTab };
   return null;
 }
 
@@ -236,7 +238,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       else delete defaults.runner;
       defaults.memory_pointers = lines(form.memory_pointers);
       writeSpec(file, defaults);
-      return roleUrl(role);
+      return roleUrl(role, "defaults");
     }
     if (pathname === "/roles/defaults/save") {
       const role = String(form.role || "");
@@ -247,7 +249,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(defaultsPath(root), parsed);
       const { problems } = validateRoleSettings(loadRoleSettings(root), { knownEvents });
       if (problems.length) log("[console] saved _defaults.json with validation problems: " + problems.join("; "));
-      return roleUrl(role);
+      return roleUrl(role, "defaults");
     }
     if (pathname === "/scheduled/save") {
       const role = String(form.role || "").trim();
@@ -352,6 +354,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         canRunNow: Boolean(up?.scheduler?.runNow),
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
+        roleTab: roles?.roleTab || "manage",
         selectedTask: String(url.searchParams.get("task") || url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
         showTaskEditor: url.searchParams.get("new") === "1",
         canConnect: Boolean(operation(["connect", "connectConnector"])),

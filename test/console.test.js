@@ -83,13 +83,23 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(managedRole, /Role memory pointers/);
     assert.match(managedRole, /Initialize v1 contract/);
     assert.match(managedRole, /Shared defaults/);
-    assert.match(managedRole, /Default model \/ runner/);
-    assert.match(managedRole, /Shared memory pointers/);
-    assert.match(managedRole, /action="\/roles\/defaults\/update"/);
-    assert.match(managedRole, /action="\/roles\/defaults\/save"/);
-    assert.match(managedRole, /Advanced shared defaults JSON/);
+    assert.match(managedRole, /class="role-tabs"/);
+    assert.match(managedRole, /href="\/roles\/ops\?tab=defaults"/);
+    assert.doesNotMatch(managedRole, /Default model \/ runner/, "shared defaults are not nested in the Manage pane");
+    assert.doesNotMatch(managedRole, /action="\/roles\/defaults\/update"/);
+    assert.doesNotMatch(managedRole, /Advanced shared defaults JSON/);
     assert.match(managedRole, /href="\/roles" aria-label="Back to roles"/);
     assert.doesNotMatch(managedRole, /Back to Crew/);
+
+    const defaultsPage = await (await fetch(base + "/roles/ops?tab=defaults")).text();
+    assert.match(defaultsPage, /Shared defaults/);
+    assert.match(defaultsPage, /Default model \/ runner/);
+    assert.match(defaultsPage, /Shared memory pointers/);
+    assert.match(defaultsPage, /action="\/roles\/defaults\/update"/);
+    assert.match(defaultsPage, /action="\/roles\/defaults\/save"/);
+    assert.match(defaultsPage, /Advanced shared defaults JSON/);
+    assert.doesNotMatch(defaultsPage, /Role memory pointers/, "role controls stay in the Manage pane");
+    assert.doesNotMatch(defaultsPage, /Initialize v1 contract/);
 
     // Normal shared-default controls preserve advanced/default-only values while updating the
     // small fields people change most often.
@@ -104,7 +114,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
       })
     });
     assert.equal(defaultsUpdate.status, 303);
-    assert.equal(defaultsUpdate.headers.get("location"), "/roles/ops");
+    assert.equal(defaultsUpdate.headers.get("location"), "/roles/ops?tab=defaults");
     const updatedDefaults = JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8"));
     assert.equal(updatedDefaults.runner, "codex-agent-high");
     assert.deepEqual(updatedDefaults.memory_pointers, ["docs/shared.md", "docs/handbook.md"]);
@@ -122,7 +132,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
       body: new URLSearchParams({ role: "ops", json: JSON.stringify(advancedDefaults) })
     });
     assert.equal(defaultsSave.status, 303);
-    assert.equal(defaultsSave.headers.get("location"), "/roles/ops");
+    assert.equal(defaultsSave.headers.get("location"), "/roles/ops?tab=defaults");
     assert.deepEqual(JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8")), advancedDefaults);
 
     const stableDefaults = await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8");

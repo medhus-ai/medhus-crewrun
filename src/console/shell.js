@@ -71,6 +71,10 @@ h2 { margin: 0; color: #15171a; font-size: 14px; font-weight: 570; letter-spacin
 h3 { margin: 0; color: #15171a; font-size: 13px; font-weight: 570; }
 p { margin: 0; }
 p.sub { max-width: 760px; margin-top: 6px; color: #5d6571; font-size: 13px; }
+.role-tabs { display: flex; gap: 18px; margin-top: 15px; border-bottom: 1px solid var(--line); }
+.role-tab { display: inline-flex; padding: 0 1px 8px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 12px; font-weight: 560; text-decoration: none; }
+.role-tab:hover { color: var(--text); }
+.role-tab.active { border-color: #1b1c1e; color: #171719; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 32px 0 11px; }
 .section-heading h2 { font-size: 14px; }
 .section-heading .muted { font-size: 12px; }

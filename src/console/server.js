@@ -43,6 +43,10 @@ function specPath(targetRoot, role) {
   return path.join(path.resolve(targetRoot), crewDir(), "roles", `${role}.json`);
 }
 
+function defaultsPath(targetRoot) {
+  return path.join(path.resolve(targetRoot), crewDir(), "roles", "_defaults.json");
+}
+
 function readSpec(file) {
   if (!existsSync(file)) return {};
   const parsed = JSON.parse(readFileSync(file, "utf8"));
@@ -214,6 +218,30 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         contract: persistedContract(initialContract(role, title))
       };
       writeSpec(file, spec);
+      return roleUrl(role);
+    }
+    if (pathname === "/roles/defaults/update") {
+      const role = String(form.role || "");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      const file = defaultsPath(root);
+      const defaults = readSpec(file);
+      const runner = String(form.runner || "").trim();
+      if (runner.length > 120) throw new Error("runner id must be at most 120 characters");
+      if (runner) defaults.runner = runner;
+      else delete defaults.runner;
+      defaults.memory_pointers = lines(form.memory_pointers);
+      writeSpec(file, defaults);
+      return roleUrl(role);
+    }
+    if (pathname === "/roles/defaults/save") {
+      const role = String(form.role || "");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      const parsed = JSON.parse(String(form.json || "{}"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shared defaults must be a JSON object");
+      if (parsed.contract != null) normalizeRoleContract(parsed.contract, { role: "" });
+      writeSpec(defaultsPath(root), parsed);
+      const { problems } = validateRoleSettings(loadRoleSettings(root), { knownEvents });
+      if (problems.length) log("[console] saved _defaults.json with validation problems: " + problems.join("; "));
       return roleUrl(role);
     }
     if (pathname === "/schedules/save") {

@@ -15,7 +15,12 @@ async function project() {
   const root = path.join(parent, "repo");
   await mkdir(path.join(root, ".crew", "roles"), { recursive: true });
   await mkdir(path.join(root, ".crew", "skills"), { recursive: true });
-  await writeFile(path.join(root, ".crew", "roles", "_defaults.json"), JSON.stringify({ runner: "claude-agent-sonnet-high" }), "utf8");
+  await writeFile(path.join(root, ".crew", "roles", "_defaults.json"), JSON.stringify({
+    runner: "claude-agent-sonnet-high",
+    memory_pointers: ["docs/shared.md"],
+    hooks: ["task.assigned"],
+    web: { allow: ["example.com"] }
+  }, null, 2), "utf8");
   await writeFile(path.join(root, ".crew", "roles", "ops.json"), JSON.stringify({
     title: "Operations", hooks: [], memory_pointers: ["docs/ops.md"], schedules: [{ id: "tick", cron: "0 9 * * 1", prompt: "weekly", enabled: false }]
   }, null, 2), "utf8");
@@ -65,6 +70,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(roles, /href="\/roles\/new"/);
     assert.doesNotMatch(roles, /Role memory pointers/, "the role directory does not embed an editor");
     assert.doesNotMatch(roles, /Initialize v1 contract/, "governance controls live in the role subpage");
+    assert.doesNotMatch(roles, /Shared defaults/, "shared defaults live inside a role management page");
 
     const newRole = await (await fetch(base + "/roles/new")).text();
     assert.match(newRole, /<h1>Add role<\/h1>/);
@@ -76,8 +82,57 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(managedRole, /Model \/ runner/);
     assert.match(managedRole, /Role memory pointers/);
     assert.match(managedRole, /Initialize v1 contract/);
+    assert.match(managedRole, /Shared defaults/);
+    assert.match(managedRole, /Default model \/ runner/);
+    assert.match(managedRole, /Shared memory pointers/);
+    assert.match(managedRole, /action="\/roles\/defaults\/update"/);
+    assert.match(managedRole, /action="\/roles\/defaults\/save"/);
+    assert.match(managedRole, /Advanced shared defaults JSON/);
     assert.match(managedRole, /href="\/roles" aria-label="Back to roles"/);
     assert.doesNotMatch(managedRole, /Back to Crew/);
+
+    // Normal shared-default controls preserve advanced/default-only values while updating the
+    // small fields people change most often.
+    const defaultsUpdate = await fetch(base + "/roles/defaults/update", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        role: "ops",
+        runner: "codex-agent-high",
+        memory_pointers: "docs/shared.md\ndocs/handbook.md\ndocs/handbook.md"
+      })
+    });
+    assert.equal(defaultsUpdate.status, 303);
+    assert.equal(defaultsUpdate.headers.get("location"), "/roles/ops");
+    const updatedDefaults = JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8"));
+    assert.equal(updatedDefaults.runner, "codex-agent-high");
+    assert.deepEqual(updatedDefaults.memory_pointers, ["docs/shared.md", "docs/handbook.md"]);
+    assert.deepEqual(updatedDefaults.hooks, ["task.assigned"], "normal shared-default edits preserve advanced fields");
+    assert.deepEqual(updatedDefaults.web, { allow: ["example.com"] }, "normal shared-default edits preserve unrelated values");
+
+    const advancedDefaults = {
+      ...updatedDefaults,
+      reflections: { limit: 12 }
+    };
+    const defaultsSave = await fetch(base + "/roles/defaults/save", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ role: "ops", json: JSON.stringify(advancedDefaults) })
+    });
+    assert.equal(defaultsSave.status, 303);
+    assert.equal(defaultsSave.headers.get("location"), "/roles/ops");
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8")), advancedDefaults);
+
+    const stableDefaults = await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8");
+    const invalidDefaults = await fetch(base + "/roles/defaults/save", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ role: "ops", json: JSON.stringify({ contract: { version: 99 } }) })
+    });
+    assert.equal(invalidDefaults.status, 400, "an invalid shared contract is rejected before it can affect every role");
+    assert.equal(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8"), stableDefaults);
 
     // Contract editing is a normal form too. Existing roles are only migrated when an operator
     // chooses the explicit action, and each save creates a reviewed revision.

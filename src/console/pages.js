@@ -136,7 +136,6 @@ function renderRoles(models, { selectedRole = "", roleView = "list" } = {}) {
 ${roleView === "list" ? `
 <section class="section-heading"><h2>Role directory</h2><span class="muted">${roles.length} installed</span></section>
 ${roles.length ? `<div class="role-grid">${roles.map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty("This crew has no roles yet.", "Add role", "/roles/new")}
-${renderDefaults(models.defaults)}
 ` : ""}
 ${roleView === "create" ? `
 <section id="create-role" class="card" style="margin-top:16px">
@@ -197,8 +196,9 @@ function renderRoleEditor(spec, models) {
   </form>
   ${renderContractSummary(spec)}
   ${renderContractEditor(spec, own)}
+  ${renderDefaultsEditor(spec, models)}
   <details>
-    <summary>Advanced JSON editor</summary>
+    <summary>Advanced role JSON editor</summary>
     <p class="help" style="margin:8px 0">Use this only for reviewed fields not represented above. Saving preserves exactly this JSON object.</p>
     <form method="post" action="/roles/save">
       <input type="hidden" name="role" value="${esc(spec.role)}">
@@ -259,8 +259,39 @@ function renderContractSummary(spec) {
   </section>`;
 }
 
-function renderDefaults(defaults) {
-  return `<section class="card" style="margin-top:16px"><div class="section-heading" style="margin-top:0"><div><h2>Shared defaults</h2><span class="muted">The floor every role inherits</span></div></div><pre>${esc(JSON.stringify(defaults, null, 2))}</pre></section>`;
+function renderDefaultsEditor(spec, models) {
+  const defaults = models.defaults || {};
+  const pointers = Array.isArray(defaults.memory_pointers) ? defaults.memory_pointers.map(String) : [];
+  const raw = defaultsJson(models.targetRoot, defaults);
+  return `
+<section class="card flat" style="margin-top:12px">
+  <div class="section-heading" style="margin-top:0"><div><h3>Shared defaults</h3><span class="muted">Global baseline for every role; role-specific settings may override or extend it.</span></div></div>
+  <form method="post" action="/roles/defaults/update">
+    <input type="hidden" name="role" value="${esc(spec.role)}">
+    <div class="form-grid">
+      <div class="field"><label for="defaults-runner">Default model / runner</label>${runnerSelect(models, String(defaults.runner || ""), "defaults-runner", "No shared model")}<span class="help">Roles without their own runner use this model.</span></div>
+      <div class="field wide"><label for="defaults-memory">Shared memory pointers</label><textarea id="defaults-memory" name="memory_pointers" placeholder=".crew/memory/doctrine.md&#10;.crew/memory/org-map.md">${esc(pointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. These load before each role’s own memory pointers.</span></div>
+    </div>
+    <div class="button-row" style="margin-top:13px"><button class="subtle">Save shared defaults</button><a class="button secondary" href="/roles/${encodeURIComponent(spec.role)}">Discard changes</a></div>
+  </form>
+  <details>
+    <summary>Advanced shared defaults JSON</summary>
+    <p class="help" style="margin:8px 0">Use this for reviewed shared settings not represented above, including heartbeat, hooks, web access, reflections, the contract floor, and host fields.</p>
+    <form method="post" action="/roles/defaults/save">
+      <input type="hidden" name="role" value="${esc(spec.role)}">
+      <textarea class="code-input" name="json">${esc(raw)}</textarea>
+      <div class="button-row" style="margin-top:10px"><button class="subtle">Save shared defaults JSON</button></div>
+    </form>
+  </details>
+</section>`;
+}
+
+function defaultsJson(targetRoot, defaults) {
+  try {
+    return readFileSync(path.join(targetRoot, crewDir(), "roles", "_defaults.json"), "utf8");
+  } catch {
+    return JSON.stringify(defaults, null, 2);
+  }
 }
 
 function renderSchedules(models, { canRunNow = false, selectedRole = "", selectedSchedule = "" } = {}) {
@@ -546,10 +577,10 @@ function listRow(label, value, tone = "") {
   return `<div class="list-row"><div><div class="primary">${esc(label)}</div></div><span class="pill${tone ? ` ${esc(tone)}` : ""}">${esc(value)}</span></div>`;
 }
 
-function runnerSelect(models, selected, id) {
+function runnerSelect(models, selected, id, emptyLabel = "Inherit default") {
   const known = new Set(models.runnerOptions.map((entry) => entry.id));
   const options = [
-    `<option value=""${selected ? "" : " selected"}>Inherit default</option>`,
+    `<option value=""${selected ? "" : " selected"}>${esc(emptyLabel)}</option>`,
     ...(!selected || known.has(selected) ? [] : [`<option value="${esc(selected)}" selected>${esc(selected)} (current)</option>`]),
     ...models.runnerOptions.map((entry) => `<option value="${esc(entry.id)}"${entry.id === selected ? " selected" : ""}>${esc(entry.label)}</option>`)
   ];

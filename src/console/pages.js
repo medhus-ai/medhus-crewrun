@@ -4,7 +4,7 @@ import path from "node:path";
 import { crewDir } from "../crew-dirs.js";
 import { listRoleSpecs, readRoleDefaults, readRoleSpecFile } from "../role-spec.js";
 import { loadRoleSettings, validateRoleSettings, readHeartbeatState } from "../pulse.js";
-import { scheduleOverview } from "../schedules.js";
+import { describeScheduleRecurrence, recurrenceFromCron, SCHEDULE_WEEKDAYS, scheduleOverview } from "../schedules.js";
 import { listSkills } from "../skills.js";
 import { listSkillProposals } from "../skill-proposals.js";
 import { listPreferenceProposals, listPreferences } from "../preference-memory.js";
@@ -91,12 +91,12 @@ function renderDashboard(models) {
   return `
 <section class="hero">
   <div>
-    <p class="eyebrow">Crew overview</p>
-    <h1>Crew workspace</h1>
+    <p class="eyebrow">CrewRun</p>
+    <h1>Dashboard</h1>
     <p class="sub">Run and govern your roles from one local control plane.</p>
   </div>
   <div class="actions">
-    <a class="button secondary" href="/roles#create-role">New role</a>
+    <a class="button secondary" href="/roles/new">Add role</a>
     <a class="button" href="/approvals">Review approvals${pending ? ` (${pending})` : ""}</a>
   </div>
 </section>
@@ -106,12 +106,7 @@ function renderDashboard(models) {
   ${metric("Approvals", pending, `${pending} proposal${pending === 1 ? "" : "s"} pending`, pending ? "operator attention needed" : "queue clear", pending ? "warn" : "success")}
   ${metric("This month", spend === null ? "—" : formatCurrency(spend), "usage and subscription estimate", usage ? `${usage.totals?.runs || 0} recorded runs` : "no ledger attached", usage ? "info" : "")}
 </section>
-<div class="split">
-  <section>
-    <div class="section-heading"><h2>Roles</h2><a class="button secondary tiny" href="/roles">Manage roles</a></div>
-    ${roles.length ? `<div class="role-grid">${roles.slice(0, 6).map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty("No roles yet. Create the first role, then give it only the model, memory, schedules, and authority it needs.", "Create role", "/roles#create-role")}
-  </section>
-  <section>
+<section>
     <div class="section-heading"><h2>Governance</h2><a class="button secondary tiny" href="/approvals">Open queue</a></div>
     <div class="card flat">
       <div class="list">
@@ -122,11 +117,6 @@ function renderDashboard(models) {
         ${listRow("Skills", `${models.skills.length} installed`, "")}
       </div>
     </div>
-  </section>
-</div>
-<section>
-  <div class="section-heading"><h2>Scheduled work</h2><a class="button secondary tiny" href="/schedules">Manage schedules</a></div>
-  ${renderScheduleTable(models.schedules.slice(0, 5), { compact: true })}
 </section>
 ${problems.length || warnings.length ? `<section><div class="section-heading"><h2>Configuration review</h2></div>${[...problems.map((entry) => notice(entry, "warn")), ...warnings.map((entry) => notice(entry, "warn"))].join("")}</section>` : ""}
 <section>
@@ -135,16 +125,20 @@ ${problems.length || warnings.length ? `<section><div class="section-heading"><h
 </section>`;
 }
 
-function renderRoles(models, { selectedRole = "" } = {}) {
+function renderRoles(models, { selectedRole = "", roleView = "list" } = {}) {
   const roles = Object.values(models.specs);
-  const selected = roles.find((spec) => spec.role === selectedRole) || roles[0] || null;
+  const selected = roles.find((spec) => spec.role === selectedRole) || null;
   return `
 <section class="hero">
-  <div><p class="eyebrow">Roles</p><h1>Roles</h1><p class="sub">Define each role’s operating surface and review its authority.</p></div>
-  <a class="button" href="#create-role">New role</a>
+  <div><p class="eyebrow">Roles</p><h1>${roleView === "create" ? "Add role" : roleView === "detail" ? "Manage role" : "Roles"}</h1><p class="sub">${roleView === "create" ? "Create a focused, versioned role specification." : roleView === "detail" ? "Edit this role’s operating surface and reviewed authority." : "Define each role’s operating surface and review its authority."}</p></div>
+  ${roleView === "list" ? `<a class="button" href="/roles/new">Add role</a>` : ""}
 </section>
+${roleView === "list" ? `
 <section class="section-heading"><h2>Role directory</h2><span class="muted">${roles.length} installed</span></section>
-${roles.length ? `<div class="role-grid">${roles.map((spec) => renderRoleCard(spec, models, { selected: spec.role === selected?.role })).join("")}</div>` : empty("This crew has no roles yet.")}
+${roles.length ? `<div class="role-grid">${roles.map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty("This crew has no roles yet.", "Add role", "/roles/new")}
+${renderDefaults(models.defaults)}
+` : ""}
+${roleView === "create" ? `
 <section id="create-role" class="card" style="margin-top:16px">
   <div class="section-heading" style="margin-top:0"><h2>Create a role</h2><span class="muted">Starts as a versioned project spec</span></div>
   <form method="post" action="/roles/add">
@@ -156,11 +150,11 @@ ${roles.length ? `<div class="role-grid">${roles.map((spec) => renderRoleCard(sp
     <div class="button-row" style="margin-top:13px"><button>Create role</button></div>
   </form>
 </section>
-${selected ? renderRoleEditor(selected, models) : ""}
-${renderDefaults(models.defaults)}`;
+` : ""}
+${roleView === "detail" && selected ? renderRoleEditor(selected, models) : roleView === "detail" ? empty("This role was not found.", "Back to roles", "/roles") : ""}`;
 }
 
-function renderRoleCard(spec, models, { selected = false } = {}) {
+function renderRoleCard(spec, models) {
   const settings = models.settings[spec.role];
   const runnerId = models.runnerFor(spec.role);
   const runner = runnerLabel(models, runnerId);
@@ -170,7 +164,7 @@ function renderRoleCard(spec, models, { selected = false } = {}) {
   const contract = contractFor(models, spec);
   const title = spec.title || "Untitled role";
   return `
-<article class="role-card${selected ? " selected" : ""}">
+<article class="role-card">
   <div class="card-head">
     <div><div class="role-name" aria-label="${esc(`${spec.role} — ${title}`)}">${esc(spec.role)}</div><div class="role-title">${esc(title)}</div></div>
     ${contract?.status ? pill(contract.status, toneFor(contract.status)) : pill("role", "info")}
@@ -181,7 +175,7 @@ function renderRoleCard(spec, models, { selected = false } = {}) {
     <div>Heartbeat <span class="pill ${settings?.heartbeat ? "on" : ""}">${esc(heartbeat)}</span></div>
     ${contract?.summary ? `<div>${esc(contract.summary)}</div>` : ""}
   </div>
-  <div class="card-footer"><span class="faint">${spec.web ? "web enabled" : "host tools only"}</span><a class="button secondary tiny" href="/roles?role=${encodeURIComponent(spec.role)}#role-detail">Manage</a></div>
+  <div class="card-footer"><span class="faint">${spec.web ? "web enabled" : "host tools only"}</span><a class="button secondary tiny" href="/roles/${encodeURIComponent(spec.role)}">Manage</a></div>
 </article>`;
 }
 
@@ -199,7 +193,7 @@ function renderRoleEditor(spec, models) {
       <div class="field"><label for="role-runner">Model / runner</label>${runnerSelect(models, own.runner ?? "", "role-runner")}<span class="help">Leave inherited to use <code>_defaults.json</code> or the project default.</span></div>
       <div class="field wide"><label for="role-memory">Role memory pointers</label><textarea id="role-memory" name="memory_pointers" placeholder=".crew/roles/${esc(spec.role)}.md&#10;docs/domain-notes.md">${esc(ownPointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. Shared pointers in <code>_defaults.json</code> remain inherited.</span></div>
     </div>
-    <div class="button-row" style="margin-top:13px"><button>Save role</button><a class="button secondary" href="/roles?role=${encodeURIComponent(spec.role)}">Discard changes</a></div>
+    <div class="button-row" style="margin-top:13px"><button>Save role</button><a class="button secondary" href="/roles/${encodeURIComponent(spec.role)}">Discard changes</a></div>
   </form>
   ${renderContractSummary(spec)}
   ${renderContractEditor(spec, own)}
@@ -279,6 +273,7 @@ function renderSchedules(models, { canRunNow = false, selectedRole = "", selecte
     prompt: "",
     enabled: true
   };
+  const recurrence = recurrenceFromCron(schedule.cron);
   return `
 <section class="hero">
   <div><p class="eyebrow">Schedules</p><h1>Schedules</h1><p class="sub">The spec defines what should run; the host owns the scheduler process and execution state.</p></div>
@@ -286,20 +281,42 @@ function renderSchedules(models, { canRunNow = false, selectedRole = "", selecte
 </section>
 <section class="section-heading"><h2>Declared schedules</h2><span class="muted">${models.schedules.filter((entry) => entry.enabled).length} enabled</span></section>
 ${renderScheduleTable(models.schedules, { canRunNow, actions: true })}
+${canRunNow ? notice("Run once now starts this scheduled task immediately. It does not enable a disabled schedule.") : notice("Run now is available when the crew host is running. The saved timing still uses this host’s local time.", "warn")}
+${renderScheduleForm(models, { schedule, selected, recurrence })}`;
+}
+
+function renderScheduleForm(models, { schedule, selected, recurrence }) {
+  const cadenceOptions = [
+    ["daily", "Every day"],
+    ["weekdays", "Weekdays"],
+    ["weekly", "Every week"],
+    ["monthly", "Every month"],
+    ["every-days", "Every N days"],
+    ...(recurrence.cadence === "advanced" ? [["advanced", "Keep existing advanced schedule"]] : [])
+  ];
+  return `
 <section id="schedule-editor" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit ${esc(selected.role)}:${esc(selected.id)}` : "Add a cron schedule"}</h2><span class="muted">Five-field local-time cron</span></div></div>
+  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit ${esc(selected.role)}:${esc(selected.id)}` : "Add a schedule"}</h2><span class="muted">Runs in this host’s local time</span></div></div>
+  ${recurrence.cadence === "advanced" ? notice("This schedule already uses an advanced repeat rule. Keep that option to preserve it, or choose a standard repeat rule below to replace it.", "warn") : ""}
   ${Object.keys(models.specs).length ? `<form method="post" action="/schedules/save">
-    <input type="hidden" name="previous_role" value="${esc(selected?.role || "")}"><input type="hidden" name="previous_id" value="${esc(selected?.id || "")}">
+    <input type="hidden" name="previous_role" value="${esc(selected?.role || "")}"><input type="hidden" name="previous_id" value="${esc(selected?.id || "")}"><input type="hidden" name="existing_cron" value="${esc(recurrence.existingCron)}">
     <div class="form-grid three">
       <div class="field"><label for="schedule-role">Role</label>${roleSelect(models, schedule.role, "schedule-role")}</div>
       <div class="field"><label for="schedule-id">Schedule ID</label><input id="schedule-id" name="id" value="${esc(schedule.id)}" placeholder="daily-brief" pattern="[a-z][a-z0-9-]*" required></div>
       <div class="field"><label for="schedule-title">Title</label><input id="schedule-title" name="title" value="${esc(schedule.title || "")}" placeholder="Daily brief"></div>
-      <div class="field"><label for="schedule-cron">Cron</label><input id="schedule-cron" name="cron" value="${esc(schedule.cron)}" placeholder="0 9 * * 1-5" required><span class="help">minute hour day month weekday</span></div>
-      <div class="field wide"><label for="schedule-prompt">Prompt</label><textarea id="schedule-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(schedule.prompt)}</textarea></div>
     </div>
-    <label class="checkbox" style="margin-top:12px"><input type="checkbox" name="enabled" value="1"${schedule.enabled ? " checked" : ""}> Enable immediately</label>
+    <div class="form-grid three" style="margin-top:12px">
+      <div class="field"><label for="schedule-recurrence">Runs</label><select id="schedule-recurrence" name="recurrence">${cadenceOptions.map(([value, label]) => `<option value="${value}"${value === recurrence.cadence ? " selected" : ""}>${label}</option>`).join("")}</select></div>
+      <div class="field"><label for="schedule-time">At</label><input id="schedule-time" name="time" type="time" value="${esc(recurrence.time)}" required></div>
+      <div class="field"><label for="schedule-weekday">Weekly on</label><select id="schedule-weekday" name="weekday">${SCHEDULE_WEEKDAYS.map((day) => `<option value="${day.value}"${day.value === recurrence.weekday ? " selected" : ""}>${day.label}</option>`).join("")}</select></div>
+      <div class="field"><label for="schedule-month-day">Monthly on day</label><input id="schedule-month-day" name="day_of_month" type="number" min="1" max="31" value="${esc(recurrence.dayOfMonth)}"></div>
+      <div class="field"><label for="schedule-interval">Every N days</label><input id="schedule-interval" name="interval_days" type="number" min="2" max="31" value="${esc(recurrence.intervalDays)}"></div>
+      <div class="field"><span class="help">Pick the field that matches “Runs.” Only that setting is used.</span></div>
+    </div>
+    <div class="field" style="margin-top:12px"><label for="schedule-prompt">What should this role do?</label><textarea id="schedule-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(schedule.prompt)}</textarea></div>
+    <label class="checkbox" style="margin-top:12px"><input type="checkbox" name="enabled" value="1"${schedule.enabled ? " checked" : ""}> Enable this schedule</label>
     <div class="button-row" style="margin-top:13px"><button>${selected ? "Save schedule" : "Create schedule"}</button>${selected ? `<a class="button secondary" href="/schedules">Cancel</a>` : ""}</div>
-  </form>` : empty("Create a role before adding a schedule.", "Create role", "/roles#create-role")}
+  </form>` : empty("Create a role before adding a schedule.", "Add role", "/roles/new")}
 </section>`;
 }
 
@@ -308,17 +325,19 @@ function renderScheduleTable(schedules, { compact = false, canRunNow = false, ac
     const manage = actions ? `<a class="button secondary tiny" href="/schedules?role=${encodeURIComponent(schedule.role)}&schedule=${encodeURIComponent(schedule.id)}#schedule-editor">Edit</a>
       <form class="inline" method="post" action="/schedules/toggle"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><input type="hidden" name="enabled" value="${schedule.enabled ? "" : "1"}"><button class="subtle tiny">${schedule.enabled ? "Disable" : "Enable"}</button></form>
       <form class="inline" method="post" action="/schedules/delete"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><button class="danger tiny">Delete</button></form>
-      ${canRunNow ? `<form class="inline" method="post" action="/schedules/run"><input type="hidden" name="id" value="${esc(schedule.id)}"><button class="tiny">Run now</button></form>` : ""}` : "";
+      ${canRunNow
+        ? `<form class="inline" method="post" action="/schedules/run"><input type="hidden" name="role" value="${esc(schedule.role)}"><input type="hidden" name="id" value="${esc(schedule.id)}"><button class="tiny">Run now</button></form>`
+        : `<span class="button secondary tiny disabled" title="Start the crew host to run this now">Run now</span>`}` : "";
     return [
       `<code>${esc(schedule.role)}:${esc(schedule.id)}</code>${schedule.title && schedule.title !== schedule.id ? `<div class="faint">${esc(schedule.title)}</div>` : ""}`,
-      `<code>${esc(schedule.cron)}</code>`,
+      `${esc(describeScheduleRecurrence(schedule.cron))}<div class="faint">host local time</div>`,
       pill(schedule.enabled ? "enabled" : "disabled", schedule.enabled ? "success" : ""),
       compact ? when(schedule.nextRunAt) : `${esc(schedule.lastStatus || "never ran")}<div class="faint">${when(schedule.lastRunAt)}</div>`,
       compact ? "" : when(schedule.nextRunAt),
       manage
     ];
   });
-  const headers = compact ? ["schedule", "cron", "state", "next run"] : ["schedule", "cron", "state", "last outcome", "next run", ""];
+  const headers = compact ? ["schedule", "timing", "state", "next run"] : ["schedule", "timing", "state", "last outcome", "next run", ""];
   const renderedRows = compact ? rows.map((row) => row.slice(0, 4)) : rows;
   return table(headers, renderedRows, "No schedules declared in any role spec.");
 }

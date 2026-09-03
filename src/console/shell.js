@@ -40,8 +40,9 @@ body { min-height: 100vh; margin: 0; background: var(--bg); color: var(--text); 
 a { color: inherit; }
 .sidebar { position: sticky; top: 0; z-index: 2; display: flex; width: 278px; height: 100vh; flex: 0 0 278px; flex-direction: column; padding: 16px 8px 12px; overflow-y: auto; background: var(--sidebar); border-right: 1px solid var(--line); }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 9px 14px; }
-.back-link { display: inline-flex; align-items: center; gap: 6px; color: #3f4854; font-size: 13px; text-decoration: none; }
+.back-link { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; color: #3f4854; text-decoration: none; }
 .back-link:hover { color: var(--text); }
+.back-link.static { opacity: .72; }
 .utility-icon { width: 15px; height: 15px; flex: 0 0 15px; }
 .search-glyph { display: inline-flex; color: #66707b; }
 .sidebar-nav { display: grid; gap: 10px; }
@@ -151,11 +152,11 @@ summary { color: var(--muted); cursor: pointer; font-size: 12px; }
 .connector-card .capabilities { margin-top: 4px; color: var(--faint); font-size: 11px; }
 .usage-amount { color: #15171a; font-size: 22px; font-weight: 600; letter-spacing: -.035em; }
 footer { margin-top: 36px; color: #8b9098; font-size: 11px; }
-@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .back-link span, .search-glyph, .sidebar-account { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } }
+@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .search-glyph, .sidebar-account { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .hero { flex-direction: column; gap: 13px; } .form-grid, .form-grid.three { grid-template-columns: 1fr; } .role-grid { grid-template-columns: 1fr; } .summary-grid { gap: 8px; } .metric { min-height: 84px; } .connector-card { padding-right: 16px; } .connector-card .card-footer { position: static; margin-top: 13px; } th, td { padding: 9px 10px; } }
 `;
 
-export function renderPage(page, content, { targetRoot, version = "" } = {}) {
+export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "" } = {}) {
   const groups = ["primary", "operations", "account"].map((group) => {
     const links = PAGES.filter((entry) => entry.group === group).map(({ id, label, icon: iconName }) =>
       `<a href="/${id === "dashboard" ? "" : id}" class="sidebar-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span></a>`
@@ -164,12 +165,15 @@ export function renderPage(page, content, { targetRoot, version = "" } = {}) {
   }).join("");
   const workspace = workspaceName(targetRoot);
   const initial = workspace.slice(0, 1).toUpperCase() || "C";
+  const back = backHref
+    ? `<a class="back-link" href="${esc(backHref)}" aria-label="${esc(backLabel || "Back")}" title="${esc(backLabel || "Back")}">${icon("arrowLeft", "utility-icon")}</a>`
+    : `<span class="back-link static" aria-hidden="true">${icon("arrowLeft", "utility-icon")}</span>`;
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>crewrun console</title><style>${STYLES}</style></head>
 <body>
 <aside class="sidebar">
   <div class="sidebar-top">
-    <a class="back-link" href="/" title="Return to overview">${icon("arrowLeft", "utility-icon")}<span>Back to Crew</span></a>
+    ${back}
     <span class="search-glyph" aria-hidden="true">${icon("search", "utility-icon")}</span>
   </div>
   <div class="sidebar-nav">${groups}</div>

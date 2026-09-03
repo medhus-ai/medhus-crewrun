@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createScheduler, dueSchedules, listSchedules, nextRun, parseCron, removeSchedule, scheduleOverview, scheduleStatePath, setScheduleEnabled, upsertSchedule } from "../src/schedules.js";
+import { createScheduler, cronFromRecurrence, describeScheduleRecurrence, dueSchedules, listSchedules, nextRun, parseCron, recurrenceFromCron, removeSchedule, scheduleOverview, scheduleStatePath, setScheduleEnabled, upsertSchedule } from "../src/schedules.js";
 
 test("parseCron handles stars, ranges, steps, lists, and both day fields; rejects bad input", () => {
   const at = (iso) => new Date(iso); // local time; the fixtures below use times that are the same in any zone offset of whole hours
@@ -21,6 +21,19 @@ test("parseCron handles stars, ranges, steps, lists, and both day fields; reject
   assert.equal(parseCron("5 4 * * *").expression, "5 4 * * *");
   for (const bad of ["* * * *", "60 * * * *", "* 24 * * *", "1-0 * * * *", "*/0 * * * *", "a * * * *"]) assert.throws(() => parseCron(bad), /cron/);
   void at;
+});
+
+test("schedule recurrence helpers translate friendly controls without changing stored cron", () => {
+  assert.equal(cronFromRecurrence({ cadence: "daily", time: "09:00" }), "0 9 * * *");
+  assert.equal(cronFromRecurrence({ cadence: "weekdays", time: "08:30" }), "30 8 * * 1-5");
+  assert.equal(cronFromRecurrence({ cadence: "weekly", time: "13:05", weekday: "4" }), "5 13 * * 4");
+  assert.equal(cronFromRecurrence({ cadence: "monthly", time: "10:00", dayOfMonth: "1" }), "0 10 1 * *");
+  assert.equal(cronFromRecurrence({ cadence: "every-days", time: "09:00", intervalDays: "4" }), "0 9 */4 * *");
+  assert.equal(describeScheduleRecurrence("30 8 * * 1-5"), "Weekdays at 8:30 AM");
+  assert.equal(describeScheduleRecurrence("0 9 */4 * *"), "Every 4 days at 9:00 AM");
+  assert.equal(recurrenceFromCron("*/15 9-17 * * 1-5").cadence, "advanced");
+  assert.equal(cronFromRecurrence({ cadence: "advanced", existingCron: "*/15 9-17 * * 1-5" }), "*/15 9-17 * * 1-5");
+  assert.throws(() => cronFromRecurrence({ cadence: "daily", time: "25:00" }), /valid time/);
 });
 
 test("nextRun finds the next matching minute and skips non-matching days quickly", () => {
@@ -72,7 +85,7 @@ test("the scheduler runs due schedules once, records outcomes, and never double-
   assert.equal(every.lastStatus, "ok");
   assert.equal(every.nextRunAt, new Date(2026, 8, 1, 6, 11).toISOString());
   assert.equal(overview.find((s) => s.id === "never-soon").nextRunAt, null);
-  assert.equal((await scheduler.runNow("never-soon")).lastStatus, "ok");
+  assert.equal((await scheduler.runNow({ role: "ceo", id: "never-soon" })).lastStatus, "ok");
   assert.deepEqual(dueSchedules({ targetRoot: root, now: clock, state: { runs: {} } }).map((s) => s.id), ["every-minute"]);
   await assert.rejects(scheduler.runNow("missing"), /not found/);
 });

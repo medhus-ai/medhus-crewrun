@@ -26,7 +26,20 @@ async function project() {
 test("console renders pages and performs actions over the project's .crew", async () => {
   const { parent, root } = await project();
   const proposal = proposeSkill({ targetRoot: root, id: "weekly-brief", description: "Draft the brief", content: "steps", proposedBy: "ops" });
-  const console_ = createConsole({ targetRoot: root, port: 0, log: () => {} });
+  const manualRuns = [];
+  const console_ = createConsole({
+    targetRoot: root,
+    port: 0,
+    log: () => {},
+    up: {
+      scheduler: {
+        runNow: async (entry) => {
+          manualRuns.push(entry);
+          return { lastStatus: "ok" };
+        }
+      }
+    }
+  });
   const port = await console_.listen();
   const base = `http://127.0.0.1:${port}`;
   try {
@@ -35,16 +48,31 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(dashboard, /1 proposal pending/);
     assert.match(dashboard, /skill\.read/, "built-in tools are listed");
     assert.match(dashboard, /class="sidebar"/, "console uses the persistent workspace rail");
-    assert.match(dashboard, /aria-label="Overview"/, "the overview link remains named for assistive technology");
+    assert.match(dashboard, /aria-label="Dashboard"/, "the dashboard link remains named for assistive technology");
     assert.match(dashboard, /class="nav-icon"/, "menu icons are inline and dependency-free");
     assert.match(dashboard, /--sidebar: #f3f3f3/, "the reference light shell is rendered with the page");
+    assert.doesNotMatch(dashboard, /Back to Crew/, "the top rail no longer repeats a back-to-crew control");
+    assert.doesNotMatch(dashboard, /Manage roles/, "the dashboard does not duplicate the role directory");
+    assert.doesNotMatch(dashboard, /Scheduled work/, "the dashboard does not duplicate the schedules page");
 
     const roles = await (await fetch(base + "/roles")).text();
     assert.match(roles, /ops — Operations/);
-    assert.match(roles, /_defaults\.json/);
-    assert.match(roles, /Model \/ runner/);
-    assert.match(roles, /Role memory pointers/);
-    assert.match(roles, /Initialize v1 contract/);
+    assert.match(roles, /href="\/roles\/new"/);
+    assert.doesNotMatch(roles, /Role memory pointers/, "the role directory does not embed an editor");
+    assert.doesNotMatch(roles, /Initialize v1 contract/, "governance controls live in the role subpage");
+
+    const newRole = await (await fetch(base + "/roles/new")).text();
+    assert.match(newRole, /<h1>Add role<\/h1>/);
+    assert.match(newRole, /href="\/roles" aria-label="Back to roles"/);
+    assert.doesNotMatch(newRole, /Role directory/);
+
+    const managedRole = await (await fetch(base + "/roles/ops")).text();
+    assert.match(managedRole, /_defaults\.json/);
+    assert.match(managedRole, /Model \/ runner/);
+    assert.match(managedRole, /Role memory pointers/);
+    assert.match(managedRole, /Initialize v1 contract/);
+    assert.match(managedRole, /href="\/roles" aria-label="Back to roles"/);
+    assert.doesNotMatch(managedRole, /Back to Crew/);
 
     // Contract editing is a normal form too. Existing roles are only migrated when an operator
     // chooses the explicit action, and each save creates a reviewed revision.
@@ -82,15 +110,27 @@ test("console renders pages and performs actions over the project's .crew", asyn
     const schedules = await (await fetch(base + "/schedules")).text();
     assert.match(schedules, /ops:tick/);
     assert.match(schedules, /disabled/);
-    assert.match(schedules, /Add a cron schedule/);
-    assert.doesNotMatch(schedules, /Run now/, "run-now hidden without an attached loop");
+    assert.match(schedules, /Every Monday at 9:00 AM/);
+    assert.match(schedules, /Runs in this host’s local time/);
+    assert.match(schedules, /Add a schedule/);
+    assert.match(schedules, /Run now/);
+    assert.doesNotMatch(schedules, /name="cron"/, "schedule timing is expressed through friendly controls");
+
+    const runNow = await fetch(base + "/schedules/run", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "role=ops&id=tick"
+    });
+    assert.equal(runNow.status, 303);
+    assert.deepEqual(manualRuns, [{ role: "ops", id: "tick" }]);
 
     // toggle the schedule on → written into the role's spec
-    await fetch(base + "/schedules/toggle", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "id=tick&enabled=1" });
+    await fetch(base + "/schedules/toggle", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=ops&id=tick&enabled=1" });
     const spec = JSON.parse(await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
     assert.equal(spec.schedules[0].enabled, true);
 
-    // Cron jobs have a form too, and are saved back to the owning role spec.
+    // Schedules use a simple cadence and time, then save canonical cron back to the role spec.
     await fetch(base + "/schedules/save", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -98,13 +138,17 @@ test("console renders pages and performs actions over the project's .crew", asyn
         role: "ops",
         id: "daily-brief",
         title: "Daily brief",
-        cron: "30 8 * * 1-5",
+        recurrence: "weekdays",
+        time: "08:30",
+        weekday: "1",
+        day_of_month: "1",
+        interval_days: "2",
         prompt: "Prepare the daily brief.",
         enabled: "1"
       })
     });
     const scheduledOps = JSON.parse(await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8"));
-    assert.ok(scheduledOps.schedules.some((entry) => entry.id === "daily-brief" && entry.enabled));
+    assert.ok(scheduledOps.schedules.some((entry) => entry.id === "daily-brief" && entry.enabled && entry.cron === "30 8 * * 1-5"));
 
     // approve the proposal → flat skill file + index regenerated
     await fetch(base + "/proposals/decide", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `id=${proposal.id}&kind=skill&action=approve` });
@@ -120,7 +164,14 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(await readFile(path.join(root, ".crew", "memory", "reflections", "ops.md"), "utf8"), /Start with the current blocker\./);
 
     // add a role, then save an edited spec
-    await fetch(base + "/roles/add", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=analyst&title=Analyst" });
+    const addedRole = await fetch(base + "/roles/add", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "role=analyst&title=Analyst"
+    });
+    assert.equal(addedRole.status, 303);
+    assert.equal(addedRole.headers.get("location"), "/roles/analyst");
     assert.ok(existsSync(path.join(root, ".crew", "roles", "analyst.json")));
     assert.equal(JSON.parse(await readFile(path.join(root, ".crew", "roles", "analyst.json"), "utf8")).contract.version, 1, "new roles start with a versioned contract");
     await fetch(base + "/roles/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=analyst&json=" + encodeURIComponent(JSON.stringify({ title: "Analyst", heartbeat: "1d" })) });

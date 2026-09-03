@@ -1,7 +1,7 @@
 // Keep navigation as data: the server-rendered shell can supply purposeful
 // inline icons without bringing a browser-side icon dependency into a host.
 export const PAGES = [
-  { id: "dashboard", label: "Overview", icon: "home", group: "primary" },
+  { id: "dashboard", label: "Dashboard", icon: "home", group: "primary" },
   { id: "roles", label: "Roles", icon: "cloud", group: "primary" },
   { id: "schedules", label: "Schedules", icon: "calendar", group: "primary" },
   { id: "approvals", label: "Approvals", icon: "shield", group: "operations" },

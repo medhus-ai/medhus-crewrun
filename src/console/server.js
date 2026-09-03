@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { crewDir } from "../crew-dirs.js";
-import { listSchedules, normalizeSchedule, removeSchedule, upsertSchedule } from "../schedules.js";
+import { cronFromRecurrence, listSchedules, normalizeSchedule, removeSchedule, upsertSchedule } from "../schedules.js";
 import { approveSkill, rejectSkill } from "../skill-proposals.js";
 import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
@@ -82,6 +82,22 @@ function persistedContract(contract) {
   return value;
 }
 
+function roleUrl(role) {
+  return "/roles/" + encodeURIComponent(role);
+}
+
+function roleRoute(url) {
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (segments[0] !== "roles") return null;
+  if (segments.length === 1) {
+    const selectedRole = String(url.searchParams.get("role") || "");
+    return ROLE_SLUG.test(selectedRole) ? { view: "detail", selectedRole } : { view: "list", selectedRole: "" };
+  }
+  if (segments.length === 2 && segments[1] === "new") return { view: "create", selectedRole: "" };
+  if (segments.length === 2 && ROLE_SLUG.test(segments[1])) return { view: "detail", selectedRole: segments[1] };
+  return null;
+}
+
 function redirectTarget(value, fallback) {
   const target = String(value || "").trim();
   if (!target || /[\r\n]/.test(target)) return fallback;
@@ -138,7 +154,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(specPath(root, role), parsed);
       const { problems } = validateRoleSettings(loadRoleSettings(root), { knownEvents });
       if (problems.length) log(`[console] saved ${role}.json with validation problems: ${problems.join("; ")}`);
-      return `/roles?role=${encodeURIComponent(role)}`;
+      return roleUrl(role);
     }
     if (pathname === "/roles/update") {
       const role = String(form.role || "");
@@ -155,7 +171,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       else delete spec.runner;
       spec.memory_pointers = lines(form.memory_pointers);
       writeSpec(file, spec);
-      return `/roles?role=${encodeURIComponent(role)}`;
+      return roleUrl(role);
     }
     if (pathname === "/roles/contract") {
       const role = String(form.role || "");
@@ -171,7 +187,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       }, { role });
       spec.contract = persistedContract(next);
       writeSpec(file, spec);
-      return `/roles?role=${encodeURIComponent(role)}`;
+      return roleUrl(role);
     }
     if (pathname === "/roles/initialize-contract") {
       const role = String(form.role || "");
@@ -181,7 +197,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (spec.contract) throw new Error(`${role} already has a role-specific contract`);
       spec.contract = persistedContract(initialContract(role, spec.title || ""));
       writeSpec(file, spec);
-      return `/roles?role=${encodeURIComponent(role)}`;
+      return roleUrl(role);
     }
     if (pathname === "/roles/add") {
       const role = String(form.role || "");
@@ -198,7 +214,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         contract: persistedContract(initialContract(role, title))
       };
       writeSpec(file, spec);
-      return `/roles?role=${encodeURIComponent(role)}`;
+      return roleUrl(role);
     }
     if (pathname === "/schedules/save") {
       const role = String(form.role || "").trim();
@@ -207,11 +223,21 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const previousId = String(form.previous_id || "").trim();
       // Validate before replacing a renamed schedule, so a typo in cron never
       // destroys the existing declaration.
+      const cron = form.recurrence
+        ? cronFromRecurrence({
+          cadence: form.recurrence,
+          time: form.time,
+          weekday: form.weekday,
+          dayOfMonth: form.day_of_month,
+          intervalDays: form.interval_days,
+          existingCron: form.existing_cron
+        })
+        : String(form.cron || "").trim();
       const schedule = normalizeSchedule({
         role,
         id,
         title: String(form.title || "").trim(),
-        cron: String(form.cron || "").trim(),
+        cron,
         prompt: String(form.prompt || "").trim(),
         enabled: form.enabled === "1"
       });
@@ -236,7 +262,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/schedules/run") {
       if (!up?.scheduler?.runNow) throw new Error("run-now needs the console attached to a running crew loop");
-      void up.scheduler.runNow(String(form.id || "")).catch((error) => log(`[console] run-now failed: ${error.message}`));
+      void up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") }).catch((error) => log(`[console] run-now failed: ${error.message}`));
       return "/schedules";
     }
     if (pathname === "/proposals/decide") {
@@ -284,17 +310,26 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       }
       const page = pageFromUrl(url.pathname);
       if (!page) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
+      const roles = page === "roles" ? roleRoute(url) : null;
+      if (page === "roles" && !roles) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const hostOperations = await snapshot();
       const models = collectModels(root, { knownEvents, operations: hostOperations });
+      const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
         canRunNow: Boolean(up?.scheduler?.runNow),
-        selectedRole: String(url.searchParams.get("role") || ""),
+        selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
+        roleView: roles?.view || "list",
         selectedSchedule: String(url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
         canConnect: Boolean(operation(["connect", "connectConnector"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))
           || Array.isArray(hostOperations.approvals) && hostOperations.approvals.some((approval) => approval?.source === "crewrun" && approval?.status === "pending")
-      }), { targetRoot: root, version: VERSION });
+      }), {
+        targetRoot: root,
+        version: VERSION,
+        backHref: roleSubpage ? "/roles" : page === "dashboard" ? "" : "/",
+        backLabel: roleSubpage ? "Back to roles" : "Back to dashboard"
+      });
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
     } catch (error) {
       response.writeHead(400, { "content-type": "text/plain" }).end(`error: ${error.message}`);

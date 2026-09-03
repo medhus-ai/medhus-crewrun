@@ -18,6 +18,16 @@ const FIELDS = [
   { name: "dayOfWeek", min: 0, max: 7 } // 7 is Sunday, like 0
 ];
 
+export const SCHEDULE_WEEKDAYS = Object.freeze([
+  { value: "1", label: "Monday" },
+  { value: "2", label: "Tuesday" },
+  { value: "3", label: "Wednesday" },
+  { value: "4", label: "Thursday" },
+  { value: "5", label: "Friday" },
+  { value: "6", label: "Saturday" },
+  { value: "0", label: "Sunday" }
+]);
+
 export function parseCron(expression) {
   const parts = String(expression || "").trim().split(/\s+/);
   if (parts.length !== 5) throw new Error("cron expression needs five fields: minute hour day-of-month month day-of-week");
@@ -42,6 +52,101 @@ export function parseCron(expression) {
     },
     matchesDay: (date) => months.has(date.getMonth() + 1) && dayMatches(date)
   };
+}
+
+// The persisted format remains standard five-field cron. The console uses
+// these helpers to offer normal people a cadence and time instead of a code
+// expression, while still preserving an older advanced expression unchanged.
+export function recurrenceFromCron(expression) {
+  const cron = parseCron(expression).expression;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = cron.split(" ");
+  const validClock = isClockField(hour, 0, 23) && isClockField(minute, 0, 59);
+  const base = {
+    time: validClock ? toTime(hour, minute) : "09:00",
+    weekday: "1",
+    dayOfMonth: "1",
+    intervalDays: "2",
+    existingCron: cron
+  };
+  if (!validClock || month !== "*") return { ...base, cadence: "advanced" };
+  if (dayOfMonth === "*" && dayOfWeek === "*") return { ...base, cadence: "daily" };
+  if (dayOfMonth === "*" && dayOfWeek === "1-5") return { ...base, cadence: "weekdays" };
+  if (dayOfMonth === "*" && /^(?:0|[1-6]|7)$/.test(dayOfWeek)) return { ...base, cadence: "weekly", weekday: dayOfWeek === "7" ? "0" : dayOfWeek };
+  if (dayOfWeek === "*" && /^(?:[1-9]|[12]\d|3[01])$/.test(dayOfMonth)) return { ...base, cadence: "monthly", dayOfMonth };
+  const everyDays = dayOfMonth.match(/^\*\/([2-9]|[12]\d|3[01])$/);
+  if (dayOfWeek === "*" && everyDays) return { ...base, cadence: "every-days", intervalDays: everyDays[1] };
+  return { ...base, cadence: "advanced" };
+}
+
+export function cronFromRecurrence({ cadence, time, weekday, dayOfMonth, intervalDays, existingCron } = {}) {
+  const choice = String(cadence || "").trim();
+  if (choice === "advanced") {
+    if (!existingCron) throw new Error("choose a standard repeat rule for a new schedule");
+    return parseCron(existingCron).expression;
+  }
+  const { hour, minute } = parseScheduleTime(time);
+  let cron;
+  if (choice === "daily") cron = `${minute} ${hour} * * *`;
+  else if (choice === "weekdays") cron = `${minute} ${hour} * * 1-5`;
+  else if (choice === "weekly") cron = `${minute} ${hour} * * ${weekdayValue(weekday)}`;
+  else if (choice === "monthly") cron = `${minute} ${hour} ${monthDayValue(dayOfMonth)} * *`;
+  else if (choice === "every-days") cron = `${minute} ${hour} */${intervalValue(intervalDays)} * *`;
+  else throw new Error("choose when this schedule should run");
+  return parseCron(cron).expression;
+}
+
+export function describeScheduleRecurrence(expression) {
+  const recurrence = recurrenceFromCron(expression);
+  const at = formatTime(recurrence.time);
+  if (recurrence.cadence === "daily") return `Every day at ${at}`;
+  if (recurrence.cadence === "weekdays") return `Weekdays at ${at}`;
+  if (recurrence.cadence === "weekly") return `Every ${weekdayLabel(recurrence.weekday)} at ${at}`;
+  if (recurrence.cadence === "monthly") return `Monthly on day ${recurrence.dayOfMonth} at ${at}`;
+  if (recurrence.cadence === "every-days") return `Every ${recurrence.intervalDays} days at ${at}`;
+  return "Advanced schedule";
+}
+
+function isClockField(value, min, max) {
+  return /^\d+$/.test(value) && Number(value) >= min && Number(value) <= max;
+}
+
+function toTime(hour, minute) {
+  return `${String(Number(hour)).padStart(2, "0")}:${String(Number(minute)).padStart(2, "0")}`;
+}
+
+function parseScheduleTime(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  const hour = Number(match?.[1]);
+  const minute = Number(match?.[2]);
+  if (!match || !Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) throw new Error("choose a valid time");
+  return { hour, minute };
+}
+
+function weekdayValue(value) {
+  const day = Number(value);
+  if (!Number.isInteger(day) || day < 0 || day > 6) throw new Error("choose a valid weekday");
+  return day;
+}
+
+function monthDayValue(value) {
+  const day = Number(value);
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error("choose a day between 1 and 31");
+  return day;
+}
+
+function intervalValue(value) {
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 2 || days > 31) throw new Error("choose an interval between 2 and 31 days");
+  return days;
+}
+
+function weekdayLabel(value) {
+  return SCHEDULE_WEEKDAYS.find((day) => day.value === String(value))?.label || "selected day";
+}
+
+function formatTime(value) {
+  const { hour, minute } = parseScheduleTime(value);
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
 // First matching minute strictly after `from`, or null if none within a year.
@@ -248,9 +353,12 @@ export function createScheduler({ targetRoot, run, intervalMs = 30_000, staleAft
     }
   }
 
-  async function runNow(id) {
-    const schedule = listSchedules({ targetRoot }).find((entry) => entry.id === id);
-    if (!schedule) throw new Error(`schedule ${id} was not found`);
+  async function runNow(request) {
+    const input = typeof request === "string" ? { id: request } : request || {};
+    const id = String(input.id || "");
+    const role = String(input.role || "");
+    const schedule = listSchedules({ targetRoot }).find((entry) => entry.id === id && (!role || entry.role === role));
+    if (!schedule) throw new Error(`schedule ${role ? `${role}:` : ""}${id} was not found`);
     return { id, ...(await execute(schedule, now())) };
   }
 

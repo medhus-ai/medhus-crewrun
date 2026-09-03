@@ -34,6 +34,10 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(dashboard, /1 roles/);
     assert.match(dashboard, /1 proposal pending/);
     assert.match(dashboard, /skill\.read/, "built-in tools are listed");
+    assert.match(dashboard, /class="sidebar"/, "console uses the persistent workspace rail");
+    assert.match(dashboard, /aria-label="Overview"/, "the overview link remains named for assistive technology");
+    assert.match(dashboard, /class="nav-icon"/, "menu icons are inline and dependency-free");
+    assert.match(dashboard, /--sidebar: #f3f3f3/, "the reference light shell is rendered with the page");
 
     const roles = await (await fetch(base + "/roles")).text();
     assert.match(roles, /ops — Operations/);
@@ -199,13 +203,14 @@ test("console accepts an optional host operations snapshot without exposing secr
     assert.match(connectors, /Team Slack/);
     assert.match(connectors, /Disconnect/);
     assert.match(connectors, /Work Gmail/);
+    assert.match(connectors, /<span class="pill">not connected<\/span>/, "a disconnected integration is neutral, not a success state");
 
     const approvals = await (await fetch(base + "/approvals")).text();
     assert.match(approvals, /Post launch note/);
     assert.match(approvals, /Host action approvals/);
 
     const audit = await (await fetch(base + "/audit")).text();
-    assert.match(audit, /See the governed operating record/);
+    assert.match(audit, /<h1>Audit<\/h1>/);
     assert.match(audit, /slack-bot/);
     assert.match(audit, /ops/);
     assert.match(audit, /gpt-5\.6/);

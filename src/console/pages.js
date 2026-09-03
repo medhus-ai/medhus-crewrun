@@ -92,8 +92,8 @@ function renderDashboard(models) {
 <section class="hero">
   <div>
     <p class="eyebrow">Crew overview</p>
-    <h1>Operate your crew with clear authority.</h1>
-    <p class="sub">Roles are reviewable project files. Connectors and high-impact actions stay at the host boundary.</p>
+    <h1>Crew workspace</h1>
+    <p class="sub">Run and govern your roles from one local control plane.</p>
   </div>
   <div class="actions">
     <a class="button secondary" href="/roles#create-role">New role</a>
@@ -140,7 +140,7 @@ function renderRoles(models, { selectedRole = "" } = {}) {
   const selected = roles.find((spec) => spec.role === selectedRole) || roles[0] || null;
   return `
 <section class="hero">
-  <div><p class="eyebrow">Roles</p><h1>Define each role’s operating surface.</h1><p class="sub">Edit the practical controls here; the advanced JSON view remains available for fields your host adds.</p></div>
+  <div><p class="eyebrow">Roles</p><h1>Roles</h1><p class="sub">Define each role’s operating surface and review its authority.</p></div>
   <a class="button" href="#create-role">New role</a>
 </section>
 <section class="section-heading"><h2>Role directory</h2><span class="muted">${roles.length} installed</span></section>
@@ -281,7 +281,7 @@ function renderSchedules(models, { canRunNow = false, selectedRole = "", selecte
   };
   return `
 <section class="hero">
-  <div><p class="eyebrow">Schedules</p><h1>Schedule accountable role work.</h1><p class="sub">The spec defines what should run; the host owns the scheduler process and execution state.</p></div>
+  <div><p class="eyebrow">Schedules</p><h1>Schedules</h1><p class="sub">The spec defines what should run; the host owns the scheduler process and execution state.</p></div>
   <a class="button" href="#schedule-editor">Add schedule</a>
 </section>
 <section class="section-heading"><h2>Declared schedules</h2><span class="muted">${models.schedules.filter((entry) => entry.enabled).length} enabled</span></section>
@@ -330,7 +330,7 @@ function renderSkills(models) {
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Reusable work, kept reviewable.</h1><p class="sub">Roles can read approved skills on demand; proposals land in the approval queue.</p></div><a class="button" href="/approvals">Review proposals</a></section>
+<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Roles can read approved skills on demand; proposals land in the approval queue.</p></div><a class="button" href="/approvals">Review proposals</a></section>
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
 ${table(["skill", "description", "roles", "scope"], rows, "No skills yet — roles can propose them with skill.propose.")}`;
 }
@@ -356,7 +356,7 @@ function renderApprovals(models, { canDecideApprovals = false } = {}) {
      <form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Approvals</p><h1>Nothing durable or high-impact happens silently.</h1><p class="sub">This queue combines host action approvals with crewrun skill and memory proposals.</p></div></section>
+<section class="hero"><div><p class="eyebrow">Approvals</p><h1>Approvals</h1><p class="sub">This queue combines host action approvals with crewrun skill and memory proposals.</p></div></section>
 <section class="section-heading"><h2>Host action approvals</h2><span class="muted">${hostRows.length} pending</span></section>
 ${table(["kind", "id", "request", "requested by", "decision"], hostRows, "No external actions are awaiting approval. Attach a host approval queue to surface Slack, Gmail, and other connector actions here.")}
 <section class="section-heading"><h2>Memory and skill proposals</h2><span class="muted">${proposalRows.length} pending</span></section>
@@ -375,7 +375,7 @@ function renderAudit(models) {
     pill(entry.outcome || "recorded", toneFor(entry.outcome))
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Audit</p><h1>See the governed operating record.</h1><p class="sub">Every row is limited to actor, role, model, authority, data scope, budget, and outcome metadata. Inputs, outputs, credentials, and error text are never rendered here.</p></div></section>
+<section class="hero"><div><p class="eyebrow">Audit</p><h1>Audit</h1><p class="sub">Review safe metadata for each governed action. Inputs, outputs, credentials, and error text are never rendered here.</p></div></section>
 <section class="section-heading"><h2>Host audit records</h2><span class="muted">${rows.length} safe record${rows.length === 1 ? "" : "s"}</span></section>
 ${table(["time", "actor / role", "model", "action", "authority", "data", "budget", "outcome"], rows, "No host audit records are attached. Return an audit array from the host operations snapshot to surface governed activity.")}`;
 }
@@ -411,7 +411,7 @@ function renderUsage(models) {
   const usage = currentUsage(models.operations.usage);
   if (!usage) {
     return `
-<section class="hero"><div><p class="eyebrow">Usage</p><h1>See what the crew consumes.</h1><p class="sub">Attach a host budget ledger to show reported spend, subscription estimates, token usage, and outcomes.</p></div></section>
+<section class="hero"><div><p class="eyebrow">Usage</p><h1>Usage</h1><p class="sub">Attach a host budget ledger to show reported spend, subscription estimates, token usage, and outcomes.</p></div></section>
 ${empty("No usage ledger is attached to this console. The UI stays read-only and does not invent spend data.")}`;
   }
   const totals = usage.totals || {};
@@ -428,7 +428,7 @@ ${empty("No usage ledger is attached to this console. The UI stays read-only and
     `<code>${esc(row.key || "unknown")}</code>`, formatInt(row.runs), formatCurrency(spendFor(row)), formatInt(row.failures)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Usage</p><h1>${esc(usage.month || "Current usage")}</h1><p class="sub">Reported API spend and equivalent estimates for local subscription runs stay visibly separate.</p></div><span class="pill ${estimatedOnly ? "warn" : "info"}">${estimatedOnly ? "estimate-led" : "ledger-backed"}</span></section>
+<section class="hero"><div><p class="eyebrow">Usage</p><h1>Usage</h1><p class="sub">${esc(usage.month || "Current period")} · reported API spend and equivalent estimates for local subscription runs stay visibly separate.</p></div><span class="pill ${estimatedOnly ? "warn" : "info"}">${estimatedOnly ? "estimate-led" : "ledger-backed"}</span></section>
 <section class="summary-grid">
   ${metric("Total spend", formatCurrency(spendFor(totals)), "spend", formatCurrency(totals.estimatedCostUsd || 0) + " subscription estimate", "info")}
   ${metric("Runs", formatInt(totals.runs), "runs", formatInt(totals.failures) + " failed", totals.failures ? "warn" : "success")}
@@ -459,7 +459,7 @@ function renderProviders(models) {
   ]);
   const tools = models.providerRuntime;
   return `
-<section class="hero"><div><p class="eyebrow">Providers</p><h1>Models and credentials stay operator-owned.</h1><p class="sub">The console only shows configuration state. It never renders API keys, access tokens, or subscription credentials.</p></div></section>
+<section class="hero"><div><p class="eyebrow">Providers</p><h1>Providers</h1><p class="sub">Models and credentials stay operator-owned. The console never renders API keys or tokens.</p></div></section>
 <section class="split">
   <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Installed runtimes</h2></div><div class="list">
     ${listRow("Claude runtime", tools.claude.available ? "available" : "not found", tools.claude.available ? "success" : "warn")}
@@ -478,7 +478,7 @@ ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</
 function renderConnectors(models, { canConnect = false, canDisconnect = false } = {}) {
   const hasHostData = models.operations.hasConnectorData;
   return `
-<section class="hero"><div><p class="eyebrow">Connectors</p><h1>Keep real-world actions behind the host.</h1><p class="sub">Slack and Gmail connections belong to the host’s OAuth store. Roles receive bounded actions, never OAuth tokens.</p></div></section>
+<section class="hero"><div><p class="eyebrow">Connectors</p><h1>Integrations</h1><p class="sub">Slack and Gmail connections belong to the host’s OAuth store. Roles receive bounded actions, never OAuth tokens.</p></div></section>
 ${hasHostData ? "" : notice("No connector host is attached. These cards are safe placeholders: this console will not request or store credentials on its own.")}
 <section class="connector-grid" style="margin-top:16px">${models.operations.connectors.map((connector) => renderConnectorCard(connector, { canConnect, canDisconnect })).join("")}</section>`;
 }
@@ -626,6 +626,7 @@ function when(value) {
 
 function toneFor(value) {
   const text = String(value || "").toLowerCase();
+  if (/not connected|not configured|not found|unavailable/.test(text)) return "";
   if (/connected|ready|healthy|available|configured|approved|enabled|pass|success/.test(text)) return "success";
   if (/error|fail|reject|denied|problem|danger/.test(text)) return "danger";
   if (/pending|warning|warn|locked|disabled|review/.test(text)) return "warn";

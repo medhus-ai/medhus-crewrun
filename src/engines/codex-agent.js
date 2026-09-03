@@ -92,10 +92,14 @@ function isolatedCodexHome(env) {
 export function createCodexAgentEngine({ loadCodex } = {}) {
   const load = loadCodex || (async () => (await import("@openai/codex-sdk")).Codex);
 
-  function threadOptions({ profile, workdir, mode }) {
+  function threadOptions({ profile, workdir, mode, toolContext }) {
+    // Codex's own web search rides the role spec's `web` (runner sets nativeWeb when Codex should
+    // provide it — only for open access, since Codex cannot enforce a host allowlist).
+    const nativeWeb = Boolean(toolContext?.nativeWeb && toolContext?.web);
     return {
       workingDirectory: workdir,
       skipGitRepoCheck: true,
+      webSearchMode: nativeWeb && toolContext.web.search !== false ? "live" : "disabled",
       // propose: sandbox blocks all writes; execute: writes allowed inside the isolated worktree only.
       sandboxMode: mode === "execute" ? "workspace-write" : "read-only",
       ...(profile.model ? { model: profile.model } : {}),
@@ -108,7 +112,8 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
   return {
     id: "codex-agent",
     label: "Codex",
-    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true },
+    // nativeWeb "open": Codex has web search but no per-host allowlist; allowlisted roles use the kernel tools.
+    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, nativeWeb: "open" },
 
     // `tools` is a host MCP bridge; it is served to Codex through the host's stdio entry script.
     startTurn({ targetRoot, profile, workdir, role, mode, capabilities, systemPrompt, prompt, resumeSessionId, toolContext, tools, onLine, onPartialText, onStatus, onClose, onError }) {
@@ -133,7 +138,7 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
           onStatus?.("thinking…");
           const Codex = await load();
           const codex = new Codex(codexClientOptions(profile, mcp.available ? mcp.config : {}, capabilities));
-          const options = threadOptions({ profile, workdir, mode });
+          const options = threadOptions({ profile, workdir, mode, toolContext: effectiveToolContext });
           const thread = resumeSessionId ? codex.resumeThread(resumeSessionId, options) : codex.startThread(options);
           // Codex has no separate system-prompt channel; prepend it on the first turn only.
           const turnPrompt = [

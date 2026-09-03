@@ -71,9 +71,11 @@ const REGISTRY = {
 };
 
 // Built-in tool names for one role in one tool context: the learning tools always, the web
-// tools only when the role's spec enables them. Without a targetRoot nothing can be resolved,
-// so only the ungated tools are offered.
+// tools only when the role's spec enables them AND the engine is not already providing its own
+// web tools for this turn (context.nativeWeb — set by the runner for Claude/Codex). Without a
+// targetRoot nothing can be resolved, so only the ungated tools are offered.
 export function crewToolNamesFor(role, context = {}) {
+  if (context?.nativeWeb) return [...LEARNING_TOOL_NAMES];
   const web = webAccessFor(role, context);
   if (!web) return [...LEARNING_TOOL_NAMES];
   return [...LEARNING_TOOL_NAMES, "web.fetch", ...(web.search ? ["web.search"] : [])];

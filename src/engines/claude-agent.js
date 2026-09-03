@@ -1,6 +1,7 @@
 import { anthropicRouteEnv, secretValueForRunner } from "../secret-store.js";
 import { claudeSubagentDefinitions, claudeSubagentToolRule, roleCapabilityProfile } from "../role-capabilities.js";
 import { emitLines } from "./utils.js";
+import { hostAllowed } from "../web.js";
 
 const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
 // Bash excluded by default: unlike file edits, a shell is not confined to the worktree and runs with the operator's full environment.
@@ -50,9 +51,27 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
       ? (profile.allow_shell === true ? [...EXECUTE_TOOLS, "Bash"] : EXECUTE_TOOLS)
       : READ_ONLY_TOOLS;
     const subagentRule = claudeSubagentToolRule(effectiveCapabilities);
-    const nativeTools = subagentRule ? [...baseTools, "Agent"] : baseTools;
+    // Web access: the role spec's `web` turns on Claude's own WebFetch/WebSearch (the runner sets
+    // toolContext.nativeWeb when this engine should provide it); an allowlist is enforced with a
+    // PreToolUse hook on WebFetch, so the model cannot fetch outside it.
+    const web = toolContext?.nativeWeb ? toolContext.web : null;
+    const webTools = web ? ["WebFetch", ...(web.search ? ["WebSearch"] : [])] : [];
+    const nativeTools = [...(subagentRule ? [...baseTools, "Agent"] : baseTools), ...webTools];
     const mcp = tools && targetRoot ? tools.createClaudeMcp({ sdk, role, targetRoot, toolContext, onToolCall }) : null;
-    const nativeAllowedTools = subagentRule ? [...baseTools, subagentRule] : baseTools;
+    const nativeAllowedTools = [...(subagentRule ? [...baseTools, subagentRule] : baseTools), ...webTools];
+    const webHooks = web && web.allow.length ? {
+      hooks: {
+        PreToolUse: [{
+          matcher: "WebFetch",
+          hooks: [async (input) => {
+            let host = "";
+            try { host = new URL(String(input?.tool_input?.url || "")).hostname; } catch { /* unparsable → deny */ }
+            if (host && hostAllowed(host, web.allow)) return {};
+            return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `${host || "that URL"} is not in this role's web allowlist (${web.allow.join(", ")})` } };
+          }]
+        }]
+      }
+    } : {};
     const allowedTools = mcp ? [...nativeAllowedTools, ...mcp.allowedTools] : nativeAllowedTools;
     const toolInstructions = tools && targetRoot
       ? tools.claudeToolInstructions(role, { ...(toolContext || {}), targetRoot, root: targetRoot })
@@ -75,6 +94,7 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
         forwardSubagentText: true
       } : {}),
       ...(mcp ? { mcpServers: { [mcp.serverName]: mcp.server }, strictMcpConfig: true } : {}),
+      ...webHooks,
       // execute auto-accepts edits inside the isolated worktree; propose denies everything else without prompting.
       permissionMode: mode === "execute" ? "acceptEdits" : "dontAsk",
       maxTurns: 50,
@@ -89,7 +109,8 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
   return {
     id: "claude-agent",
     label: "Claude",
-    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true },
+    // nativeWeb "enforced": the engine's own web tools honor the role's allowlist.
+    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, nativeWeb: "enforced" },
 
     startTurn({ targetRoot, profile, workdir, role, mode, capabilities, systemPrompt, prompt, resumeSessionId, toolContext, tools, onLine, onPartialText, onStatus, onClose, onError }) {
       const abortController = new AbortController();

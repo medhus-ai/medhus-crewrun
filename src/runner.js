@@ -195,6 +195,12 @@ export function createRoleRunner({
     }
     const roleOptions = toolContext?.roleOptions || {};
     const capabilities = capabilityProfile(role, roleOptions);
+    // Web access: prefer the engine's own web tools when it has them and can honor the role's
+    // allowlist ("enforced"), or when the role's access is open anyway ("open"); otherwise the
+    // kernel's web.fetch/web.search built-ins carry the same setting (see crew-tools.js).
+    const web = spec?.web || false;
+    const nativeWebKind = engine.capabilities?.nativeWeb || null;
+    const nativeWeb = Boolean(web) && (nativeWebKind === "enforced" || (nativeWebKind === "open" && !web.allow.length));
     const workProfile = String(toolContext?.workProfile?.kind || "");
     const skills = listSkills({ targetRoot, role, workProfile });
     const preferences = listPreferences({ targetRoot }).effective;
@@ -247,7 +253,9 @@ export function createRoleRunner({
         targetRoot,
         root: targetRoot,
         role,
-        capabilities
+        capabilities,
+        web,
+        nativeWeb
       },
       tools,
       onLine,

@@ -198,6 +198,42 @@ test("codex-agent engine resumes threads and reports the thread id", async () =>
   assert.equal(closed.engineSessionId, "thread-42");
 });
 
+test("claude-agent engine turns on native WebFetch/WebSearch for web roles and enforces the allowlist with a hook", async () => {
+  const off = {};
+  await runClaude(createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(off, [OK_RESULT]) }), { toolContext: { web: { allow: [], search: true }, nativeWeb: false } });
+  assert.deepEqual(off.options.tools, ["Read", "Grep", "Glob"], "no native web unless the runner says nativeWeb");
+
+  const open = {};
+  await runClaude(createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(open, [OK_RESULT]) }), { toolContext: { web: { allow: [], search: true, max_chars: 1 }, nativeWeb: true } });
+  assert.deepEqual(open.options.tools, ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
+  assert.deepEqual(open.options.allowedTools, ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
+  assert.equal(open.options.hooks, undefined, "open access needs no hook");
+
+  const scoped = {};
+  await runClaude(createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(scoped, [OK_RESULT]) }), { toolContext: { web: { allow: ["*.arxiv.org"], search: false }, nativeWeb: true } });
+  assert.deepEqual(scoped.options.tools, ["Read", "Grep", "Glob", "WebFetch"], "search:false drops WebSearch");
+  const [matcher] = scoped.options.hooks.PreToolUse;
+  assert.equal(matcher.matcher, "WebFetch");
+  const [hook] = matcher.hooks;
+  assert.deepEqual(await hook({ tool_input: { url: "https://export.arxiv.org/abs/1" } }), {});
+  const denied = await hook({ tool_input: { url: "https://evil.test/" } });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /evil\.test is not in this role's web allowlist/);
+});
+
+test("codex-agent engine maps the role's web setting to webSearchMode", async () => {
+  const run = (toolContext) => new Promise((resolve, reject) => {
+    const captured = {};
+    class FakeThread { async runStreamed() { return { events: (async function* () { yield { type: "turn.completed", usage: {} }; })() }; } }
+    class FakeCodex { constructor() {} startThread(options) { captured.threadOptions = options; return new FakeThread(); } }
+    createCodexAgentEngine({ loadCodex: async () => FakeCodex }).startTurn({ profile: { id: "c" }, workdir: tmpRoot, role: "r", mode: "propose", prompt: "p", toolContext, onClose: () => resolve(captured), onError: reject });
+  });
+  assert.equal((await run({})).threadOptions.webSearchMode, "disabled");
+  assert.equal((await run({ web: { allow: [], search: true }, nativeWeb: true })).threadOptions.webSearchMode, "live");
+  assert.equal((await run({ web: { allow: [], search: false }, nativeWeb: true })).threadOptions.webSearchMode, "disabled");
+  assert.equal((await run({ web: { allow: ["x.org"], search: true }, nativeWeb: false })).threadOptions.webSearchMode, "disabled", "allowlisted roles fall back to the kernel tools");
+});
+
 test("codex-agent engine streams items, maps sandbox per mode, and serves host tools over stdio MCP", async () => {
   const captured = {};
   const root = path.join(tmpRoot, "codex-mcp-root");

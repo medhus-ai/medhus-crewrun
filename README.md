@@ -77,12 +77,14 @@ A project is any directory with a `.crew/` folder. Each role is a spec at
 }
 ```
 
-**Web access** is off unless a role opts in. `"web": true` gives the role the built-in
-`web.fetch` (read-only GET, HTML stripped, capped) and `web.search` (DuckDuckGo, no key) tools;
-`{ "allow": [...] }` restricts fetches to matching hosts (`*.example.com` covers subdomains),
-`"search": false` drops search, `"max_chars"` caps page text. Fetches refuse private and loopback
-addresses and re-check every redirect hop against the allowlist. Roles without `web` never see the
-tools, so the model cannot be talked into browsing.
+**Web access** is off unless a role opts in with `"web": true` or `{ "allow": [...], "search":
+true, "max_chars": 40000 }`. The runtime then hands the role the best web tools the engine has:
+Claude's own `WebSearch`/`WebFetch` (the allowlist is enforced with a PreToolUse hook), Codex's
+built-in web search (open access only — Codex cannot scope hosts), and for every other engine, or
+for allowlisted Codex roles, the kernel's built-in `web.fetch` (read-only GET, redirect hops
+re-checked, private/loopback addresses refused, HTML→text, capped) and `web.search` (DuckDuckGo,
+no key). `*.example.com` covers subdomains; `"search": false` drops search. Roles without `web`
+never see any web tool, so the model cannot be talked into browsing.
 
 `roles/_defaults.json` supplies values every role inherits (its `memory_pointers` prepend as the
 shared floor). Pointers may name any file in the repository — including the role's own optional

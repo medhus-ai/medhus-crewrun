@@ -63,7 +63,7 @@ a { color: inherit; }
 .workspace-name { display: block; overflow: hidden; font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-plan { display: block; color: var(--muted); font-size: 11px; }
 .workspace-more { display: inline-flex; color: #59616d; }
-main { width: min(1074px, calc(100% - 56px)); min-width: 0; margin: 0 auto; padding: 41px 0 64px; }
+main { width: min(1074px, calc(100% - 56px)); min-width: 0; margin: 0 auto; padding: 41px 28px 64px; }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 0 0 28px; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .hero .eyebrow { display: none; }
 h1 { margin: 0; color: #111214; font-size: 21px; font-weight: 580; line-height: 1.24; letter-spacing: -.018em; }

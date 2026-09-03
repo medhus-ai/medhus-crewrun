@@ -65,7 +65,7 @@ if (command === "--version" || command === "-v") {
     const isSkill = skills.some((proposal) => proposal.id === id);
     const fn = sub === "approve" ? (isSkill ? approveSkill : approvePreference) : (isSkill ? rejectSkill : rejectPreference);
     const result = fn({ targetRoot, proposalId: id, approvedBy: "operator" });
-    console.log(`${sub}d ${id}${result?.installedAt ? ` → ${result.installedAt}` : ""}`);
+    console.log(`${sub === "approve" ? "approved" : "rejected"} ${id}${result?.installedAt ? ` → ${result.installedAt}` : ""}`);
   } else {
     fail("usage: crewrun proposals list|approve|reject <targetRoot> [proposal-id]");
   }

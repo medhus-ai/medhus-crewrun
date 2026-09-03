@@ -1,7 +1,7 @@
 {
   "name": "medhus-crewrun",
-  "version": "0.5.1",
-  "description": "Run a crew of AI roles on the vendor agent runtimes you already pay for — Claude, Codex, OpenRouter, local — with brokered tools over MCP, sandboxed edits, and a cost ledger.",
+  "version": "0.6.0",
+  "description": "Run governed AI roles on the vendor agent runtimes you already pay for — with brokered tools, approvals, audited handoffs, isolation, and a cost ledger.",
   "keywords": [
     "agents",
     "claude-agent-sdk",

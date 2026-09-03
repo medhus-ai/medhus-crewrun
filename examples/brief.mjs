@@ -9,6 +9,8 @@ import path from "node:path";
 
 import { createMcpBridge } from "medhus-crewrun/mcp";
 import { createRoleRunner } from "medhus-crewrun/runner";
+import { createRoleGovernance } from "medhus-crewrun/role-contract";
+import { loadRoleSpec } from "medhus-crewrun/role-spec";
 import { createToolBroker } from "medhus-crewrun/tool-broker";
 import { createWorkItemSource } from "medhus-crewrun/work-items";
 
@@ -24,6 +26,17 @@ writeFileSync(path.join(project, ".crew", "roles", "ceo.md"), [
   "Read the open work items with the inbox tool, then write a five-line brief: top priority,",
   "blockers, and the one decision the founder must make today. Do not invent items."
 ].join("\n"));
+writeFileSync(path.join(project, ".crew", "roles", "ceo.json"), JSON.stringify({
+  title: "Chief Executive Officer",
+  runner: RUNNER,
+  memory_pointers: [".crew/roles/ceo.md"],
+  contract: {
+    version: 1,
+    revision: 1,
+    mandate: "Read open work items and prepare the founder's daily brief.",
+    authority: { tools: [{ name: "inbox.list", impact: "read" }] }
+  }
+}, null, 2));
 writeFileSync(path.join(project, ".crew", "memory", "ai-runners.json"), JSON.stringify({ version: 1, default_role_runners: { ceo: RUNNER } }));
 
 // 2. Work items as files.
@@ -32,13 +45,20 @@ inbox.create("renew-domain", { title: "Renew the domain", fields: { status: "ope
 inbox.create("pricing-page", { title: "Draft the pricing page", fields: { status: "blocked", owner: "GTM", priority: "P2" }, body: "Blocked on the CEO's pricing direction." });
 
 // 3. Tools the role may call, brokered per role and served to the model over MCP.
-const broker = createToolBroker({ allowlists: { ceo: ["inbox.list"] } });
+const governance = createRoleGovernance({
+  targetRoot: project,
+  requireContracts: true,
+  getContract: (role) => loadRoleSpec(project, role)?.contract
+});
+const broker = createToolBroker({ allowlists: { ceo: ["inbox.list"] }, governance });
 const registry = { "inbox.list": async (input) => inbox.list(input.status ? { status: input.status } : {}) };
 const tools = createMcpBridge({
   serverName: "company",
+  governance,
   toolsForRole: (role) => broker.toolsForRole(role),
   describe: () => "List work items, optionally filtered by status.",
   inputSchema: (name, z) => ({ status: z.string().optional() }),
+  actionPolicy: () => ({ impact: "read" }),
   call: ({ role, toolName, input }) => broker.callTool({ role, toolName, input, registry })
 });
 

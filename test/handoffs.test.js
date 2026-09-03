@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createConversationStore } from "../src/conversations.js";
 import { HANDOFF_STATUSES, createHandoffQueue } from "../src/handoffs.js";
+import { createRoleGovernance } from "../src/role-contract.js";
 
 const Database = await import("better-sqlite3")
   .then((m) => { new m.default(":memory:").close(); return m.default; })
@@ -67,4 +68,45 @@ sqlite("leases fence stale workers and expire so a stranded batch is recoverable
   assert.throws(() => queue.enqueueHandoff({ targetRoot: "/elsewhere", conversationId: cid, taskKey: "i7", body: "x" }), /belongs to/);
   assert.throws(() => queue.enqueueHandoff({ targetRoot: "/repo", conversationId: 999, taskKey: "i7", body: "x" }), /does not exist/);
   assert.throws(() => createHandoffQueue({ getDb: () => null, table: "bad;name" }), /invalid handoff table/);
+});
+
+sqlite("a governed queue checks both handoff sides and records only route metadata", () => {
+  const db = new Database(":memory:");
+  const conversations = createConversationStore({ getDb: () => db, singletonRoles: ["manager", "reviewer"] });
+  const cid = conversations.getOrCreateConversation({ targetRoot: "/repo", role: "manager", workItemId: 9 });
+  const reviewerCid = conversations.getOrCreateConversation({ targetRoot: "/repo", role: "reviewer", workItemId: 9 });
+  const records = [];
+  const contract = (handoffs) => ({
+    version: 1,
+    mandate: "Handle reviewed handoffs.",
+    authority: { handoffs }
+  });
+  const governance = createRoleGovernance({
+    requireContracts: true,
+    contracts: {
+      analyst: contract({ send: ["manager", "reviewer"] }),
+      manager: contract({ receive: ["analyst"] }),
+      reviewer: contract({ receive: ["analyst"] })
+    },
+    audit: { append: (record) => { records.push(record); return record; } }
+  });
+  const queue = createHandoffQueue({ getDb: () => db, table: "governed_handoffs", governance });
+  const created = queue.enqueueHandoff({
+    targetRoot: "/repo", conversationId: cid, taskKey: "i9", body: "private customer context", fromRole: "analyst", externalId: "handoff-1"
+  });
+  assert.equal(created.handoff.fromRole, "analyst");
+  assert.equal(records.length, 2, "both send and receive authority are auditable");
+  assert.equal(records[0].input.body, undefined, "the governance audit receives no handoff body");
+  assert.throws(() => queue.enqueueHandoff({
+    targetRoot: "/repo", conversationId: reviewerCid, taskKey: "i9", body: "must not reveal the original body", fromRole: "analyst", externalId: "handoff-1"
+  }), /different role handoff/);
+  const ingress = queue.enqueueHandoff({
+    targetRoot: "/repo", conversationId: cid, taskKey: "signed-webhook", body: "trusted host ingress"
+  });
+  assert.equal(ingress.handoff.fromRole, null, "legacy host/webhook ingress remains role-neutral");
+  assert.equal(records.length, 2, "host ingress is not misrepresented as a role handoff");
+  assert.throws(() => queue.enqueueHandoff({
+    targetRoot: "/repo", conversationId: cid, taskKey: "i9", body: "blocked", fromRole: "untrusted"
+  }), /not authorized/);
+  assert.equal(queue.listHandoffs({ targetRoot: "/repo" }).length, 2);
 });

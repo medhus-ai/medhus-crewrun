@@ -8,6 +8,7 @@ import test from "node:test";
 import { createMcpBridge, mcpToolFullName, sanitizeToolName, toolError, toolResult } from "../src/mcp.js";
 import { configureCrew } from "../src/crew-dirs.js";
 import { buildMcpServer, loadMcpAuthEnv, mcpRoleFromEnv, readMcpContextData } from "../src/mcp-stdio.js";
+import { createRoleGovernance } from "../src/role-contract.js";
 
 function demoRegistry(overrides = {}) {
   const calls = [];
@@ -195,4 +196,31 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
   assert.equal(ok.structuredContent.text, "hello https://example.com/x");
   const denied = await scoutFetch.invoke({ url: "https://evil.test/x" });
   assert.equal(denied.isError, true, "allowlist enforced");
+});
+
+test("a governed bridge never registers kernel or host tools outside the role contract", () => {
+  const governance = createRoleGovernance({
+    requireContracts: true,
+    contracts: {
+      researcher: {
+        version: 1,
+        revision: 3,
+        mandate: "Read approved reusable research guidance.",
+        authority: { tools: [{ name: "skill.read", impact: "read" }] }
+      }
+    }
+  });
+  const bridge = createMcpBridge({
+    serverName: "governed",
+    governance,
+    toolsForRole: () => ["docs.read"],
+    describe: (name) => name,
+    inputSchema: () => ({}),
+    call: async () => ({ ok: true })
+  });
+  const names = bridge.toolHandlers({ role: "researcher", toolContext: { targetRoot: "/repo" } })
+    .map((handler) => handler.toolName);
+  assert.deepEqual(names, ["skill.read"]);
+  assert.equal(bridge.toolHandlers({ role: "legacy", toolContext: { targetRoot: "/repo" } }).length, 0,
+    "requireContracts fails closed for uncontracted roles");
 });

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
 import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
+import { mergeRoleContracts, summarizeRoleContract } from "./role-contract.js";
 import { normalizeWeb } from "./web.js";
 
 // The role spec: <crew>/roles/<role>.json holds everything about how one role runs —
@@ -88,6 +89,9 @@ export function loadRoleSpec(targetRoot, role) {
   const reflections = own?.reflections === false
     ? false
     : { limit: Math.max(1, Math.min(Number(own?.reflections?.limit ?? defaults.reflections?.limit ?? 10) || 10, 100)) };
+  // The contract stays alongside the ordinary role spec so it is versioned and code-reviewed
+  // with the role. Defaults may add a shared floor, but cannot weaken approval or budget limits.
+  const contract = mergeRoleContracts(defaults.contract, own?.contract, { role });
 
   return {
     role,
@@ -101,6 +105,8 @@ export function loadRoleSpec(targetRoot, role) {
     // Web access is off unless the role (or the defaults floor) opts in — see web.js.
     web: normalizeWeb(own?.web ?? defaults.web ?? false),
     schedules: (Array.isArray(own?.schedules) ? own.schedules : []).map((entry) => ({ ...entry, role })),
+    contract,
+    contractSummary: summarizeRoleContract(contract, { role }),
     hasSpecFile: Boolean(specFile),
     hasMd
   };

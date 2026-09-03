@@ -33,12 +33,24 @@ export function toolError(error) {
 
 const DEFAULT_PASSTHROUGH = ["PATH", "HOME"];
 
+// Kernel tools do not have provider descriptors, so their low-risk behavior is explicit before
+// a governed role sees them. Host registries may supply actionPolicy() for the same treatment.
+const CREW_TOOL_POLICY = Object.freeze({
+  "skill.read": { impact: "read" },
+  "memory.reflect": { impact: "internal-write" },
+  "skill.propose": { impact: "internal-write" },
+  "prefs.propose": { impact: "internal-write" },
+  "web.fetch": { impact: "read" },
+  "web.search": { impact: "read" }
+});
+
 // Exposes a host tool registry to Claude (in-process SDK server) and Codex (stdio child server).
 // Registry contract — required: serverName, toolsForRole(role, roleOptions), describe(toolName),
 // inputSchema(toolName, z), call({ role, toolName, input, context, roleOptions }).
 // Optional: label, toolLineMarker, instructions, enabled(toolContext), validate(toolName, input),
 // alwaysLoad(toolName), toolInstructions(role, toolContext, toolNames), serializeContext(toolContext),
-// serializableContextKeys, childEnvPassthrough, childEnvPrefixes, childAuthEnv, stdioServerEntry.
+// serializableContextKeys, childEnvPassthrough, childEnvPrefixes, childAuthEnv, stdioServerEntry,
+// governance (createRoleGovernance facade), actionPolicy(toolName, { role, ...toolContext }).
 export function createMcpBridge(registry) {
   if (!registry?.serverName) throw new Error("createMcpBridge requires registry.serverName");
   const serverName = registry.serverName;
@@ -52,16 +64,55 @@ export function createMcpBridge(registry) {
 
   function toolNamesFor(role, toolContext = {}) {
     const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
-    if (!includeCrewTools) return hostNames;
-    // The kernel's built-in tools ride along (the gated ones only when the role's spec enables
-    // them); a host tool with the same name wins.
-    return [...hostNames, ...crewToolDefinitions.namesFor(role, toolContext).filter((name) => !hostNames.includes(name))];
+    const candidates = !includeCrewTools
+      ? hostNames
+      // The kernel's built-in tools ride along (the gated ones only when the role's spec enables
+      // them); a host tool with the same name wins.
+      : [...hostNames, ...crewToolDefinitions.namesFor(role, toolContext).filter((name) => !hostNames.includes(name))];
+    return candidates.filter((toolName) => toolVisibleForRole(role, toolName, toolContext, hostNames));
   }
 
   function isCrewTool(role, toolName, toolContext = {}) {
     if (!includeCrewTools) return false;
     const hostNames = registry.toolsForRole(role, toolContext.roleOptions || {}) || [];
     return !hostNames.includes(toolName) && crewToolDefinitions.namesFor(role, toolContext).includes(toolName);
+  }
+
+  function authorityForTool(role, toolName, toolContext = {}) {
+    const governance = registry.governance;
+    if (!governance?.authorizeAction) return null;
+    const policy = isCrewTool(role, toolName, toolContext)
+      ? CREW_TOOL_POLICY[toolName] || { impact: "read" }
+      : registry.actionPolicy?.(toolName, { ...toolContext, role }) || {};
+    return governance.authorizeAction({
+      role,
+      toolName,
+      impact: policy.impact,
+      data: policy.data,
+      approval: null
+    });
+  }
+
+  function toolVisibleForRole(role, toolName, toolContext, hostNames) {
+    const governance = registry.governance;
+    if (!governance?.authorizeAction) return true;
+    try {
+      const decision = authorityForTool(role, toolName, toolContext, hostNames);
+      // Approval-gated actions remain visible so they can produce a host-owned approval
+      // request. Fully denied actions are never registered with either MCP transport.
+      return !decision || decision.allowed || decision.decision === "approval-required" || decision.decision === "legacy";
+    } catch {
+      // A malformed policy must not create a new avenue around the governed boundary.
+      return false;
+    }
+  }
+
+  function assertCrewToolAuthority(role, toolName, toolContext = {}) {
+    if (!isCrewTool(role, toolName, toolContext)) return;
+    const decision = authorityForTool(role, toolName, toolContext);
+    if (!decision || decision.allowed || decision.decision === "legacy") return;
+    if (decision.decision === "approval-required") throw new Error(`${toolName} requires host approval`);
+    throw new Error(decision.reason || `${toolName} is outside this role's authority`);
   }
 
   function toolHandlers({ role, toolContext = {}, schemaApi = zod, onToolCall } = {}) {
@@ -80,6 +131,9 @@ export function createMcpBridge(registry) {
           const validation = !crew && registry.validate ? registry.validate(toolName, args) : { ok: true, input: args };
           if (!validation.ok) return toolError(new Error(validation.error));
           try {
+            // Host tools receive the same enforcement through createToolBroker. Kernel tools do
+            // not pass through that broker, so recheck their role contract at invocation too.
+            assertCrewToolAuthority(role, toolName, toolContext);
             return toolResult(await source.call({ role, toolName, input: validation.input, context: toolContext, roleOptions }));
           } catch (error) {
             return toolError(error);
@@ -109,7 +163,7 @@ export function createMcpBridge(registry) {
     ));
     const server = sdk.createSdkMcpServer({
       name: serverName,
-      version: "0.1.0",
+      version: "0.6.0",
       instructions: registry.instructions || "",
       tools,
       alwaysLoad: false

@@ -111,6 +111,10 @@ export function createSlackHost({
   users,
   resolveUser,
   runTurn,
+  approveReply,
+  // Optional v0.6 governance facade. When supplied, every outbound Slack reply is evaluated
+  // against the role contract before the approval policy and again immediately before posting.
+  governance = null,
   postMessage,
   dedupe = createEventDedupe(),
   endpoint = "/slack/events",
@@ -124,6 +128,7 @@ export function createSlackHost({
   const secret = String(signingSecret || "").trim();
   if (!secret) throw new Error("Slack signingSecret is required");
   if (typeof runTurn !== "function") throw new Error("Slack runTurn adapter is required");
+  if (typeof approveReply !== "function") throw new Error("Slack host needs an approveReply policy for external replies");
   if (typeof resolveUser !== "function" && (!users || userCount(users) === 0)) {
     throw new Error("Configure at least one Slack user or provide resolveUser(event)");
   }
@@ -197,24 +202,95 @@ export function createSlackHost({
   async function startAsyncTurn(input) {
     const task = (async () => {
       let postingReply = false;
+      let activeReply = null;
       try {
         const text = replyText(await runTurn(input));
         if (!text) throw new Error("runner returned no reply text");
+        activeReply = await replyApproved(input, text);
+        if (!activeReply) return;
+        await recordReply(activeReply, "started");
         postingReply = true;
-        await post({ channel: input.channel, threadTs: input.threadTs, text });
+        const output = await post({ channel: input.channel, threadTs: input.threadTs, text });
+        await recordReply(activeReply, "completed", { output });
       } catch (error) {
         log(logger, "error", `Slack turn failed for ${input.eventId}`, error);
-        if (postingReply) return;
+        if (postingReply) {
+          try { await recordReply(activeReply, "failed", { error }); } catch { /* the attempted post is already logged */ }
+          return;
+        }
         try {
-          await post({ channel: input.channel, threadTs: input.threadTs, text: failureText });
+          const fallback = await replyApproved(input, failureText);
+          if (fallback) {
+            activeReply = fallback;
+            await recordReply(fallback, "started");
+            postingReply = true;
+            const output = await post({ channel: input.channel, threadTs: input.threadTs, text: failureText });
+            await recordReply(fallback, "completed", { output });
+          }
         } catch (postError) {
           log(logger, "error", `Slack failure reply could not be posted for ${input.eventId}`, postError);
+          try {
+            if (postingReply) await recordReply(activeReply, "failed", { error: postError });
+          } catch { /* the attempted post is already logged */ }
         }
       }
     })();
     inFlight.add(task);
     task.finally(() => inFlight.delete(task));
     return task;
+  }
+
+  async function replyApproved(input, text) {
+    const role = String(input.user?.role || "").trim();
+    const actionInput = { channel: input.channel, threadTs: input.threadTs, text };
+    const data = { read: [], write: [`connector:slack:${String(input.channel || "").toLowerCase()}`] };
+    const initial = governance?.authorizeAction
+      ? await governance.authorizeAction({ role, toolName: "slack.replyToMention", impact: "external-write", data, approval: null })
+      : null;
+    if (initial && !initial.allowed && initial.decision !== "approval-required") {
+      await recordReply({ role, input, actionInput, data, decision: initial, approval: null }, initial.decision || "denied");
+      log(logger, "warn", `Slack reply is outside ${role || "this"} role authority for ${input.eventId}`);
+      return null;
+    }
+    const hostDecision = await approveReply({
+      role,
+      action: "slack.replyToMention",
+      input: actionInput,
+      eventId: input.eventId,
+      userId: input.userId,
+      user: input.user
+    });
+    const approval = normalizeApproval(hostDecision, input);
+    if (approval) {
+      const final = governance?.authorizeAction
+        ? await governance.authorizeAction({ role, toolName: "slack.replyToMention", impact: "external-write", data, approval })
+        : null;
+      if (!final || final.allowed || final.decision === "legacy") {
+        return { role, input, actionInput, data, decision: final || initial, approval };
+      }
+      await recordReply({ role, input, actionInput, data, decision: final, approval }, final.decision || "denied");
+      log(logger, "warn", `Slack reply withheld by role contract for ${input.eventId}`);
+      return null;
+    }
+    log(logger, "warn", `Slack reply withheld by host approval policy for ${input.eventId}`);
+    return null;
+  }
+
+  async function recordReply(replyState, outcome, { output, error } = {}) {
+    if (!replyState || typeof governance?.recordAction !== "function") return null;
+    return await governance.recordAction({
+      role: replyState.role,
+      actor: "slack-gateway",
+      action: "tool",
+      toolName: "slack.replyToMention",
+      input: replyState.actionInput,
+      ...(output !== undefined ? { output } : {}),
+      ...(error ? { error: error?.message || String(error) } : {}),
+      data: replyState.data,
+      approval: replyState.approval,
+      outcome,
+      decision: replyState.decision
+    });
   }
 
   async function handleRequest(req, res) {
@@ -273,6 +349,15 @@ function replyText(result) {
   if (typeof result === "string") return result.trim();
   if (result && typeof result === "object") return String(result.text || "").trim();
   return "";
+}
+
+function normalizeApproval(value, input) {
+  if (value !== true && (!value || typeof value !== "object" || Array.isArray(value))) return null;
+  const status = String(value === true ? "approved" : value.status ?? (value.allowed ? "approved" : "")).trim().toLowerCase();
+  if (status !== "approved") return null;
+  const id = String(value === true ? "" : value.id || "").trim() || `slack-event:${String(input.eventId || "").trim()}`;
+  const approvedBy = String(value === true ? "" : value.approved_by ?? value.approvedBy ?? "").trim() || "slack-host-policy";
+  return { id, approved_by: approvedBy, status: "approved" };
 }
 
 function reply(status, body = "", headers = {}) {

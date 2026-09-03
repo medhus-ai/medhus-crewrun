@@ -28,6 +28,7 @@ export function ensureHandoffSchema(db, { table = "handoffs" } = {}) {
       conversation_id INTEGER NOT NULL,
       task_key TEXT NOT NULL,
       external_id TEXT,
+      from_role TEXT,
       body TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'queued',
       message_id INTEGER,
@@ -46,6 +47,7 @@ export function ensureHandoffSchema(db, { table = "handoffs" } = {}) {
   const cols = new Set(db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name));
   if (!cols.has("lease_token")) db.exec(`ALTER TABLE ${t} ADD COLUMN lease_token TEXT`);
   if (!cols.has("lease_expires_at")) db.exec(`ALTER TABLE ${t} ADD COLUMN lease_expires_at TEXT`);
+  if (!cols.has("from_role")) db.exec(`ALTER TABLE ${t} ADD COLUMN from_role TEXT`);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${t}_pending ON ${t} (conversation_id, status, next_attempt_at, id);
     CREATE INDEX IF NOT EXISTS idx_${t}_root ON ${t} (target_root, status, next_attempt_at, id);
@@ -55,7 +57,7 @@ export function ensureHandoffSchema(db, { table = "handoffs" } = {}) {
   `);
 }
 
-export function createHandoffQueue({ getDb, table = "handoffs", batchLimit = DEFAULT_BATCH_LIMIT, leaseMs = HANDOFF_LEASE_MS } = {}) {
+export function createHandoffQueue({ getDb, table = "handoffs", batchLimit = DEFAULT_BATCH_LIMIT, leaseMs = HANDOFF_LEASE_MS, governance = null } = {}) {
   if (typeof getDb !== "function") throw new Error("createHandoffQueue requires a getDb() handle");
   const t = tableName(table);
   const S = HANDOFF_STATUSES;
@@ -72,36 +74,87 @@ export function createHandoffQueue({ getDb, table = "handoffs", batchLimit = DEF
 
   // `externalId` (a request or operation id) makes a retried caller get the original handoff
   // instead of creating a second turn.
-  function enqueueHandoff({ targetRoot, conversationId, taskKey, body, externalId = "" } = {}) {
+  function enqueueHandoff({ targetRoot, conversationId, taskKey, body, externalId = "", fromRole = "" } = {}) {
     const root = normalizeRoot(targetRoot);
     const cid = Number(conversationId);
     const key = String(taskKey || "").trim();
     const text = String(body || "").trim();
     const external = String(externalId || "").trim() || null;
+    const sender = normalizeRole(fromRole);
     if (!root) throw new Error("targetRoot is required for a handoff");
     if (!Number.isInteger(cid) || cid <= 0) throw new Error("conversationId is required for a handoff");
     if (!key) throw new Error("taskKey is required for a handoff");
     if (!text) throw new Error("body is required for a handoff");
     const handle = db();
-    const owner = handle.prepare("SELECT target_root FROM conversations WHERE id = ?").get(cid);
+    const owner = handle.prepare("SELECT target_root, role FROM conversations WHERE id = ?").get(cid);
     if (!owner) throw new Error(`conversation ${cid} does not exist`);
     if (owner.target_root !== root) throw new Error(`conversation ${cid} belongs to ${owner.target_root}, not ${root}`);
+    const authorization = authorizeHandoff({ sender, receiver: owner.role, targetRoot: root, conversationId: cid, taskKey: key, externalId: external });
     const now = new Date().toISOString();
     if (external) {
-      return handle.transaction(() => {
+      const result = handle.transaction(() => {
         const info = handle.prepare(`
-          INSERT OR IGNORE INTO ${t} (target_root, conversation_id, task_key, external_id, body, status, attempt_count, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-        `).run(root, cid, key, external, text, S.QUEUED, now, now);
+          INSERT OR IGNORE INTO ${t} (target_root, conversation_id, task_key, external_id, from_role, body, status, attempt_count, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        `).run(root, cid, key, external, sender || null, text, S.QUEUED, now, now);
         const row = handle.prepare(`SELECT * FROM ${t} WHERE target_root = ? AND task_key = ? AND external_id = ? LIMIT 1`).get(root, key, external);
         return { handoff: normalize(row), created: Number(info.changes || 0) === 1 };
       })();
+      // The original idempotency contract is intentionally unchanged for host/webhook ingress.
+      // A role-originated retry, however, must not use a key that resolves to another role's
+      // conversation: returning that row would expose its queued body to the caller and make the
+      // audit trail ambiguous. `fromRole` is supplied by the trusted host execution context.
+      if (!result.created && sender && (result.handoff?.conversationId !== cid || result.handoff?.fromRole !== sender)) {
+        throw new Error("externalId already belongs to a different role handoff");
+      }
+      if (result.created) recordHandoff(authorization, { sender, receiver: owner.role, targetRoot: root, conversationId: cid, taskKey: key, externalId: external });
+      return result;
     }
     const info = handle.prepare(`
-      INSERT INTO ${t} (target_root, conversation_id, task_key, external_id, body, status, attempt_count, created_at, updated_at)
-      VALUES (?, ?, ?, NULL, ?, ?, 0, ?, ?)
-    `).run(root, cid, key, text, S.QUEUED, now, now);
-    return { handoff: getHandoff(Number(info.lastInsertRowid)), created: true };
+      INSERT INTO ${t} (target_root, conversation_id, task_key, external_id, from_role, body, status, attempt_count, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, 0, ?, ?)
+    `).run(root, cid, key, sender || null, text, S.QUEUED, now, now);
+    const result = { handoff: getHandoff(Number(info.lastInsertRowid)), created: true };
+    recordHandoff(authorization, { sender, receiver: owner.role, targetRoot: root, conversationId: cid, taskKey: key, externalId: null });
+    return result;
+  }
+
+  function authorizeHandoff({ sender, receiver, targetRoot, conversationId, taskKey, externalId }) {
+    if (!sender || !governance?.authorizeHandoff) return null;
+    const send = governance.authorizeHandoff({ role: sender, peerRole: receiver, direction: "send" });
+    const receive = governance.authorizeHandoff({ role: receiver, peerRole: sender, direction: "receive" });
+    const input = { targetRoot, conversationId, taskKey, externalId, peerRole: receiver };
+    if (!send?.allowed || !receive?.allowed) {
+      recordHandoff({ send, receive }, { sender, receiver, ...input, outcome: "denied" });
+      const reason = !send?.allowed ? send?.reason : receive?.reason;
+      throw new Error(`handoff ${sender} → ${receiver} is not authorized${reason ? `: ${reason}` : ""}`);
+    }
+    return { send, receive };
+  }
+
+  function recordHandoff(decisions, { sender, receiver, targetRoot, conversationId, taskKey, externalId, outcome = "authorized" }) {
+    if (!decisions || typeof governance?.recordAction !== "function") return;
+    // Keep the queue body in its durable handoff record; the separate governance audit gets
+    // only route metadata so an audit viewer can prove authority without exposing work content.
+    const input = { targetRoot, conversationId, taskKey, externalId, peerRole: receiver };
+    governance.recordAction({
+      role: sender,
+      actor: sender,
+      action: "handoff-send",
+      toolName: "handoff.send",
+      outcome,
+      decision: decisions.send,
+      input
+    });
+    governance.recordAction({
+      role: receiver,
+      actor: sender,
+      action: "handoff-receive",
+      toolName: "handoff.receive",
+      outcome,
+      decision: decisions.receive,
+      input: { ...input, peerRole: sender }
+    });
   }
 
   function getHandoff(id) {
@@ -236,6 +289,7 @@ function normalize(row) {
     conversationId: Number(row.conversation_id),
     taskKey: row.task_key,
     externalId: row.external_id || null,
+    fromRole: row.from_role || null,
     body: row.body || "",
     status: row.status,
     messageId: row.message_id == null ? null : Number(row.message_id),
@@ -273,4 +327,10 @@ function normalizeToken(value) {
 function normalizeRoot(value) {
   const text = String(value || "").trim();
   return text ? path.resolve(text) : "";
+}
+
+function normalizeRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (role && !/^[a-z][a-z0-9-]{0,79}$/.test(role)) throw new Error("fromRole must be a lowercase role slug");
+  return role;
 }

@@ -12,6 +12,7 @@ import { loadRoleSettings, validateRoleSettings } from "../src/pulse.js";
 import { writeSkillIndexFile, renderSkillIndexFile } from "../src/skills.js";
 import { approveSkill, listSkillProposals, rejectSkill } from "../src/skill-proposals.js";
 import { approvePreference, listPreferenceProposals, rejectPreference } from "../src/preference-memory.js";
+import { approveReflection, listReflectionProposals, rejectReflection } from "../src/reflection-proposals.js";
 import { createUp, loadHostModule } from "../src/up.js";
 import { createConsole } from "../src/console/server.js";
 
@@ -34,7 +35,7 @@ if (command === "--version" || command === "-v") {
   const up = createUp({ targetRoot, host, log });
   await up.start();
   if (rest.includes("--console")) {
-    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
+    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: host.operations || host, port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
   }
   const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
@@ -44,7 +45,7 @@ if (command === "--version" || command === "-v") {
   const targetRoot = rest.find((arg) => !arg.startsWith("-"));
   if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--host <module>]");
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], port: Number(argValue(rest, "--port")) || 4400, log }).listen();
+  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || host, port: Number(argValue(rest, "--port")) || 4400, log }).listen();
   setInterval(() => {}, 1 << 30);
 } else if (command === "skills" && rest[0] === "index") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";
@@ -56,14 +57,24 @@ if (command === "--version" || command === "-v") {
   const id = rest.slice(1).filter((arg) => !arg.startsWith("-"))[1];
   const skills = listSkillProposals({ targetRoot });
   const prefs = listPreferenceProposals({ targetRoot });
+  const reflections = listReflectionProposals({ targetRoot });
   if (sub === "list" || !sub) {
     for (const proposal of skills) console.log(`skill  ${proposal.id}  ${proposal.skillId} — ${proposal.description} (by ${proposal.proposedBy})`);
     for (const proposal of prefs) console.log(`pref   ${proposal.id}  ${proposal.key} — ${proposal.statement} (by ${proposal.proposedBy})`);
-    if (!skills.length && !prefs.length) console.log("no pending proposals");
+    for (const proposal of reflections) console.log(`memory ${proposal.id}  ${proposal.role} — ${proposal.text} (by ${proposal.proposedBy})`);
+    if (!skills.length && !prefs.length && !reflections.length) console.log("no pending proposals");
   } else if (sub === "approve" || sub === "reject") {
     if (!id) fail(`usage: crewrun proposals ${sub} <targetRoot> <proposal-id>`);
-    const isSkill = skills.some((proposal) => proposal.id === id);
-    const fn = sub === "approve" ? (isSkill ? approveSkill : approvePreference) : (isSkill ? rejectSkill : rejectPreference);
+    const kind = skills.some((proposal) => proposal.id === id) ? "skill"
+      : prefs.some((proposal) => proposal.id === id) ? "pref"
+        : reflections.some((proposal) => proposal.id === id) ? "reflection" : "";
+    if (!kind) fail(`pending proposal ${id} was not found`);
+    const handlers = {
+      skill: sub === "approve" ? approveSkill : rejectSkill,
+      pref: sub === "approve" ? approvePreference : rejectPreference,
+      reflection: sub === "approve" ? approveReflection : rejectReflection
+    };
+    const fn = handlers[kind];
     const result = fn({ targetRoot, proposalId: id, approvedBy: "operator" });
     console.log(`${sub === "approve" ? "approved" : "rejected"} ${id}${result?.installedAt ? ` → ${result.installedAt}` : ""}`);
   } else {
@@ -89,7 +100,7 @@ if (command === "--version" || command === "-v") {
   crewrun console <targetRoot> [--port N]             the local operator UI without the loop
   crewrun roles check <targetRoot> [--host <module>]  validate role heartbeat/hook settings
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
-  crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/preferences
+  crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version
 
 A host module (optional) injects tools, turn recording, hook routing, and housekeeping:

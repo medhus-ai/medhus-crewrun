@@ -5,6 +5,7 @@ import { crewDir } from "./crew-dirs.js";
 import { createCrewOnlyBridge } from "./mcp.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadRoleSpec } from "./role-spec.js";
+import { roleContractInstructions } from "./role-contract.js";
 import { readReflections, reflectionsPrompt } from "./reflections.js";
 import { createContainerEngine } from "./engines/container.js";
 import { getEngine } from "./engines/index.js";
@@ -204,6 +205,9 @@ export function createRoleRunner({
     const workProfile = String(toolContext?.workProfile?.kind || "");
     const skills = listSkills({ targetRoot, role, workProfile });
     const preferences = listPreferences({ targetRoot }).effective;
+    const governedContext = [roleContractInstructions(spec?.contract, { role }), context]
+      .filter(Boolean)
+      .join("\n\n");
 
     let workdir = targetRoot;
     let branch = null;
@@ -229,12 +233,12 @@ export function createRoleRunner({
 
     const turn = engineId === "cli"
       ? {
-          prompt: buildPromptBody({ role, rolePrompt, memory, messages, context, capabilities, skills, preferences }),
+          prompt: buildPromptBody({ role, rolePrompt, memory, messages, context: governedContext, capabilities, skills, preferences }),
           systemPrompt: null
         }
       : {
-          prompt: resuming ? buildResumePrompt(messages, context) : buildConversationPrompt(messages),
-          systemPrompt: buildSystemPrompt({ role, rolePrompt, memory, mode, context, capabilities, skills, preferences })
+          prompt: resuming ? buildResumePrompt(messages, governedContext) : buildConversationPrompt(messages),
+          systemPrompt: buildSystemPrompt({ role, rolePrompt, memory, mode, context: governedContext, capabilities, skills, preferences })
         };
 
     const handle = engine.startTurn({

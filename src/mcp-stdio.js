@@ -9,7 +9,7 @@ import { crewEnv } from "./crew-dirs.js";
 // context from the serialized data and calls serveStdio with its bridge.
 export function buildMcpServer({ bridge, role, toolContext, ServerClass = McpServer } = {}) {
   const server = new ServerClass(
-    { name: bridge.serverName, version: "0.1.0" },
+    { name: bridge.serverName, version: "0.6.0" },
     { instructions: bridge.registry.instructions || `${bridge.label} internal tools. Respect role permissions; report authorization errors instead of bypassing them.` }
   );
   const handlers = bridge.toolHandlers({ role, toolContext });

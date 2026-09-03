@@ -1,4 +1,4 @@
-import { appendReflection } from "./reflections.js";
+import { proposeReflection } from "./reflection-proposals.js";
 import { readSkill } from "./skills.js";
 import { proposeSkill } from "./skill-proposals.js";
 import { proposePreference } from "./preference-memory.js";
@@ -17,7 +17,7 @@ export const CREW_TOOL_NAMES = [...LEARNING_TOOL_NAMES, ...WEB_TOOL_NAMES];
 
 const DESCRIPTIONS = {
   "skill.read": "Load one skill from the index by id.",
-  "memory.reflect": "Append one or two sentences to your private journal: what worked, or what to avoid next time.",
+  "memory.reflect": "Propose one or two sentences for your private journal: what worked, or what to avoid next time. An operator must approve it before it becomes durable memory.",
   "skill.propose": "Propose a reusable skill (id, description, content) — the operator approves it before it becomes durable.",
   "prefs.propose": "Propose a short durable working preference (key, statement) — the operator approves it before it applies.",
   "web.fetch": "GET one public http(s) URL and return its text (HTML stripped, capped). Read-only; subject to your role's allowlist.",
@@ -48,7 +48,7 @@ export function webAccessFor(role, context) {
 
 const REGISTRY = {
   "skill.read": async (input, { role, context }) => readSkill({ targetRoot: rootFrom(context), id: input?.id, role }),
-  "memory.reflect": async (input, { role, context }) => appendReflection({ targetRoot: rootFrom(context), role, text: input?.text, ref: input?.ref || "" }),
+  "memory.reflect": async (input, { role, context }) => proposeReflection({ targetRoot: rootFrom(context), role, text: input?.text, ref: input?.ref || "", proposedBy: role }),
   "skill.propose": async (input, { role, context }) => proposeSkill({
     targetRoot: rootFrom(context), id: input?.id, description: input?.description, content: input?.content,
     roles: String(input?.roles || "").split(",").map((entry) => entry.trim()).filter(Boolean),

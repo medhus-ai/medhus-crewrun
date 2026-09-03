@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 
 import { createCrewrunTurnAdapter } from "../examples/slack/crewrun-adapter.mjs";
 import { createEventDedupe, createSlackHost, createSlackPoster, promptText, verifySlackSignature } from "../examples/slack/host.mjs";
+import { createActionAuditLog, createRoleGovernance } from "../src/role-contract.js";
 
 const SECRET = "slack-signing-secret";
 const NOW = Date.parse("2026-09-01T12:00:00.000Z");
@@ -43,6 +47,7 @@ function fixture(overrides = {}) {
       calls.push(input);
       return { text: "Here is the report summary." };
     },
+    approveReply: async () => ({ status: "approved", approved_by: "test-policy" }),
     postMessage: async (input) => { posts.push(input); return { ok: true }; },
     dedupe: createEventDedupe({ now: () => NOW }),
     now: () => NOW,
@@ -94,6 +99,62 @@ test("invalid signatures and stale signed payloads are rejected before authoriza
   const stale = signedPayload(mention(), { now: NOW - (6 * 60 * 1000) });
   assert.equal(state.gateway.receive(stale).status, 401);
   assert.equal(verifySlackSignature({ signingSecret: SECRET, rawBody: request.rawBody, timestamp: request.headers["x-slack-request-timestamp"], signature: request.headers["x-slack-signature"], now: NOW }), true);
+});
+
+test("a Slack reply is never posted until the host approval policy allows it", async () => {
+  const state = fixture({ approveReply: async () => ({ status: "rejected" }) });
+  const response = state.gateway.receive(signedPayload(mention({ event_id: "Ev-denied" })));
+  assert.equal(response.status, 200);
+  await runQueued(state);
+  assert.equal(state.calls.length, 1, "the authorized inbound request can still be handled");
+  assert.deepEqual(state.posts, [], "the external reply stays at the host boundary");
+});
+
+test("a governed Slack reply is checked before approval and audited without its text", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "crew-slack-governance-"));
+  const audit = createActionAuditLog({ targetRoot: root, env: { CREW_HOME: path.join(root, "home") } });
+  let approvalRequests = 0;
+  const governance = createRoleGovernance({
+    requireContracts: true,
+    contracts: {
+      analyst: {
+        version: 1,
+        mandate: "Reply only in the approved Slack channel.",
+        authority: {
+          tools: [{ name: "slack.replyToMention", impact: "external-write" }],
+          data: { write: ["connector:slack:c1"] }
+        }
+      }
+    },
+    audit
+  });
+  try {
+    const state = fixture({
+      governance,
+      approveReply: async () => { approvalRequests += 1; return { id: "slack-approval", approved_by: "operator", status: "approved" }; }
+    });
+    assert.equal(state.gateway.receive(signedPayload(mention({ event_id: "Ev-governed" }))).status, 200);
+    await runQueued(state);
+    assert.equal(approvalRequests, 1);
+    assert.equal(state.posts.length, 1);
+    assert.deepEqual(audit.list().map((record) => record.outcome), ["started", "completed"]);
+    assert.equal(audit.list()[0].tool_name, "slack.replyToMention");
+    assert.equal(audit.list()[0].data.write[0], "connector:slack:c1");
+    assert.doesNotMatch(await readFile(audit.file, "utf8"), /Here is the report summary\./);
+
+    const denied = fixture({
+      governance,
+      approveReply: async () => { approvalRequests += 1; return true; }
+    });
+    const outsideChannel = mention({ event_id: "Ev-governed-denied", event: { ...mention().event, channel: "C2" } });
+    assert.equal(denied.gateway.receive(signedPayload(outsideChannel)).status, 200);
+    await runQueued(denied);
+    assert.deepEqual(denied.posts, []);
+    assert.equal(approvalRequests, 1, "a denied role never reaches the approval policy");
+    assert.equal(audit.list().at(-1).outcome, "denied");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("url verification succeeds, while unconfigured users are acknowledged but never sent to a role", () => {

@@ -3,9 +3,9 @@ import path from "node:path";
 
 import { crewDir } from "./crew-dirs.js";
 
-// A per-role journal the role appends at the end of a turn ("what worked, what to avoid"). It is
-// a plain markdown file under the crew directory — versioned, human-reviewable, and editable —
-// and the read side is bounded so a long journal never floods a prompt.
+// A per-role journal of operator-approved notes ("what worked, what to avoid"). It is a plain
+// markdown file under the crew directory — versioned, human-reviewable, and editable — and the
+// read side is bounded so a long journal never floods a prompt.
 const ROLE = /^[a-z][a-z0-9-]{0,79}$/;
 const MAX_TEXT = 2000;
 
@@ -14,19 +14,35 @@ export function reflectionsPath(targetRoot, role) {
   return path.join(path.resolve(targetRoot || process.cwd()), crewDir(), "memory", "reflections", `${role}.md`);
 }
 
-export function appendReflection({ targetRoot, role, text, ref = "", author = role } = {}) {
+// Shared by the operator-only append primitive and the proposal queue. Keeping validation here
+// means a proposal can never be approved into a journal entry the journal itself would reject.
+export function normalizeReflection({ role, text, ref = "", author = role } = {}) {
+  const normalizedRole = String(role || "").trim();
+  if (!ROLE.test(normalizedRole)) throw new Error("role must be a lowercase slug");
   const body = String(text || "").replace(/\r\n/g, "\n").trim();
   if (!body || body.length > MAX_TEXT) throw new Error(`reflection must contain 1 to ${MAX_TEXT} characters`);
   if (/^#{1,6}\s/m.test(body)) throw new Error("reflection text may not contain headings");
-  const file = reflectionsPath(targetRoot, role);
+  return {
+    role: normalizedRole,
+    text: body,
+    ref: String(ref || "").trim().slice(0, 120),
+    author: String(author || normalizedRole).trim().slice(0, 80)
+  };
+}
+
+// This is deliberately a low-level, operator/host primitive. Roles use memory.reflect, which
+// creates an approval-gated proposal in reflection-proposals.js instead of calling this directly.
+export function appendReflection({ targetRoot, role, text, ref = "", author = role } = {}) {
+  const entry = normalizeReflection({ role, text, ref, author });
+  const file = reflectionsPath(targetRoot, entry.role);
   const at = new Date().toISOString();
-  const entry = { at, ref: String(ref || "").trim().slice(0, 120), author: String(author || role).trim().slice(0, 80), text: body };
+  const persisted = { ...entry, at };
   mkdirSync(path.dirname(file), { recursive: true });
   if (!existsSync(file)) {
-    writeFileSync(file, `# Reflections — ${role}\n\nAppend-only journal the role writes for itself at the end of a turn. Humans review and prune it; newest entries are last.\n`, "utf8");
+    writeFileSync(file, `# Reflections — ${entry.role}\n\nAppend-only journal of operator-approved role reflections. Humans review and prune it; newest entries are last.\n`, "utf8");
   }
-  appendFileSync(file, `\n## ${at} — ${entry.ref || "general"} — ${entry.author}\n\n${body}\n`, "utf8");
-  return entry;
+  appendFileSync(file, `\n## ${persisted.at} — ${persisted.ref || "general"} — ${persisted.author}\n\n${persisted.text}\n`, "utf8");
+  return persisted;
 }
 
 // Newest `limit` entries, oldest first within that window.
@@ -49,7 +65,7 @@ export function reflectionsPrompt(entries = [], { role = "" } = {}) {
   if (!entries.length) return "";
   return [
     `## Reflections${role ? ` (${role})` : ""}`,
-    "Notes this role left for itself after earlier turns. Current instructions win when they conflict.",
+    "Operator-approved notes for this role from earlier turns. Current instructions win when they conflict.",
     ...entries.map((entry) => `- ${String(entry.at).slice(0, 10)}${entry.ref ? ` (${entry.ref})` : ""}: ${entry.text.replace(/\s+/g, " ")}`)
   ].join("\n");
 }

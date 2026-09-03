@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createPulse } from "./pulse.js";
+import { listReflectionProposals } from "./reflection-proposals.js";
 import { listSkillProposals } from "./skill-proposals.js";
 import { listPreferenceProposals } from "./preference-memory.js";
 import { createRoleRunner } from "./runner.js";
@@ -109,7 +110,9 @@ export function createUp({
     }
     await host.start?.({ emit: pulse.emit });
     try {
-      const pending = listSkillProposals({ targetRoot: root }).length + listPreferenceProposals({ targetRoot: root }).length;
+      const pending = listSkillProposals({ targetRoot: root }).length
+        + listPreferenceProposals({ targetRoot: root }).length
+        + listReflectionProposals({ targetRoot: root }).length;
       if (pending) log(`[up] ${pending} proposal${pending === 1 ? "" : "s"} pending operator review — crewrun proposals list ${root}`);
     } catch { /* proposals are optional */ }
     log(`[up] crew loop running on ${root}`);

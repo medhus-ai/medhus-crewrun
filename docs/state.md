@@ -1,7 +1,7 @@
 ---
 type: implementation-state
 audience: maintainer + ai-agent
-updated: 2026-08-31
+updated: 2026-09-03
 status: active
 ---
 
@@ -19,12 +19,37 @@ Anything with a product opinion belongs in a host, never in the kernel:
 
 - Workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
   Azure DevOps), PR sync, and merge policy.
-- UI shells, pages, styles, and control APIs (the generic pieces `auth`, `request-context`,
-  `markdown`, `process` are here).
+- Product-branded UI shells, application control APIs, OAuth callbacks, and connector provider
+  calls. The dependency-free local operations console is intentionally in the kernel; hosts feed
+  it data and actions through the stable `operations` surface.
 - Role catalogs and domain-specific file tooling.
-- Memory files (doctrine, conventions) — each host's own; the runtime injects none.
+- Memory file content (doctrine, conventions) — each host's own; the runtime reads only explicit
+  role or host pointers and ships no doctrine by default.
 
 ## Done since extraction
+
+- Governed roles and external actions (v0.6.0): role specs now carry contract v1 — revision,
+  mandate, tool/data/handoff authority, approval requirements, and budget caps. A host composes
+  `createRoleGovernance`, `createToolBroker`, and the MCP bridge to filter and recheck authority;
+  `requireContracts` makes legacy roles fail closed. The bundled approval policy provides a
+  single-use request/claim path, while governance can append a redacted, hash-chained audit
+  record. Handoff recipients are evaluated explicitly; the durable handoff queue remains the
+  cross-role work bus rather than agent chat.
+
+- Reference operations surface (v0.6.0): the local console now has practical role/model/memory
+  controls, cron CRUD, authority summaries, approvals, a safe audit view, provider readiness,
+  connector state, and usage cards. The stable host `operations` snapshot/actions keep it host-neutral. Slack
+  post/reply and Gmail send-draft descriptors are narrow host actions; OAuth callbacks, tokens,
+  and provider calls remain host-owned. Gmail reads are explicit opt-in.
+
+- Scheduling ownership is explicit: `createScheduler` is a one-owner helper, not a distributed
+  claim system. A multi-process host elects that owner or makes an atomic schedule claim in its
+  own database/queue before running a turn.
+
+- Governed durable learning (v0.6.0): `memory.reflect` now creates a reviewable per-role
+  proposal; only an operator approval appends it to the bounded journal injected into later
+  turns. The console, CLI proposal commands, and startup notice include those proposals beside
+  skills and preferences.
 
 - Web access (v0.5.0–0.5.1): roles opt in with `"web": true | { allow, search, max_chars }` in their
   spec. The engine's native web tools are preferred — Claude's WebSearch/WebFetch (allowlist
@@ -56,7 +81,9 @@ Anything with a product opinion belongs in a host, never in the kernel:
 - Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`).
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
 - Handoff queue (`handoffs`) and cron schedules for roles (`schedules`).
-- Learning layers: skill proposals (`skill-proposals`), episodic recall (`recall` + `conversations.searchMessages`), per-role reflections (`reflections`).
+- Learning layers: skill and reflection proposals (`skill-proposals`, `reflection-proposals`),
+  episodic recall (`recall` + `conversations.searchMessages`), and bounded per-role reflections
+  (`reflections`).
 
 ## Candidates for a later move
 
@@ -76,6 +103,11 @@ The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
 - Secret and auth files are chmod'ed to 0600 on every write, not only on creation.
 
 ## Last Check
+
+- (11) 2026-09-03 — v0.6.0: governed operations contract, strict reflection proposals, host
+  approval/audit helpers, narrow Slack/Gmail connector descriptors, and the local operations
+  console landed on the v0.6 branch. Subscription mode remains local-operator sign-in only;
+  live Claude, Codex, OpenRouter, and Docker checks stay opt-in.
 
 - (10) 2026-09-01 — v0.1.6: closes the five review findings above (role-name validation at
   filesystem boundaries, stale-run release for schedules, per-role singleton indexes, handoff

@@ -1,7 +1,7 @@
 {
   "name": "medhus-crewrun",
   "version": "0.6.0",
-  "description": "Run governed AI roles on the vendor agent runtimes you already pay for — with brokered tools, approvals, audited handoffs, isolation, and a cost ledger.",
+  "description": "Run governed AI agents on the vendor agent runtimes you already pay for — with brokered tools, approvals, audited handoffs, isolation, and a cost ledger.",
   "keywords": [
     "agents",
     "claude-agent-sdk",
@@ -9,7 +9,6 @@
     "openrouter",
     "mcp",
     "multi-agent",
-    "roles",
     "runtime"
   ],
   "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",

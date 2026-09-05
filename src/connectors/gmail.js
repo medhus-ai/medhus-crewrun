@@ -9,10 +9,9 @@ export const gmailConnectorActions = Object.freeze([
     id: "gmail.sendDraft",
     provider: "gmail",
     label: "Send Gmail draft",
-    description: "Send one existing Gmail draft by opaque draft id. The host must approve delivery.",
-    scopes: ["https://www.googleapis.com/auth/gmail.send"],
+    description: "Send one existing Gmail draft by opaque draft id. Delivery requires operator approval.",
+    scopes: ["https://www.googleapis.com/auth/gmail.compose"],
     scopeSets: [
-      ["https://www.googleapis.com/auth/gmail.send"],
       ["https://www.googleapis.com/auth/gmail.compose"],
       ["https://www.googleapis.com/auth/gmail.modify"],
       ["https://mail.google.com/"]

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { agentFile } from "./agent-paths.js";
 import { crewDir, crewHome } from "./crew-dirs.js";
 import { listRoleSpecs, roleScheduledEntries } from "./role-spec.js";
 
@@ -233,7 +234,7 @@ export function upsertSchedule({ targetRoot, schedule } = {}) {
 }
 
 function roleSpecPath(targetRoot, role) {
-  const file = path.join(path.resolve(targetRoot || process.cwd()), crewDir(), "roles", `${role}.json`);
+  const file = agentFile(targetRoot || process.cwd(), role);
   return existsSync(file) ? file : null;
 }
 

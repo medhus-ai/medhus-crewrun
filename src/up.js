@@ -5,8 +5,8 @@ import { createPulse } from "./pulse.js";
 import { listReflectionProposals } from "./reflection-proposals.js";
 import { listSkillProposals } from "./skill-proposals.js";
 import { listPreferenceProposals } from "./preference-memory.js";
-import { createRoleRunner } from "./runner.js";
 import { createScheduler } from "./schedules.js";
+import { createStandaloneRuntime } from "./standalone.js";
 
 // The crew loop as a library: schedules + heartbeats + hooks + host housekeeping around one
 // target project, with every opinionated piece injected by an optional host module. The
@@ -15,7 +15,7 @@ import { createScheduler } from "./schedules.js";
 //
 // Host contract — a plain object, everything optional:
 //   runTurn(role, prompt, meta)   -> { ok, text?, reason? }   turn execution (default: a
-//                                     tool-less kernel runner via runRoleCapture)
+//                                     standalone runner with built-in tools and configured connections)
 //   runSchedule(schedule)         -> { ok, ... }              override schedule runs entirely
 //   enqueue({role, body, externalId}) -> { created }          hook delivery; hooks are disabled
 //                                     (with one logged notice) when absent
@@ -52,13 +52,8 @@ export function createUp({
   if (!targetRoot) throw new Error("createUp requires targetRoot");
   const root = path.resolve(targetRoot);
 
-  let fallbackRunner = null;
-  const runTurn = host.runTurn || ((role, prompt, meta = {}) => {
-    // The kernel runner carries the built-in crew tools by default, so hostless turns
-    // still complete the learning loop.
-    fallbackRunner = fallbackRunner || createRoleRunner({});
-    return fallbackRunner.runRoleCapture({ root, role, prompt, label: meta.label || meta.workflow || role, log });
-  });
+  const standalone = host.runTurn ? null : createStandaloneRuntime({ targetRoot: root, env, log });
+  const runTurn = host.runTurn || standalone.runTurn;
 
   let hooksNoticeShown = false;
   const enqueue = host.enqueue || (() => {
@@ -125,5 +120,5 @@ export function createUp({
     await host.stop?.();
   }
 
-  return { start, stop, tickOnce, emit: pulse.emit, scheduler, pulse };
+  return { start, stop, tickOnce, emit: pulse.emit, scheduler, pulse, operations: host.operations || standalone?.operations || host };
 }

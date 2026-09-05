@@ -33,7 +33,7 @@ test("external action approvals preserve only a request digest and are single-us
       env
     });
     assert.equal(proposal.status, "pending");
-    assert.equal(listActionApprovals({ targetRoot: root, env }).length, 1);
+    assert.equal(listActionApprovals({ targetRoot: root, env, now }).length, 1);
 
     const raw = await readFile(actionApprovalPath(root, env), "utf8");
     assert.doesNotMatch(raw, /secret body/, "the raw external payload never enters approval state");

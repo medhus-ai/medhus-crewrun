@@ -1,7 +1,7 @@
 ---
 type: implementation-state
 audience: maintainer + ai-agent
-updated: 2026-09-03
+updated: 2026-09-05
 status: active
 ---
 
@@ -19,70 +19,86 @@ Anything with a product opinion belongs in a host, never in the kernel:
 
 - Workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
   Azure DevOps), PR sync, and merge policy.
-- Product-branded UI shells, application control APIs, OAuth callbacks, and connector provider
-  calls. The dependency-free local operations console is intentionally in the kernel; hosts feed
+- Product-branded UI shells, application control APIs and account-specific OAuth callbacks. Standalone Slack/Gmail
+  provider calls and private operator connection storage are bundled in `standalone.js`. The dependency-free local operations console is intentionally in the kernel; hosts feed
   it data and actions through the stable `operations` surface.
-- Role catalogs and domain-specific file tooling.
+- Agent catalogs and domain-specific file tooling.
 - Memory file content (doctrine, conventions) — each host's own; the runtime reads only explicit
-  role or host pointers and ships no doctrine by default.
+  agent or host pointers and ships no doctrine by default.
 
 ## Done since extraction
 
-- Governed roles and external actions (v0.6.0): role specs now carry contract v1 — revision,
+- 2026-09-05 consolidation: remote `main` and `feat/v0.6-governed-operations` were fast-forwarded
+  into main; their complete histories and features are retained. Product naming is now Agents,
+  with canonical UI/CLI paths, agent API aliases and agents/ files. Legacy role APIs/files remain
+  supported, including mixed layouts without duplicate scheduling.
+- Agent management keeps the existing console style and adds search, job instructions, activity,
+  web/reflection controls and data-scope editing. Shared defaults correctly disable reflections.
+- Standalone Slack/Gmail setup no longer requires a custom host module. Credentials and exact
+  pending payloads are private local files (0600), Gmail refresh tokens support unattended runs,
+  writes are single-use approved actions, and Gmail sends the reviewed draft MIME. The adapter
+  supports Claude in-process tools and Codex stdio. Incoming events and draft creation remain
+  separate work; the Slack event host example is preserved.
+- README leads with the CLI. [Product direction](product-direction.md) records the recommendations
+  on reflections, Skills/SOPs, reliability, customer outcomes and competitive validation.
+
+
+- Governed agents and external actions (v0.6.0): agent specs now carry contract v1 — revision,
   mandate, tool/data/handoff authority, approval requirements, and budget caps. A host composes
   `createRoleGovernance`, `createToolBroker`, and the MCP bridge to filter and recheck authority;
-  `requireContracts` makes legacy roles fail closed. The bundled approval policy provides a
+  `requireContracts` makes legacy agents fail closed. The bundled approval policy provides a
   single-use request/claim path, while governance can append a redacted, hash-chained audit
   record. Handoff recipients are evaluated explicitly; the durable handoff queue remains the
-  cross-role work bus rather than agent chat.
+  cross-agent work bus rather than agent chat.
 
-- Reference operations surface (v0.6.0): the local console now has practical role/model/memory
+- Reference operations surface (v0.6.0): the local console now has practical agent/model/memory
   controls, cron CRUD, authority summaries, approvals, a safe audit view, provider readiness,
   connector state, and usage cards. The stable host `operations` snapshot/actions keep it host-neutral. Slack
-  post/reply and Gmail send-draft descriptors are narrow host actions; OAuth callbacks, tokens,
-  and provider calls remain host-owned. Gmail reads are explicit opt-in.
+  post/reply and Gmail send-draft descriptors remain reusable host actions. Standalone Crewrun
+  now supplies local setup, Gmail refresh, exact-message approvals and provider calls as well.
+  Custom OAuth callbacks stay with hosts. Gmail reads are explicit opt-in.
 
 - Scheduling ownership is explicit: `createScheduler` is a one-owner helper, not a distributed
   claim system. A multi-process host elects that owner or makes an atomic schedule claim in its
   own database/queue before running a turn.
 
-- Governed durable learning (v0.6.0): `memory.reflect` now creates a reviewable per-role
+- Governed durable learning (v0.6.0): `memory.reflect` now creates a reviewable per-agent
   proposal; only an operator approval appends it to the bounded journal injected into later
   turns. The console, CLI proposal commands, and startup notice include those proposals beside
   skills and preferences.
 
-- Web access (v0.5.0–0.5.1): roles opt in with `"web": true | { allow, search, max_chars }` in their
+- Web access (v0.5.0–0.5.1): agents opt in with `"web": true | { allow, search, max_chars }` in their
   spec. The engine's native web tools are preferred — Claude's WebSearch/WebFetch (allowlist
   enforced via a PreToolUse hook), Codex's web search (open access only) — and the kernel's
   built-in `web.fetch` (read-only GET, redirect hops re-checked, private addresses refused,
   HTML→text, capped) + `web.search` (DuckDuckGo HTML, no key) cover cli/container engines and
-  allowlisted Codex roles. Off by default — nothing web-shaped is advertised to roles without
-  `web`. `roles check` warns on open access; the console shows the setting per role.
+  allowlisted Codex agents. Off by default — nothing web-shaped is advertised to agents without
+  `web`. `roles check` warns on open access; the console shows the setting per agent.
 
 - Console (v0.4.0): `crewrun console <root>` / `crewrun up --console` — a local operator UI
   (127.0.0.1, node:http, zero deps; shell/pages/navigation structure) over one project's
-  .crew/: dashboard + validation, role spec editing and add-role, schedule toggles and
+  .crew/: dashboard + validation, agent spec editing and add-agent, schedule toggles and
   run-now (when attached to a loop), the skill index, and proposal approve/reject. An
   operations surface by design — no chat, no assistant UX. The kernel's built-in tools
   (crew-tools.js) are now merged into every bridge automatically (host names win;
   `crewTools: false` opts out) and the default runner carries them.
 
-- Role specs (v0.3.0): `.crew/roles/<role>.json` (+ `_defaults.json`) holds runner, pointers,
-  reflections knob, hooks, heartbeat, and that role's scheduled tasks; role `.md` is optional prose
+- Agent specs (v0.3.0): `.crew/agents/<role>.json` (+ `_defaults.json`) holds runner, pointers,
+  reflections knob, hooks, heartbeat, and that agent's scheduled tasks; agent `.md` is optional prose
   read via pointers; reflections auto-inject (bounded) closing the learning loop; skills go
   flat (`skills/<id>.md`) with a generated `_index.md`; `crewrun proposals list|approve|reject`
   gives the operator a native approval surface, and hostless `crewrun up` attaches the kernel's
   own learning-loop tools bridge. All legacy forms still resolve.
 
 - `crewrun up` (v0.2.0): the crew loop as a library (`src/up.js`, createUp + loadHostModule) and
-  a first CLI (`bin/crewrun.js`: up, roles check). Hosts inject runTurn/enqueue/routing/tick;
+  a first CLI (`bin/crewrun.js`: up, agents check). Hosts inject runTurn/enqueue/routing/tick;
   without a host module, schedules and heartbeats run on a tool-less kernel runner.
 
 - Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`).
 - Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
-- Handoff queue (`handoffs`) and cron schedules for roles (`schedules`).
+- Handoff queue (`handoffs`) and cron schedules for agents (`schedules`).
 - Learning layers: skill and reflection proposals (`skill-proposals`, `reflection-proposals`),
-  episodic recall (`recall` + `conversations.searchMessages`), and bounded per-role reflections
+  episodic recall (`recall` + `conversations.searchMessages`), and bounded per-agent reflections
   (`reflections`).
 
 ## Candidates for a later move
@@ -92,25 +108,31 @@ Anything with a product opinion belongs in a host, never in the kernel:
 
 The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
 
-- Role names are validated as slugs at every filesystem boundary (`removeRole`, `startRoleTurn`), so
-  a role identifier can never build a path outside the roles directory.
+- Agent names are validated as slugs at every filesystem boundary (`removeRole`, `startRoleTurn`), so
+  an agent identifier can never build a path outside the agents directory.
 - A schedule whose process died after `lastStartedAt` is released after `staleAfterMs` (default
   one hour, configurable) instead of staying "running" forever. Run state is still a JSON file
   without a cross-process claim: run one scheduler per project.
-- Singleton-conversation unique indexes include `role`, so two singleton roles can each hold a
+- Singleton-conversation unique indexes include `role`, so two singleton agents can each hold a
   thread on the same reference.
 - `enqueueHandoff` verifies the conversation exists and belongs to `targetRoot`.
 - Secret and auth files are chmod'ed to 0600 on every write, not only on creation.
 
 ## Last Check
 
+- (12) 2026-09-05 — consolidated main, Agents naming and management, standalone integrations:
+  Node 20 suite: 180 passed, 0 failed, 4 opt-in live-provider/Docker checks skipped. SQLite-backed
+  tests ran. Connector tests use mocked provider responses; the Codex stdio MCP transport is
+  exercised with a real child process. Chromium desktop and 390px viewport checks passed;
+  npm package dry-run passed. No live Slack/Gmail delivery or npm publication was performed.
+
 - (11) 2026-09-03 — v0.6.0: governed operations contract, strict reflection proposals, host
   approval/audit helpers, narrow Slack/Gmail connector descriptors, and the local operations
   console landed on the v0.6 branch. Subscription mode remains local-operator sign-in only;
   live Claude, Codex, OpenRouter, and Docker checks stay opt-in.
 
-- (10) 2026-09-01 — v0.1.6: closes the five review findings above (role-name validation at
-  filesystem boundaries, stale-run release for schedules, per-role singleton indexes, handoff
+- (10) 2026-09-01 — v0.1.6: closes the five review findings above (agent-name validation at
+  filesystem boundaries, stale-run release for schedules, per-agent singleton indexes, handoff
   root check, continuous 0600 on sensitive files).
 
 - (8) 2026-09-01 — v0.1.5: Codex SDK `^0.152.0` (GPT-5.6 model ids); no code change.
@@ -121,15 +143,15 @@ The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
   handoff signature, cron feature description, and secret-file mode wording; recorded the
   scheduler-recovery, singleton-index, handoff-root, path-validation, and file-mode gaps above.
 
-- (7) 2026-08-31 — v0.1.4: `handoffs` (the leased input queue that wakes a role's singleton
+- (7) 2026-08-31 — v0.1.4: `handoffs` (the leased input queue that wakes an agent's singleton
   thread; table name is host-configurable so an existing table is reused as-is) and `schedules`
   (five-field cron parser, project-versioned definitions, crew-home run state, a scheduler that
   fires once per due schedule and records outcomes).
 
 - (6) 2026-08-31 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
   human approves into a scope; reuses the preference proposal/audit helpers), `recall`
-  (episodes = ask + outcome, by role / reference / mention; LIKE with escaped wildcards), and
-  `reflections` (per-role append-only journal, bounded read, prompt section). Hosts expose these
+  (episodes = ask + outcome, by agent / reference / mention; LIKE with escaped wildcards), and
+  `reflections` (per-agent append-only journal, bounded read, prompt section). Hosts expose these
   as tools and decide where to inject; the kernel ships no skill or memory content.
 
 - (5) 2026-08-31 — v0.1.2: `deliveryReport` on the ledger; no host is named anywhere in the repo;

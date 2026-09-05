@@ -20,14 +20,14 @@ const DESCRIPTIONS = {
   "memory.reflect": "Propose one or two sentences for your private journal: what worked, or what to avoid next time. An operator must approve it before it becomes durable memory.",
   "skill.propose": "Propose a reusable skill (id, description, content) — the operator approves it before it becomes durable.",
   "prefs.propose": "Propose a short durable working preference (key, statement) — the operator approves it before it applies.",
-  "web.fetch": "GET one public http(s) URL and return its text (HTML stripped, capped). Read-only; subject to your role's allowlist.",
+  "web.fetch": "GET one public http(s) URL and return its text (HTML stripped, capped). Read-only; subject to your agent's allowlist.",
   "web.search": "Search the web (DuckDuckGo) and return up to `max_results` rows of title, url, snippet. Follow up with web.fetch."
 };
 
 const SCHEMAS = {
   "skill.read": (z) => ({ id: z.string() }),
   "memory.reflect": (z) => ({ text: z.string(), ref: z.string().optional() }),
-  "skill.propose": (z) => ({ id: z.string(), description: z.string(), content: z.string(), roles: z.string().optional() }),
+  "skill.propose": (z) => ({ id: z.string(), description: z.string(), content: z.string(), agents: z.string().optional(), roles: z.string().optional() }),
   "prefs.propose": (z) => ({ key: z.string(), statement: z.string(), evidence: z.string().optional() }),
   "web.fetch": (z) => ({ url: z.string() }),
   "web.search": (z) => ({ query: z.string(), max_results: z.string().optional() })
@@ -51,7 +51,7 @@ const REGISTRY = {
   "memory.reflect": async (input, { role, context }) => proposeReflection({ targetRoot: rootFrom(context), role, text: input?.text, ref: input?.ref || "", proposedBy: role }),
   "skill.propose": async (input, { role, context }) => proposeSkill({
     targetRoot: rootFrom(context), id: input?.id, description: input?.description, content: input?.content,
-    roles: String(input?.roles || "").split(",").map((entry) => entry.trim()).filter(Boolean),
+    roles: String(input?.agents ?? input?.roles ?? "").split(",").map((entry) => entry.trim()).filter(Boolean),
     scope: "repository", proposedBy: role
   }),
   "prefs.propose": async (input, { role, context }) => proposePreference({

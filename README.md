@@ -2,27 +2,27 @@
 
 **The self-hosted, vendor-neutral, git-governed runtime for AI crews you're accountable for.**
 
-Run a crew of AI roles on the agent runtimes you already use — with role configuration,
+Run a crew of AI agents on the agent runtimes you already use — with agent configuration,
 authority, schedules, and shared learning kept as reviewable project state. Vendor-native
 schedules and coworker connectors are convenience on their infrastructure; crewrun is control
 on yours, and the two complement each other.
 
-crewrun is a small Node library for building your own multi-role agent system on top of the
+crewrun is a small Node library for building your own multi-agent agent system on top of the
 vendors' *agent* runtimes — the Claude Agent SDK, the Codex SDK, or any CLI — instead of raw
-model APIs. Define roles as small JSON specs plus optional Markdown, route each role to a
-provider and model, give it a versioned authority contract, expose only approved host tools over
+model APIs. Define agents as small JSON specs plus optional Markdown, route each agent to a
+provider and model, give it a versioned authority contract, expose tools under reviewed permissions over
 MCP, sandbox edits in a git worktree or a container, and keep a ledger of what every run cost.
 
 - **Local sign-ins, not credential delegation.** An operator can run native Claude and Codex
   turns with their own local `claude` / `codex` sign-in. This does not turn a subscription into
   an API key or let a hosted product accept, relay, or share another user's subscription.
-  Anthropic, OpenAI, OpenRouter, GLM, Kimi, and local-server API routes work too; choose per role.
+  Anthropic, OpenAI, OpenRouter, GLM, Kimi, and local-server API routes work too; choose per agent.
 - **One key, any model.** OpenRouter's whole catalog is a provider; local Ollama / LM Studio /
   llama.cpp servers are another.
-- **Roles are files.** A role is one JSON spec — `.crew/roles/<role>.json` holds its runner,
+- **Agents are files.** A agent is one JSON spec — `.crew/agents/<role>.json` holds its runner,
   memory pointers, contract, hooks, heartbeat, and schedules, with `_defaults.json` supplying a
   shared floor — plus optional Markdown prose injected via its own pointers. No framework classes.
-- **Authority is enforceable.** A host joins a role contract and per-role allowlist in the broker;
+- **Authority is enforceable.** A host joins an agent contract and per-agent allowlist in the broker;
   it checks again at invocation, and high-impact actions can require host approval and append a
   redacted audit record.
 - **MCP is a host-tool bridge.** `createMcpBridge` serves the tools your host defines to Claude
@@ -30,17 +30,78 @@ MCP, sandbox edits in a git worktree or a container, and keep a ledger of what e
   arbitrary remote MCP servers.
 - **Edits are isolated.** Execute-mode turns run in a dedicated git worktree on a fresh branch,
   or inside a locked-down Docker container. Propose mode is read-only.
-- **Everything is accounted for.** Token counts, reported cost, duration, and result per run,
+- **Usage can be accounted for.** Attach the budget ledger to record token counts, reported cost, duration, and result per run,
   aggregated per month, project, engine, and runner — with cost estimates for subscription runs.
 
 crewrun was extracted from production hosts in two very different domains and carries no
-opinion about *what* your roles do.
+opinion about *what* your agents do.
 
-## Quick start
+## Start with the CLI
+
+From this checkout (Node 20 or newer):
+
+```bash
+npm install
+node bin/crewrun.js up . --console
+```
+
+Open **http://127.0.0.1:4400**, choose **Agents → Add agent**, describe its job, and select
+an installed runner. Add recurring work under **Scheduled**. The loop runs while the command
+stays open. You can open an empty project; no hand-written configuration or host module is required.
+
+For the published package:
+
+```bash
+npm install -g medhus-crewrun
+crewrun up ./my-project --console       # run agents and open the local operations UI
+crewrun console ./my-project            # manage settings and approvals without scheduled turns
+crewrun agents check ./my-project       # check agent settings
+crewrun proposals list ./my-project     # review proposed learning
+```
+
+The commands above use your installed version; changes on GitHub main reach npm only after a
+release. A signed-in supported vendor runtime or a configured API runner is needed to run turns.
+
+## Slack and Gmail, with or without a host
+
+Open **Integrations** in either console command. Standalone Crewrun verifies and stores your
+connection locally, refreshes Gmail access tokens, and gives permitted agents the same narrow
+Slack/Gmail tools available to embedded hosts. A custom `--host` module is optional.
+
+- **Slack:** install your Slack app with `chat:write`, invite it to the destination channel,
+  and enter its OAuth token. Add `app_mentions:read` for the reply-to-mention action.
+- **Gmail:** enable the Gmail API in your Google project, obtain a client ID, client secret,
+  and refresh token with `gmail.compose`, then enter them in Integrations. Inbox search and
+  reads need both the explicit checkbox and `gmail.readonly` (or a supported broader grant).
+- **Agent permissions:** in the agent's contract controls, add `slack.postMessage | external-write`
+  or `gmail.sendDraft | external-write`. Add `connector:slack:slack` or `connector:gmail:gmail`
+  under data the agent may change. For Gmail reads, grant `gmail.searchMetadata | read` and/or
+  `gmail.getMessage | read`, plus `connector:gmail:gmail` under data it may read.
+- **Review and deliver:** outgoing requests appear in Approvals with the message or draft
+  contents. Approval executes the reviewed request after rechecking authority. A changed draft,
+  account, or contract needs a new review. Successful deliveries appear in Audit.
+
+Gmail currently sends an **existing draft**; draft creation and incoming Slack mention/event
+subscriptions are not part of the standalone adapter. Use the [Slack host example](examples/slack/README.md)
+for event-driven intake. Provider consent and credentials are still required; no separate hosted
+application is required for standalone outbound actions.
+
+Standalone credentials and pending review payloads live in a project-specific file under
+`~/.crew/connections/` (`CREW_HOME` overrides this), outside the repository, with mode 0600 on
+POSIX. This file uses OS permissions, not the encrypted API-key vault. Disconnect removes the
+local credentials and pending payloads; revoke the token at the provider to revoke its grant.
+Run one operator process per project. The file queues are not distributed transaction stores.
+
+See the official [Slack token guide](https://docs.slack.dev/authentication/tokens/),
+[Google OAuth setup](https://developers.google.com/identity/protocols/oauth2/native-app), and
+[Gmail draft sending scope requirements](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send).
+
+## Use the library
 
 ```bash
 npm install medhus-crewrun
-node examples/brief.mjs        # a "CEO" role reads an inbox through a brokered tool and writes a brief
+# From a checkout of this repository:
+node examples/brief.mjs
 ```
 
 The example needs a signed-in `claude` CLI or `ANTHROPIC_API_KEY`; set `OPENROUTER_API_KEY`
@@ -49,15 +110,15 @@ order ([examples/brief.mjs](examples/brief.mjs)):
 
 ```js
 import { createMcpBridge } from "medhus-crewrun/mcp";
-import { createRoleRunner } from "medhus-crewrun/runner";
-import { createRoleGovernance } from "medhus-crewrun/role-contract";
-import { loadRoleSpec } from "medhus-crewrun/role-spec";
+import { createAgentRunner } from "medhus-crewrun/runner";
+import { createAgentGovernance } from "medhus-crewrun/agent-contract";
+import { loadAgentSpec } from "medhus-crewrun/agent-spec";
 import { createToolBroker } from "medhus-crewrun/tool-broker";
 
-const governance = createRoleGovernance({
+const governance = createAgentGovernance({
   targetRoot: project,
   requireContracts: true,
-  getContract: (role) => loadRoleSpec(project, role)?.contract
+  getContract: (role) => loadAgentSpec(project, role)?.contract
 });
 const broker = createToolBroker({ allowlists: { ceo: ["inbox.list"] }, governance });
 const tools = createMcpBridge({
@@ -69,18 +130,18 @@ const tools = createMcpBridge({
   call: ({ role, toolName, input }) => broker.callTool({ role, toolName, input, registry })
 });
 
-const runner = createRoleRunner({ tools });
-const result = await runner.runRoleCapture({ root: project, role: "ceo", prompt: "Write today's brief." });
+const runner = createAgentRunner({ tools });
+const result = await runner.runAgentCapture({ root: project, role: "ceo", prompt: "Write today's brief." });
 ```
 
-A project is any directory with a `.crew/` folder. Each role is a spec at
-`roles/<role>.json`:
+A project is any directory with a `.crew/` folder. Each agent is a spec at
+`agents/<agent>.json`:
 
 ```json
 {
   "title": "Analyst",
   "runner": "claude-agent-sonnet-high",
-  "memory_pointers": [".crew/roles/analyst.md", "docs/analyst-notes.md"],
+  "memory_pointers": [".crew/agents/analyst.md", "docs/analyst-notes.md"],
   "reflections": { "limit": 10 },
   "hooks": ["task.assigned"],
   "heartbeat": "off",
@@ -95,54 +156,63 @@ A project is any directory with a `.crew/` folder. Each role is a spec at
 }
 ```
 
-**Web access** is off unless a role opts in with `"web": true` or `{ "allow": [...], "search":
-true, "max_chars": 40000 }`. The runtime then hands the role the best web tools the engine has:
+**Web access** is off unless an agent opts in with `"web": true` or `{ "allow": [...], "search":
+true, "max_chars": 40000 }`. The runtime then hands the agent the best web tools the engine has:
 Claude's own `WebSearch`/`WebFetch` (the allowlist is enforced with a PreToolUse hook), Codex's
 built-in web search (open access only — Codex cannot scope hosts), and for every other engine, or
-for allowlisted Codex roles, the kernel's built-in `web.fetch` (read-only GET, redirect hops
+for allowlisted Codex agents, the kernel's built-in `web.fetch` (read-only GET, redirect hops
 re-checked, private/loopback addresses refused, HTML→text, capped) and `web.search` (DuckDuckGo,
-no key). `*.example.com` covers subdomains; `"search": false` drops search. Roles without `web`
+no key). `*.example.com` covers subdomains; `"search": false` drops search. Agents without `web`
 never see any web tool, so the model cannot be talked into browsing.
 
-`roles/_defaults.json` supplies values every role inherits (its `memory_pointers` prepend as the
-shared floor). Contract defaults are a floor too: a role may add authority, but cannot relax a
+`agents/_defaults.json` supplies values every agent inherits (its `memory_pointers` prepend as the
+shared floor). Contract defaults are a floor too: an agent may add authority, but cannot relax a
 default approval requirement or budget cap. Pointers may name any file in the repository —
-including the role's own optional `.md` prose, which is read only when listed. A bounded window
-of the role's **operator-approved** reflections (`memory.reflect` creates a proposal) is
+including the agent's own optional `.md` prose, which is read only when listed. The `instructions`
+field is a convenient alternative, editable directly from the Agents page. A bounded window
+of the agent's **operator-approved** reflections (`memory.reflect` creates a proposal) is
 injected back each turn. Legacy projects keep working: `.md` frontmatter,
 `memory/ai-runners.json`, and a global `schedules.json` all still resolve. Concrete runner
 profiles are machine-level, in `~/.crew/ai-runners.json`, so keys and vendor choices never enter
 a repository.
 
+## Upgrading from Roles
+
+Agents is the product name and the new file/API surface. Existing `.crew/roles` files,
+`crewrun roles check`, `/roles` bookmarks, `role` fields, and the `createRoleRunner` and
+other role-named library exports remain supported. New projects use `.crew/agents`; existing
+files are edited in place. If both folders declare the same agent, its agent file wins, so
+its tasks are not scheduled twice. Shared defaults also fall back to the legacy folder.
+
 ## What is inside
 
 | Module | Purpose |
 |---|---|
-| `runner` | `createRoleRunner(host)` → `startRoleTurn`, `runRoleCapture`, prompt assembly, `loadRoleMemory` |
+| `runner` | `createAgentRunner(host)` → `startAgentTurn`, `runAgentCapture`, prompt assembly, `loadAgentMemory` |
 | `engines/*` | `cli` (any vendor CLI), `claude-agent`, `codex-agent`, `container` (Docker sandbox) |
 | `mcp`, `mcp-stdio` | `createMcpBridge(registry)` — host-tool MCP server bridge: in-process for Claude, stdio for Codex |
-| `tool-broker`, `role-contract` | Role allowlist + versioned authority enforcement, handoff checks, and redacted tamper-evident action audit |
+| `tool-broker`, `agent-contract` | Agent allowlist + versioned authority enforcement, handoff checks, and redacted tamper-evident action audit |
 | `action-approvals` | Host-local, single-use approval queue for high-impact actions; stores summaries and digests, never action payloads or credentials |
-| `connectors` | Narrow Slack/Gmail action descriptors and OAuth URL metadata; the host owns OAuth callbacks, tokens, and provider calls |
-| `crew-tools`, `web` | Built-in tools available on each bridge: proposal-gated learning tools + `skill.read`, and per-role gated `web.fetch` / `web.search` (all subject to a strict role contract when one is enforced) |
-| `role-capabilities` | Subagent policy per role kind; Claude subagent definitions |
-| `roles`, `templates` | Role catalog installer; template reader |
-| `runner-config`, `model-catalog` | Runner profiles (global + per-project role mapping), live model discovery |
+| `connectors`, `standalone` | Slack/Gmail permissions and actions; standalone connection setup, token refresh, exact action review and provider calls; optional host overrides |
+| `crew-tools`, `web` | Built-in tools available on each bridge: proposal-gated learning tools + `skill.read`, and per-agent gated `web.fetch` / `web.search` (all subject to a strict agent contract when one is enforced) |
+| `agent-capabilities` | Subagent policy per agent kind; Claude subagent definitions |
+| `agents`, `templates` | Agent catalog installer; template reader |
+| `runner-config`, `model-catalog` | Runner profiles (global + per-project agent mapping), live model discovery |
 | `secret-store` | Encrypted per-operator API-key store (scrypt + AES-256-GCM, 0600 file) |
 | `budget` | `createBudgetLedger({ getDb })` — per-run rows, monthly report, subscription cost estimates |
-| `conversations` | `createConversationStore({ getDb })` — durable chat threads and messages per project/role |
+| `conversations` | `createConversationStore({ getDb })` — durable chat threads and messages per project/agent |
 | `work-items` | `createWorkItemSource({ dir })` — tasks as markdown files (frontmatter or bold bullets) |
-| `handoffs` | `createHandoffQueue({ getDb, governance? })` — durable inputs for a role's thread: attach once, claim in leased batches, recover after a crash ("wake the manager") |
-| `schedules` | Cron-scheduled role turns: `<crew dir>/schedules.json`, `parseCron`, `dueSchedules`, `createScheduler({ run })` |
+| `handoffs` | `createHandoffQueue({ getDb, governance? })` — durable inputs for an agent's thread: attach once, claim in leased batches, recover after a crash ("wake the manager") |
+| `schedules` | Cron-scheduled agent turns: `<crew dir>/schedules.json`, `parseCron`, `dueSchedules`, `createScheduler({ run })` |
 | `up` | `createUp({ targetRoot, host })` + the `crewrun up` CLI — the crew loop (schedules, heartbeats, hooks, host housekeeping) around one project; the optional host module injects tools, turn recording, routing, and lifecycle |
-| `pulse` | Role heartbeats (`heartbeat: 30m` frontmatter, 1s–1y, budget-capped, non-overlapping) and event hooks (`hooks: […]` → debounced enqueue), host-routed |
+| `pulse` | Agent heartbeats (`heartbeat: 30m` frontmatter, 1s–1y, budget-capped, non-overlapping) and event hooks (`hooks: […]` → debounced enqueue), host-routed |
 | `skills`, `skill-proposals` | Scoped `SKILL.md` skills; agent-proposed skills that a human approves into a scope |
-| `preference-memory`, `reflection-proposals`, `reflections`, `recall` | Approved preferences and per-role journals; episodic recall over past conversations |
+| `preference-memory`, `reflection-proposals`, `reflections`, `recall` | Approved preferences and per-agent journals; episodic recall over past conversations |
 | `execution-policy` | Container sandbox policy |
-| `console/*` | Local operations UI for roles, schedules, approvals, audit, connectors, providers, and usage; host data arrives through the stable operations API |
+| `console/*` | Local operations UI for agents, schedules, approvals, audit, connectors, providers, and usage; host data arrives through the stable operations API |
 | `auth`, `request-context`, `markdown`, `process`, `platform`, `frontmatter`, `agent-output` | Framework-free helpers for a host UI and OS |
 
-Import by subpath: `import { createRoleRunner } from "medhus-crewrun/runner"`.
+Import by subpath: `import { createAgentRunner } from "medhus-crewrun/runner"`.
 
 ## Providers and auth
 
@@ -187,16 +257,16 @@ CREW_LIVE_E2E=1 CREW_LIVE_DOCKER=1 node --test test/live-e2e.test.js
 
 ## Governed operations
 
-v0.6 makes a role contract a first-class part of the role spec. Contract v1 records its
+v0.6 makes an agent contract a first-class part of the agent spec. Contract v1 records its
 revision, mandate, allowed tools and data scopes, permitted handoff peers, approval requirements,
-and optional limits. A host enforces it with `createRoleGovernance` plus its tool broker; setting
-`requireContracts: true` makes uncontracted legacy roles fail closed. With the bundled approval
+and optional limits. A host enforces it with `createAgentGovernance` plus its tool broker; setting
+`requireContracts: true` makes uncontracted legacy agents fail closed. With the bundled approval
 policy wired into governance, high-impact actions remain visible only to request approval, then
 must be claimed and used once by the host immediately before the provider call.
 
 The audit record is append-only and hashes inputs/outputs instead of storing them. It records the
-role, action, model/runner when supplied, authority revision, data scopes, budget, approval, and
-outcome. Cross-role work belongs in the durable handoff queue; authorize both sides with
+agent, action, model/runner when supplied, authority revision, data scopes, budget, approval, and
+outcome. Cross-agent work belongs in the durable handoff queue; authorize both sides with
 `governance.authorizeHandoff` rather than using free-form agent chat. The complete schema and
 host wiring are in [Governed operations v1](docs/governed-operations-v1.md) and the stable
 [Host API and schema contract v1](docs/host-api-v1.md).
@@ -207,10 +277,10 @@ Run everything with one command — or compose the same loop from the library:
 
 ```bash
 npx crewrun up <targetRoot> --console            # the loop + the local operator UI (127.0.0.1:4400)
-npx crewrun console <targetRoot>                 # UI alone: roles, schedules, approvals, connectors, providers, usage
+npx crewrun console <targetRoot>                 # UI alone: agents, schedules, approvals, connectors, providers, usage
 npx crewrun up <targetRoot>                      # schedules + heartbeats on the kernel runner (built-in tools attached)
 npx crewrun up <targetRoot> --host ./host.mjs    # your tools, turn recording, hook routing, lifecycle
-npx crewrun roles check <targetRoot>             # validate role heartbeat/hook settings
+npx crewrun agents check <targetRoot>             # validate role heartbeat/hook settings
 ```
 
 ```js
@@ -226,7 +296,7 @@ A host module is a plain object (or `createHost({ targetRoot, log })` factory) w
 contract cards and handles Connect / Disconnect / approval decisions. See the stable
 [Host API and schema contract v1](docs/host-api-v1.md).
 
-**Heartbeats and hooks** are declared in the role spec — absent means off:
+**Heartbeats and hooks** are declared in the agent spec — absent means off:
 
 ```json
 { "heartbeat": { "interval": "30m", "budget_usd_per_day": 2 }, "hooks": ["task.assigned"] }
@@ -236,43 +306,43 @@ contract cards and handles Connect / Disconnect / approval decisions. See the st
 itself, and run state lives in the crew home. A hook firing is delivered through the host's
 enqueue with a debounced externalId, so bursts and retries coalesce (`pulse` module).
 
-Four ways work reaches a role without a person typing in a chat — hooks and heartbeats above, plus:
+Four ways work reaches an agent without a person typing in a chat — hooks and heartbeats above, plus:
 
 - **Handoffs** — `createHandoffQueue({ getDb, governance })` can enforce governed handoffs;
   `enqueueHandoff({ targetRoot, conversationId, taskKey, body, externalId, fromRole })` queues an input
-  for a role's singleton thread (a task's manager conversation). A worker claims a bounded
+  for an agent's singleton thread (a task's manager conversation). A worker claims a bounded
   batch under a lease; queued bodies are attached to the transcript exactly once, retries never
   duplicate them, an expired lease makes a crashed worker's batch reclaimable, and an
-  `externalId` makes a retried caller idempotent. For a role-originated handoff, the **host** sets
+  `externalId` makes a retried caller idempotent. For an agent-originated handoff, the **host** sets
   `fromRole` from the authenticated turn context (never from model-provided input); the queue
   resolves the receiver from the conversation and checks both contracts. Omitting `fromRole`
-  preserves the existing trusted host/webhook ingress path, which is not a role-to-role handoff.
-- **Scheduled tasks** — role specs hold `{ id, role, cron, prompt, enabled }` entries under
+  preserves the existing trusted host/webhook ingress path, which is not an agent-to-agent handoff.
+- **Scheduled tasks** — agent specs hold `{ id, role, cron, prompt, enabled }` entries under
   `"scheduled"` (numeric five-field cron in local time; `*`, lists, ranges, and steps are
-  supported); the older role key `"schedules"` and
+  supported); the older agent key `"schedules"` and
   `<crew dir>/schedules.json` remain readable. `createScheduler({ targetRoot, run })` ticks,
   fires each due task once (a task that missed several windows fires once, not per
   window), and records outcomes under the crew home so the repository never churns. Scheduling
   is deliberately **host-owned**: this helper is for one scheduler process per project, not
   distributed claiming. A multi-process host must elect one scheduler owner or claim scheduled
-  work transactionally in its own database/queue before it calls `runner.runRoleCapture`;
+  work transactionally in its own database/queue before it calls `runner.runAgentCapture`;
   `handoffs` shows the token-and-expiry claim pattern. A run whose scheduler process died becomes
   due after an hour by default (`staleAfterMs`).
 
 ## Memory and learning
 
-CrewRun keeps durable learning *proposed → approved → reviewable*. Role memory pointers, skills,
-preferences, contracts, and per-role reflections are inspectable project state a human can edit
-or revoke. Reflections remain bounded and private to their role, rather than becoming unbounded
+CrewRun keeps durable learning *proposed → approved → reviewable*. Agent memory pointers, skills,
+preferences, contracts, and per-agent reflections are inspectable project state a human can edit
+or revoke. Reflections remain bounded and private to their agent, rather than becoming unbounded
 shared memory.
 
 | Layer | What it is | Who writes it |
 |---|---|---|
-| Role memory | Files named in a role's `memory_pointers`, injected into every turn (a doctrine, house rules, domain notes) | Humans; versioned with the repo |
+| Agent memory | Files named in an agent's `memory_pointers`, injected into every turn (a doctrine, house rules, domain notes) | Humans; versioned with the repo |
 | Skills | `.crew/skills/<id>/SKILL.md` — reusable, scoped workflows (user → workspace → repository), indexed in the prompt and loaded on demand | Humans, or agents via **skill proposals** a human approves |
 | Preferences | Short approved statements with repository > workspace > user precedence | Agents propose (`preference-memory`), humans approve |
-| Reflections | A bounded per-role journal ("what worked, what to avoid"), injected only for that role | Roles propose through `memory.reflect`; an operator approves the entry |
-| Recall | "What happened last time this role touched this task or file" — a query over the conversation store, summarised to ask + outcome | Nobody; it is derived |
+| Reflections | A bounded per-agent journal ("what worked, what to avoid"), injected only for that agent | Agents propose through `memory.reflect`; an operator approves the entry |
+| Recall | "What happened last time this agent touched this task or file" — a query over the conversation store, summarised to ask + outcome | Nobody; it is derived |
 
 What it deliberately does not do: unsupervised "remember everything" vector memory. Silent
 drift, no provenance, and nothing to revoke are the failure modes that model avoids.
@@ -290,7 +360,7 @@ crewrun has neutral defaults and no product identity; a host injects its own.
 - **Environment.** Every override reads `CREW_<NAME>` (then the configured legacy prefix):
   `HOME`, `SECRETS_FILE`, `RUNNERS_FILE`, `MODEL_CATALOG_FILE`, `AUTH_FILE`, `WORKSPACE`,
   `EXTRA_PATH`, `MCP_ROLE`, `MCP_CONTEXT_FILE`, `MCP_AUTH_FILE`.
-- **Runner hooks.** `createRoleRunner({ tools, displayRoleName, universalMemory, memoryTitles,
+- **Runner hooks.** `createAgentRunner({ tools, displayRoleName, universalMemory, memoryTitles,
   extraMemory, capabilityProfile, capabilityInstructions, protocol, turnInstructions,
   proposeModeInstruction, createWorktree, container, noise })` — all optional. Memory files a
   host wants in every prompt (a doctrine, house rules) are the host's files, named in
@@ -299,12 +369,12 @@ crewrun has neutral defaults and no product identity; a host injects its own.
   validate?, alwaysLoad?, instructions?, toolInstructions?, enabled?, serializeContext?,
   childEnvPassthrough?, childEnvPrefixes?, childAuthEnv?, stdioServerEntry?, governance?,
   actionPolicy? })`. This starts a server for host tools; it is not a remote MCP client. Pair it
-  with `createToolBroker({ allowlists, governance })` and `createRoleGovernance(...)` when role
+  with `createToolBroker({ allowlists, governance })` and `createAgentGovernance(...)` when agent
   contracts must be enforced.
 - **Governed external actions.** Use `createActionApprovalPolicy({ targetRoot })` for the small
   local approval queue, or provide the same request/claim semantics through your host database.
-  Use `createConnectorRegistry(...)` for the narrow Slack/Gmail actions; the host owns OAuth,
-  token storage, and provider invocation.
+  Use `createStandaloneRuntime({ targetRoot })` for the built-in Slack/Gmail adapter, or
+  `createConnectorRegistry(...)` with your own OAuth, token storage, and provider invocation.
 - **Two host entry scripts.** Codex and the container sandbox run tools in a child process, so
   a host ships a stdio MCP server entry (`serveStdio({ bridge, role, toolContext })`) and a
   container worker entry (`runContainerWorker({ engineId, tools })`), passed as

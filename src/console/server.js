@@ -3,15 +3,16 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { crewDir } from "../crew-dirs.js";
+import { agentFile } from "../agent-paths.js";
 import { cronFromRecurrence, listSchedules, normalizeSchedule, removeSchedule, upsertSchedule } from "../schedules.js";
 import { approveSkill, rejectSkill } from "../skill-proposals.js";
 import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
 import { approveAction, getActionApproval, listActionApprovals, rejectAction } from "../action-approvals.js";
 import { normalizeRoleContract } from "../role-contract.js";
-import { roleScheduledEntries } from "../role-spec.js";
-import { validateRoleSettings, loadRoleSettings } from "../pulse.js";
+import { readAgentSpecForEditing, roleScheduledEntries } from "../role-spec.js";
+import { parseInterval, validateRoleSettings, loadRoleSettings } from "../pulse.js";
+import { createStandaloneRuntime } from "../standalone.js";
 import { renderPage } from "./shell.js";
 import { pageFromUrl } from "./navigation.js";
 import { collectModels, renderPartial } from "./pages.js";
@@ -24,7 +25,7 @@ import { collectModels, renderPartial } from "./pages.js";
 //   decideApproval?: ({ targetRoot, id, action })
 // }
 // It is deliberately data/action shaped rather than a product dependency. The
-// console still works (and never asks for OAuth credentials) without it.
+// console uses the standalone local connector adapter when none is supplied.
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 const VERSION = (() => {
   try { return JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")).version; } catch { return ""; }
@@ -41,17 +42,17 @@ function parseBody(request) {
 }
 
 function specPath(targetRoot, role) {
-  return path.join(path.resolve(targetRoot), crewDir(), "roles", `${role}.json`);
+  return agentFile(targetRoot, role);
 }
 
 function defaultsPath(targetRoot) {
-  return path.join(path.resolve(targetRoot), crewDir(), "roles", "_defaults.json");
+  return agentFile(targetRoot, "_defaults");
 }
 
 function readSpec(file) {
   if (!existsSync(file)) return {};
   const parsed = JSON.parse(readFileSync(file, "utf8"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("role spec must be a JSON object");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent spec must be a JSON object");
   return parsed;
 }
 
@@ -64,12 +65,12 @@ function lines(value) {
   return [...new Set(String(value || "").split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
 }
 
-function contractTools(value) {
+function contractTools(value, existing = []) {
   return lines(value).map((line) => {
     const parts = line.split("|").map((entry) => entry.trim());
     if (parts.length > 2 || !parts[0]) throw new Error("each contract tool must be tool.name | impact");
     const [name, impact] = parts;
-    return { name, ...(impact ? { impact } : {}) };
+    return { ...existing.find((tool) => tool.name === name), name, ...(impact ? { impact } : {}) };
   });
 }
 
@@ -78,7 +79,7 @@ function initialContract(role, title = "") {
     version: 1,
     revision: 1,
     mandate: title ? `Operate as ${title}.` : "",
-    authority: { tools: [] }
+    authority: { tools: [{ name: "skill.read", impact: "read" }, ...["memory.reflect", "skill.propose", "prefs.propose"].map((name) => ({ name, impact: "internal-write" }))] }
   }, { role });
 }
 
@@ -88,13 +89,13 @@ function persistedContract(contract) {
 }
 
 function roleUrl(role, tab = "manage") {
-  const href = "/roles/" + encodeURIComponent(role);
+  const href = "/agents/" + encodeURIComponent(role);
   return tab === "defaults" ? href + "?tab=defaults" : href;
 }
 
 function roleRoute(url) {
   const segments = url.pathname.split("/").filter(Boolean);
-  if (segments[0] !== "roles") return null;
+  if (!["agents", "roles"].includes(segments[0])) return null;
   const roleTab = url.searchParams.get("tab") === "defaults" ? "defaults" : "manage";
   if (segments.length === 1) {
     const selectedRole = String(url.searchParams.get("role") || "");
@@ -116,6 +117,7 @@ function redirectTarget(value, fallback) {
 export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {} } = {}) {
   if (!targetRoot) throw new Error("createConsole requires targetRoot");
   const root = path.resolve(targetRoot);
+  operations ||= up?.operations || createStandaloneRuntime({ targetRoot: root, env, log }).operations;
 
   async function snapshot() {
     // The kernel's small host-local approval queue is useful even without a product host. A
@@ -155,12 +157,13 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
   async function handleAction(pathname, form) {
     // Keep old console forms and bookmarks working while the operator surface
     // calls these Scheduled tasks.
+    pathname = pathname.replace(/^\/agents(?=\/|$)/, "/roles");
     pathname = pathname.replace(/^\/schedules(?=\/|$)/, "/scheduled");
     if (pathname === "/roles/save") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("role spec must be a JSON object");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent spec must be a JSON object");
       roleScheduledEntries(parsed);
       writeSpec(specPath(root, role), parsed);
       const { problems } = validateRoleSettings(loadRoleSettings(root), { knownEvents });
@@ -169,32 +172,64 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/roles/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const file = specPath(root, role);
-      const spec = readSpec(file);
+      const spec = readAgentSpecForEditing(root, role);
       const title = String(form.title || "").trim();
       const runner = String(form.runner || "").trim();
-      if (title.length > 160) throw new Error("role title must be at most 160 characters");
+      if (title.length > 160) throw new Error("agent title must be at most 160 characters");
       if (runner.length > 120) throw new Error("runner id must be at most 120 characters");
       if (title) spec.title = title;
       else delete spec.title;
       if (runner) spec.runner = runner;
       else delete spec.runner;
       spec.memory_pointers = lines(form.memory_pointers);
+      if (Object.hasOwn(form, "instructions")) spec.instructions = String(form.instructions).slice(0, 20_000);
+      writeSpec(file, spec);
+      return roleUrl(role);
+    }
+    if (pathname === "/roles/behavior") {
+      const role = String(form.role || "");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      const file = specPath(root, role);
+      const spec = readAgentSpecForEditing(root, role);
+      const interval = String(form.heartbeat || "off").trim();
+      const seconds = parseInterval(interval);
+      if (Number.isNaN(seconds) || seconds !== null && (seconds < 1 || seconds > 31_536_000)) throw new Error("Use a heartbeat such as 30m, 2h, or off.");
+      const limit = Number(form.reflection_limit || 10);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Reflection limit must be between 1 and 100.");
+      if (form.reflections === "inherit") delete spec.reflections;
+      else spec.reflections = form.reflections === "off" ? false : { limit };
+      if (form.web === "inherit") delete spec.web;
+      else if (form.web === "off") spec.web = false;
+      else {
+        const allow = lines(form.web_allow);
+        if (allow.some((domain) => !/^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(domain))) throw new Error("Enter website domains only, such as docs.example.com.");
+        spec.web = { ...(typeof spec.web === "object" ? spec.web : {}), allow };
+      }
+      if (form.heartbeat_mode === "inherit") delete spec.heartbeat;
+      else spec.heartbeat = { ...(typeof spec.heartbeat === "object" ? spec.heartbeat : {}), interval, prompt: String(form.heartbeat_prompt || "").slice(0, 20_000) };
       writeSpec(file, spec);
       return roleUrl(role);
     }
     if (pathname === "/roles/contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const file = specPath(root, role);
-      const spec = readSpec(file);
+      const spec = readAgentSpecForEditing(root, role);
       const existing = spec.contract ? normalizeRoleContract(spec.contract, { role }) : initialContract(role, spec.title || "");
       const next = normalizeRoleContract({
         ...existing,
         revision: existing.revision + 1,
         mandate: String(form.mandate || ""),
-        authority: { ...existing.authority, tools: contractTools(form.contract_tools) }
+        authority: {
+          ...existing.authority,
+          tools: contractTools(form.contract_tools, existing.authority.tools),
+          data: {
+            read: Object.hasOwn(form, "data_read") ? lines(form.data_read) : existing.authority.data.read,
+            write: Object.hasOwn(form, "data_write") ? lines(form.data_write) : existing.authority.data.write
+          }
+        }
       }, { role });
       spec.contract = persistedContract(next);
       writeSpec(file, spec);
@@ -202,25 +237,26 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/roles/initialize-contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const file = specPath(root, role);
-      const spec = readSpec(file);
-      if (spec.contract) throw new Error(`${role} already has a role-specific contract`);
+      const spec = readAgentSpecForEditing(root, role);
+      if (spec.contract) throw new Error(`${role} already has an agent-specific contract`);
       spec.contract = persistedContract(initialContract(role, spec.title || ""));
       writeSpec(file, spec);
       return roleUrl(role);
     }
     if (pathname === "/roles/add") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const file = specPath(root, role);
-      if (existsSync(file)) throw new Error(`role ${role} already exists`);
+      if (existsSync(file)) throw new Error(`agent ${role} already exists`);
       const title = String(form.title || "").trim();
       const runner = String(form.runner || "").trim();
       const spec = {
         ...(title ? { title } : {}),
         ...(runner ? { runner } : {}),
         memory_pointers: [],
+        instructions: String(form.instructions || "").slice(0, 20_000),
         hooks: [],
         contract: persistedContract(initialContract(role, title))
       };
@@ -229,7 +265,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/roles/defaults/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const file = defaultsPath(root);
       const defaults = readSpec(file);
       const runner = String(form.runner || "").trim();
@@ -242,7 +278,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/roles/defaults/save") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid role slug");
+      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shared defaults must be a JSON object");
       if (parsed.contract != null) normalizeRoleContract(parsed.contract, { role: "" });
@@ -321,12 +357,13 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         if (action === "approve") approveAction({ targetRoot: root, approvalId, approvedBy: "operator", env });
         else if (action === "reject") rejectAction({ targetRoot: root, approvalId, rejectedBy: "operator", env });
         else throw new Error("approval action must be approve or reject");
+        await operation(["afterApproval"])?.({ id: approvalId, action });
         return "/approvals";
       }
       return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/approvals");
     }
     if (pathname === "/connectors/connect") {
-      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || "") }, "/connectors");
+      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), credentials: form }, "/connectors");
     }
     if (pathname === "/connectors/disconnect") {
       return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/connectors");
@@ -335,8 +372,20 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
   }
 
   const server = http.createServer(async (request, response) => {
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("x-content-type-options", "nosniff");
     try {
       const url = new URL(request.url, "http://console");
+      // The console owns local credentials and outgoing approvals. Reject browser
+      // requests from another origin, including DNS rebinding onto loopback.
+      const authority = request.headers.host || "";
+      const expected = `${host}:${server.address()?.port}`;
+      if (authority !== expected && authority !== `localhost:${server.address()?.port}`) {
+        response.writeHead(403).end("Invalid console host"); return;
+      }
+      if (request.method === "POST" && ((request.headers.origin && request.headers.origin !== `http://${authority}`) || request.headers["sec-fetch-site"] === "cross-site")) {
+        response.writeHead(403).end("Open the console directly to make changes"); return;
+      }
       if (request.method === "POST") {
         const form = await parseBody(request);
         const back = await handleAction(url.pathname, form);
@@ -345,8 +394,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       }
       const page = pageFromUrl(url.pathname);
       if (!page) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
-      const roles = page === "roles" ? roleRoute(url) : null;
-      if (page === "roles" && !roles) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
+      const roles = page === "agents" ? roleRoute(url) : null;
+      if (page === "agents" && !roles) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const hostOperations = await snapshot();
       const models = collectModels(root, { knownEvents, operations: hostOperations });
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
@@ -355,6 +404,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
         roleTab: roles?.roleTab || "manage",
+        agentSearch: String(url.searchParams.get("q") || ""),
         selectedTask: String(url.searchParams.get("task") || url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
         showTaskEditor: url.searchParams.get("new") === "1",
         canConnect: Boolean(operation(["connect", "connectConnector"])),
@@ -364,8 +414,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       }), {
         targetRoot: root,
         version: VERSION,
-        backHref: roleSubpage ? "/roles" : page === "dashboard" ? "" : "/",
-        backLabel: roleSubpage ? "Back to roles" : "Back to dashboard"
+        backHref: roleSubpage ? "/agents" : page === "dashboard" ? "" : "/",
+        backLabel: roleSubpage ? "Back to agents" : "Back to dashboard"
       });
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
     } catch (error) {
@@ -375,10 +425,11 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
 
   return {
     server,
-    listen: () => new Promise((resolve) => server.listen(port, host, () => {
+    listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, () => {
+      server.removeListener("error", reject);
       log(`[console] http://${host}:${server.address().port}/`);
       resolve(server.address().port);
-    })),
+    }); }),
     close: () => new Promise((resolve) => server.close(resolve))
   };
 }

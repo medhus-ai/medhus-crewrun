@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { agentFile } from "../src/agent-paths.js";
+import { listAgentNames, loadAgentSpec, readAgentSpecForEditing } from "../src/agent-spec.js";
+import { listSchedules, upsertSchedule } from "../src/schedules.js";
+import { createAgentRunner } from "../src/runner.js";
+
+test("agent and legacy role files coexist, with one schedule per agent and inherited reflection controls", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "crew-agents-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const dir of ["agents", "roles"]) mkdirSync(path.join(root, ".crew", dir), { recursive: true });
+  const write = (dir, name, value) => writeFileSync(path.join(root, ".crew", dir, `${name}.json`), JSON.stringify(value));
+  write("roles", "_defaults", { reflections: false, runner: "claude-agent-sonnet-high" });
+  write("roles", "ops", { scheduled: [{ id: "brief", cron: "0 9 * * *", prompt: "Legacy brief" }] });
+  write("roles", "reviewer", { title: "Existing reviewer" });
+  write("agents", "ops", { title: "Operations", instructions: "Deliver a useful brief.", scheduled: [{ id: "brief", cron: "0 10 * * *", prompt: "New brief" }] });
+  assert.deepEqual(listAgentNames(root), ["ops", "reviewer"]);
+  assert.equal(loadAgentSpec(root, "ops").instructions, "Deliver a useful brief.");
+  assert.equal(loadAgentSpec(root, "ops").reflections, false);
+  assert.equal(loadAgentSpec(root, "reviewer").runner, "claude-agent-sonnet-high");
+  assert.equal(listSchedules({ targetRoot: root }).length, 1);
+  assert.equal(listSchedules({ targetRoot: root })[0].prompt, "New brief");
+  upsertSchedule({ targetRoot: root, schedule: { role: "ops", id: "brief", cron: "0 11 * * *", prompt: "Updated" } });
+  assert.match(readFileSync(agentFile(root, "ops"), "utf8"), /Updated/);
+  assert.match(readFileSync(path.join(root, ".crew/roles/ops.json"), "utf8"), /Legacy brief/);
+  assert.throws(() => agentFile(root, "../outside"), /invalid agent/);
+  assert.equal(typeof createAgentRunner().runAgentCapture, "function");
+  writeFileSync(path.join(root, ".crew/roles/legacy.md"), "---\nrunner: codex-agent-high\nheartbeat: 2h\n---\nPreserve these instructions.");
+  const editable = readAgentSpecForEditing(root, "legacy");
+  assert.equal(editable.runner, "codex-agent-high");
+  assert.deepEqual(editable.memory_pointers, [".crew/roles/legacy.md"]);
+  assert.equal(editable.heartbeat.interval, "2h");
+});

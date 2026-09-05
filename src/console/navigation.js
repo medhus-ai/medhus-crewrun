@@ -2,7 +2,7 @@
 // inline icons without bringing a browser-side icon dependency into a host.
 export const PAGES = [
   { id: "dashboard", label: "Dashboard", icon: "home", group: "primary" },
-  { id: "roles", label: "Roles", icon: "cloud", group: "primary" },
+  { id: "agents", label: "Agents", icon: "cloud", group: "primary" },
   { id: "scheduled", label: "Scheduled", icon: "calendar", group: "primary" },
   { id: "approvals", label: "Approvals", icon: "shield", group: "operations" },
   { id: "audit", label: "Audit", icon: "list", group: "operations" },
@@ -20,6 +20,7 @@ export function pageFromUrl(pathname) {
   // approval queue page.
   if (id === "proposals") return "approvals";
   // Old console bookmarks remain valid while the UI calls these Scheduled tasks.
+  if (id === "roles") return "agents";
   if (id === "schedules") return "scheduled";
   return PAGES.some((page) => page.id === id) ? id : "";
 }

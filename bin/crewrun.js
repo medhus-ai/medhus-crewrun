@@ -2,7 +2,7 @@
 // The crewrun CLI — a thin wrapper over the library:
 //   crewrun up <targetRoot> [--host <module>]   run the crew loop (schedules + heartbeats +
 //                                               hooks + host housekeeping) on a project
-//   crewrun roles check <targetRoot> [--host <module>]   validate role frontmatter settings
+//   crewrun agents check <targetRoot> [--host <module>]   validate agent frontmatter settings
 //   crewrun --version | help
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -35,7 +35,7 @@ if (command === "--version" || command === "-v") {
   const up = createUp({ targetRoot, host, log });
   await up.start();
   if (rest.includes("--console")) {
-    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: host.operations || host, port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
+    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
   }
   const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
@@ -45,7 +45,7 @@ if (command === "--version" || command === "-v") {
   const targetRoot = rest.find((arg) => !arg.startsWith("-"));
   if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--host <module>]");
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || host, port: Number(argValue(rest, "--port")) || 4400, log }).listen();
+  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, log }).listen();
   setInterval(() => {}, 1 << 30);
 } else if (command === "skills" && rest[0] === "index") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";
@@ -80,9 +80,9 @@ if (command === "--version" || command === "-v") {
   } else {
     fail("usage: crewrun proposals list|approve|reject <targetRoot> [proposal-id]");
   }
-} else if (command === "roles" && rest[0] === "check") {
+} else if ((command === "agents" || command === "roles") && rest[0] === "check") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-"));
-  if (!targetRoot) fail("usage: crewrun roles check <targetRoot> [--host <module>]");
+  if (!targetRoot) fail("usage: crewrun agents check <targetRoot> [--host <module>]");
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log: () => {} });
   const settings = loadRoleSettings(targetRoot);
   const { problems, warnings } = validateRoleSettings(settings, { knownEvents: host.knownEvents || [] });
@@ -94,18 +94,19 @@ if (command === "--version" || command === "-v") {
   for (const problem of problems) console.error(`FAIL ${problem}`);
   process.exit(problems.length ? 1 : 0);
 } else {
-  console.log(`crewrun — run a crew of AI roles on the runtimes you already pay for
+  console.log(`crewrun — run a crew of AI agents on the runtimes you already pay for
 
   crewrun up <targetRoot> [--host <module>] [--console]   run the crew loop on a project (+ local console)
   crewrun console <targetRoot> [--port N]             the local operator UI without the loop
-  crewrun roles check <targetRoot> [--host <module>]  validate role heartbeat/hook settings
+  crewrun agents check <targetRoot> [--host <module>]  validate agent heartbeat/hook settings
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version
 
 A host module (optional) injects tools, turn recording, hook routing, and housekeeping:
 export createHost({ targetRoot, log }) or a plain host object — see src/up.js for the contract.
-Without one, schedules and heartbeats run on a tool-less kernel runner and hooks are disabled.`);
+Without one, schedules and heartbeats use built-in tools and configured Slack/Gmail connections.
+Set up connections in Integrations; outgoing actions require approval. Event hooks need an enqueue adapter.`);
   if (command && command !== "help") process.exit(2);
 }
 

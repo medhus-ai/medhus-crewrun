@@ -34,7 +34,7 @@ const CONNECTIONS = [
     provider: "gmail",
     status: "connected",
     accountId: "alice@example.test",
-    scopes: ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"],
+    scopes: ["https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/gmail.readonly"],
     accessToken: "google-secret"
   }
 ];
@@ -99,7 +99,7 @@ test("safe Slack and Gmail descriptors are narrow, and Gmail reads are opt-in", 
     approved: true
   });
   assert.deepEqual(slack, { ok: true, input: { channel: "C1", text: "hello", connectionId: "slack-team" } });
-  assert.match(state.registry.describe("slack.postMessage"), /host must approve/i);
+  assert.match(state.registry.describe("slack.postMessage"), /operator approval/i);
   assert.equal(state.registry.validate("slack.replyToMention", { channel: "C1", text: "reply", threadTs: "not-a-ts" }).ok, false);
   assert.equal(state.registry.validate("gmail.sendDraft", { draftId: "draft-1", raw: "RFC822 payload" }).ok, true);
   assert.deepEqual(state.registry.validate("gmail.sendDraft", { draftId: "draft-1", raw: "RFC822 payload" }).input, { draftId: "draft-1" });

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
+import { agentFile } from "./agent-paths.js";
 import { crewDir } from "./crew-dirs.js";
 import { createCrewOnlyBridge } from "./mcp.js";
 import { parseFrontmatter } from "./frontmatter.js";
@@ -41,7 +42,7 @@ function resolveConfiguredRunnerId(role, targetRoot) {
   try {
     const text = readFileSync(path.join(targetRoot, `${crewDir()}/memory/ai-runners.json`), "utf8");
     const config = JSON.parse(text);
-    return roleRunnerId(role, config.default_role_runners || {});
+    return roleRunnerId(role, config.default_agent_runners || config.default_role_runners || {});
   } catch {
     return "";
   }
@@ -176,7 +177,7 @@ export function createRoleRunner({
     // without a spec file keep the legacy behavior: the .md is the Role section.
     const spec = loadRoleSpec(targetRoot, role);
     const specDriven = Boolean(spec?.hasSpecFile);
-    const rolePrompt = specDriven ? null : readMaybe(path.join(targetRoot, `${crewDir()}/roles`, `${role}.md`));
+    const rolePrompt = specDriven ? spec.instructions || null : readMaybe(agentFile(targetRoot, role, "md"));
     const memory = loadRoleMemory(targetRoot, rolePrompt, {
       ...memoryOptions,
       // Spec pointers replace the host's universal floor entirely when a spec file exists.
@@ -492,3 +493,9 @@ function appendTranscript(lines, messages) {
 function readMaybe(file) {
   try { return readFileSync(file, "utf8"); } catch { return null; }
 }
+
+export function createAgentRunner(options = {}) {
+  const runner = createRoleRunner(options);
+  return { ...runner, startAgentTurn: (options) => runner.startRoleTurn({ ...options, role: options.agent ?? options.role }), runAgentCapture: (options) => runner.runRoleCapture({ ...options, role: options.agent ?? options.role }) };
+}
+export { runnerIdForRole as runnerIdForAgent, loadRoleMemory as loadAgentMemory };

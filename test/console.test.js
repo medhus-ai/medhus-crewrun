@@ -49,7 +49,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
   const base = `http://127.0.0.1:${port}`;
   try {
     const dashboard = await (await fetch(base + "/")).text();
-    assert.match(dashboard, /1 roles/);
+    assert.match(dashboard, /1 agents/);
     assert.match(dashboard, /1 proposal pending/);
     assert.match(dashboard, /skill\.read/, "built-in tools are listed");
     assert.match(dashboard, /class="sidebar"/, "console uses the persistent workspace rail");
@@ -62,48 +62,60 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(dashboard, /padding: 41px 28px 64px/, "page content keeps a gutter from the sidebar edge");
     assert.match(dashboard, /--sidebar: #f3f3f3/, "the reference light shell is rendered with the page");
     assert.doesNotMatch(dashboard, /Back to Crew/, "the top rail no longer repeats a back-to-crew control");
-    assert.doesNotMatch(dashboard, /Manage roles/, "the dashboard does not duplicate the role directory");
+    assert.doesNotMatch(dashboard, /Manage agents/, "the dashboard does not duplicate the role directory");
     assert.doesNotMatch(dashboard, /Scheduled work/, "the dashboard does not duplicate the schedules page");
 
-    const roles = await (await fetch(base + "/roles")).text();
+    const roles = await (await fetch(base + "/agents")).text();
     assert.match(roles, /ops — Operations/);
-    assert.match(roles, /href="\/roles\/new"/);
-    assert.doesNotMatch(roles, /Role memory pointers/, "the role directory does not embed an editor");
+    assert.match(roles, /href="\/agents\/new"/);
+    assert.doesNotMatch(roles, /Agent memory pointers/, "the role directory does not embed an editor");
     assert.doesNotMatch(roles, /Initialize v1 contract/, "governance controls live in the role subpage");
     assert.doesNotMatch(roles, /Shared defaults/, "shared defaults live inside a role management page");
 
-    const newRole = await (await fetch(base + "/roles/new")).text();
-    assert.match(newRole, /<h1>Add role<\/h1>/);
-    assert.match(newRole, /href="\/roles" aria-label="Back to roles"/);
-    assert.doesNotMatch(newRole, /Role directory/);
+    const newRole = await (await fetch(base + "/agents/new")).text();
+    assert.match(newRole, /<h1>Add agent<\/h1>/);
+    assert.match(newRole, /href="\/agents" aria-label="Back to agents"/);
+    assert.doesNotMatch(newRole, /Agent directory/);
 
-    const managedRole = await (await fetch(base + "/roles/ops")).text();
+    const managedRole = await (await fetch(base + "/agents/ops")).text();
     assert.match(managedRole, /_defaults\.json/);
     assert.match(managedRole, /Model \/ runner/);
-    assert.match(managedRole, /Role memory pointers/);
+    assert.match(managedRole, /Agent memory pointers/);
     assert.match(managedRole, /Initialize v1 contract/);
     assert.match(managedRole, /Shared defaults/);
-    assert.match(managedRole, /class="role-tabs"/);
-    assert.match(managedRole, /href="\/roles\/ops\?tab=defaults"/);
+    assert.match(managedRole, /class="agent-tabs"/);
+    assert.match(managedRole, /href="\/agents\/ops\?tab=defaults"/);
     assert.doesNotMatch(managedRole, /Default model \/ runner/, "shared defaults are not nested in the Manage pane");
-    assert.doesNotMatch(managedRole, /action="\/roles\/defaults\/update"/);
+    assert.doesNotMatch(managedRole, /action="\/agents\/defaults\/update"/);
     assert.doesNotMatch(managedRole, /Advanced shared defaults JSON/);
-    assert.match(managedRole, /href="\/roles" aria-label="Back to roles"/);
+    assert.match(managedRole, /href="\/agents" aria-label="Back to agents"/);
     assert.doesNotMatch(managedRole, /Back to Crew/);
+    assert.match(managedRole, /Activity and learning/);
+    assert.match(managedRole, /name="instructions"/);
+    assert.match(managedRole, /Learn from approved reflections/);
+    assert.equal((await fetch(base + "/roles/ops")).status, 200, "legacy bookmarks remain usable");
+    const denied = await fetch(base + "/agents/update", { method: "POST", headers: { origin: "https://untrusted.example" }, body: new URLSearchParams({ role: "ops", title: "Unauthorized" }) });
+    assert.equal(denied.status, 403);
+    const behavior = await fetch(base + "/agents/behavior", { method: "POST", redirect: "manual", body: new URLSearchParams({ role: "ops", heartbeat_mode: "custom", heartbeat: "2h", heartbeat_prompt: "Check progress", reflections: "off", web: "off" }) });
+    assert.equal(behavior.status, 303);
+    const updated = JSON.parse(await readFile(path.join(root, ".crew/roles/ops.json"), "utf8"));
+    assert.equal(updated.reflections, false);
+    assert.equal(updated.heartbeat.interval, "2h");
+    assert.equal(updated.scheduled.length, 1, "behavior edits preserve scheduled work");
 
-    const defaultsPage = await (await fetch(base + "/roles/ops?tab=defaults")).text();
+    const defaultsPage = await (await fetch(base + "/agents/ops?tab=defaults")).text();
     assert.match(defaultsPage, /Shared defaults/);
     assert.match(defaultsPage, /Default model \/ runner/);
     assert.match(defaultsPage, /Shared memory pointers/);
-    assert.match(defaultsPage, /action="\/roles\/defaults\/update"/);
-    assert.match(defaultsPage, /action="\/roles\/defaults\/save"/);
+    assert.match(defaultsPage, /action="\/agents\/defaults\/update"/);
+    assert.match(defaultsPage, /action="\/agents\/defaults\/save"/);
     assert.match(defaultsPage, /Advanced shared defaults JSON/);
-    assert.doesNotMatch(defaultsPage, /Role memory pointers/, "role controls stay in the Manage pane");
+    assert.doesNotMatch(defaultsPage, /Agent memory pointers/, "role controls stay in the Manage pane");
     assert.doesNotMatch(defaultsPage, /Initialize v1 contract/);
 
     // Normal shared-default controls preserve advanced/default-only values while updating the
     // small fields people change most often.
-    const defaultsUpdate = await fetch(base + "/roles/defaults/update", {
+    const defaultsUpdate = await fetch(base + "/agents/defaults/update", {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -114,7 +126,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
       })
     });
     assert.equal(defaultsUpdate.status, 303);
-    assert.equal(defaultsUpdate.headers.get("location"), "/roles/ops?tab=defaults");
+    assert.equal(defaultsUpdate.headers.get("location"), "/agents/ops?tab=defaults");
     const updatedDefaults = JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8"));
     assert.equal(updatedDefaults.runner, "codex-agent-high");
     assert.deepEqual(updatedDefaults.memory_pointers, ["docs/shared.md", "docs/handbook.md"]);
@@ -125,18 +137,18 @@ test("console renders pages and performs actions over the project's .crew", asyn
       ...updatedDefaults,
       reflections: { limit: 12 }
     };
-    const defaultsSave = await fetch(base + "/roles/defaults/save", {
+    const defaultsSave = await fetch(base + "/agents/defaults/save", {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ role: "ops", json: JSON.stringify(advancedDefaults) })
     });
     assert.equal(defaultsSave.status, 303);
-    assert.equal(defaultsSave.headers.get("location"), "/roles/ops?tab=defaults");
+    assert.equal(defaultsSave.headers.get("location"), "/agents/ops?tab=defaults");
     assert.deepEqual(JSON.parse(await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8")), advancedDefaults);
 
     const stableDefaults = await readFile(path.join(root, ".crew", "roles", "_defaults.json"), "utf8");
-    const invalidDefaults = await fetch(base + "/roles/defaults/save", {
+    const invalidDefaults = await fetch(base + "/agents/defaults/save", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ role: "ops", json: JSON.stringify({ contract: { version: 99 } }) })
@@ -146,10 +158,10 @@ test("console renders pages and performs actions over the project's .crew", asyn
 
     // Contract editing is a normal form too. Existing roles are only migrated when an operator
     // chooses the explicit action, and each save creates a reviewed revision.
-    await fetch(base + "/roles/initialize-contract", {
+    await fetch(base + "/agents/initialize-contract", {
       method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=ops"
     });
-    await fetch(base + "/roles/contract", {
+    await fetch(base + "/agents/contract", {
       method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ role: "ops", mandate: "Coordinate the operational response.", contract_tools: "knowledge.search | read\nslack.replyToMention | external-write" })
     });
@@ -161,7 +173,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
 
     // The normal role form updates only the fields it owns, preserving scheduled tasks
     // and other reviewed spec fields instead of making JSON the primary UI.
-    await fetch(base + "/roles/update", {
+    await fetch(base + "/agents/update", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -178,7 +190,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(updatedOps.scheduled[0].id, "tick", "the form preserves unrelated role settings");
 
     const stableRole = await readFile(path.join(root, ".crew", "roles", "ops.json"), "utf8");
-    const invalidTaskKeys = await fetch(base + "/roles/save", {
+    const invalidTaskKeys = await fetch(base + "/agents/save", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ role: "ops", json: JSON.stringify({ scheduled: [], schedules: [] }) })
@@ -197,7 +209,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.doesNotMatch(scheduled, /Task ID/, "the task editor opens only when needed");
 
     const newTask = await (await fetch(base + "/scheduled?new=1")).text();
-    assert.match(newTask, /Runs in this host’s local time/);
+    assert.match(newTask, /Runs in your computer’s local time/);
     assert.match(newTask, /Task ID/);
     assert.match(newTask, /action="\/scheduled\/save"/);
     assert.doesNotMatch(newTask, /name="cron"/, "task timing is expressed through friendly controls");
@@ -253,21 +265,21 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(await readFile(path.join(root, ".crew", "memory", "reflections", "ops.md"), "utf8"), /Start with the current blocker\./);
 
     // add a role, then save an edited spec
-    const addedRole = await fetch(base + "/roles/add", {
+    const addedRole = await fetch(base + "/agents/add", {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: "role=analyst&title=Analyst"
     });
     assert.equal(addedRole.status, 303);
-    assert.equal(addedRole.headers.get("location"), "/roles/analyst");
+    assert.equal(addedRole.headers.get("location"), "/agents/analyst");
     assert.ok(existsSync(path.join(root, ".crew", "roles", "analyst.json")));
     assert.equal(JSON.parse(await readFile(path.join(root, ".crew", "roles", "analyst.json"), "utf8")).contract.version, 1, "new roles start with a versioned contract");
-    await fetch(base + "/roles/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=analyst&json=" + encodeURIComponent(JSON.stringify({ title: "Analyst", heartbeat: "1d" })) });
+    await fetch(base + "/agents/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=analyst&json=" + encodeURIComponent(JSON.stringify({ title: "Analyst", heartbeat: "1d" })) });
     const analyst = JSON.parse(await readFile(path.join(root, ".crew", "roles", "analyst.json"), "utf8"));
     assert.equal(analyst.heartbeat, "1d");
 
-    const bad = await fetch(base + "/roles/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=..%2Fevil&json={}" });
+    const bad = await fetch(base + "/agents/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=..%2Fevil&json={}" });
     assert.equal(bad.status, 400, "role slugs are validated");
   } finally {
     await console_.close();
@@ -347,7 +359,7 @@ test("console accepts an optional host operations snapshot without exposing secr
 
     const approvals = await (await fetch(base + "/approvals")).text();
     assert.match(approvals, /Post launch note/);
-    assert.match(approvals, /Host action approvals/);
+    assert.match(approvals, /Outgoing actions/);
 
     const audit = await (await fetch(base + "/audit")).text();
     assert.match(audit, /<h1>Audit<\/h1>/);

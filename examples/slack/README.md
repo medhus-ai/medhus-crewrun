@@ -2,9 +2,9 @@
 
 This is a small Slack Events API gateway for a crewrun project. It accepts only signed
 `app_mention` events from explicitly configured Slack user IDs, acknowledges Slack before a
-role turn begins, and posts the result back into the mentioning thread with `chat.postMessage`.
+agent turn begins, and posts the result back into the mentioning thread with `chat.postMessage`.
 
-It is a host example, not a new runtime or an authentication layer. The role's usual runner
+It is a host example, not a new runtime or an authentication layer. The agent's usual runner
 profile still decides whether its turn uses a vendor subscription, an API key, OpenRouter, or a
 local provider.
 
@@ -15,8 +15,8 @@ local provider.
 
 ## Run it
 
-The target project must already contain its normal `.crew/roles/<role>.md` and
-`.crew/memory/ai-runners.json` files, plus a v1 role contract that grants
+The target project must already contain its normal `.crew/agents/<role>.md` and
+`.crew/memory/ai-runners.json` files, plus a v1 agent contract that grants
 `slack.replyToMention` and the relevant channel scope (for example
 `connector:slack:*`). Configure the Slack gateway with Slack IDs, not display names:
 
@@ -35,7 +35,7 @@ The target project must already contain its normal `.crew/roles/<role>.md` and
 ```
 
 Use the actual Slack channel ID in lowercase (`C012ABCDE` becomes `c012abcde`), or use
-`connector:slack:*` only when that role is deliberately allowed to reply in every channel.
+`connector:slack:*` only when that agent is deliberately allowed to reply in every channel.
 
 ```bash
 export CREW_SLACK_SIGNING_SECRET='…'       # Slack app: Basic Information → Signing Secret
@@ -82,7 +82,7 @@ Slack → signature + replay check → configured user check → event-id dedupe
 
 The HTTP path never waits for the model. It only performs HMAC verification, JSON parsing,
 authorization, and event-id recording before returning its acknowledgement. Duplicated event IDs
-are acknowledged without another role turn. Bot-authored events are ignored.
+are acknowledged without another agent turn. Bot-authored events are ignored.
 
 ## Reply approval policy
 
@@ -93,10 +93,10 @@ only when `CREW_SLACK_APPROVE_MENTION_REPLIES=1` confirms that choice. A host th
 decision per response should put an approval record in its own queue and return an approved result
 only when it is ready to deliver the saved reply.
 
-The reference `server.mjs` also loads the role’s contract with `requireContracts: true`. Before
+The reference `server.mjs` also loads the agent’s contract with `requireContracts: true`. Before
 each post it checks `slack.replyToMention` and the `connector:slack:<channel-id>` write scope,
-then writes a redacted local audit record. The record carries the role, action, authority revision,
-approval, and outcome; it hashes the reply instead of retaining its text. A role without that
+then writes a redacted local audit record. The record carries the agent, action, authority revision,
+approval, and outcome; it hashes the reply instead of retaining its text. A agent without that
 contract is allowed to receive the inbound mention but cannot send a reply.
 
 ## Minimal host API
@@ -124,10 +124,10 @@ returns a reply string or `{ text }`. For dynamic authorization, replace `users`
 `resolveUser({ event, envelope, userId })`; return a user config object to allow a caller, or
 `null` to reject it. `postMessage`, `dedupe`, `schedule`, and `fetch` (through
 `createSlackPoster`) are injectable for tests or a different host transport. `approveReply`
-receives the role, action id, exact reply input, Slack event id, and authorized user; return
+receives the agent, action id, exact reply input, Slack event id, and authorized user; return
 `true`, `{ allowed: true }`, or `{ status: "approved" }` to permit that one delivery.
 
-`crewrun-adapter.mjs` wires that small contract into an existing role runner:
+`crewrun-adapter.mjs` wires that small contract into an existing agent runner:
 
 ```js
 import { createRoleRunner } from "medhus-crewrun/runner";
@@ -143,7 +143,7 @@ or normal automatic subscription login continues to work exactly as it does outs
 
 For host tools, build the same `createToolBroker` and `createMcpBridge` that your other host
 uses, then pass the resulting bridge as `tools` to `createRoleRunner`. This keeps the Slack
-gateway limited to transport and authorization; role tool allowlists remain enforced by crewrun.
+gateway limited to transport and authorization; agent tool allowlists remain enforced by crewrun.
 
 ## Test
 

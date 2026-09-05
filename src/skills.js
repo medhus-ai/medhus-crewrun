@@ -65,7 +65,7 @@ function readSkillDirectory({ scope, dir }) {
     out.push({
       id: SKILL_ID.test(meta.name || "") ? meta.name : (flat ? name.slice(0, -3) : name),
       description: String(meta.description || "Reusable workflow").trim(),
-      roles: parseInlineList(meta.roles),
+      roles: parseInlineList(meta.agents ?? meta.roles),
       workProfiles: parseInlineList(meta.work_profiles),
       scope,
       file
@@ -89,7 +89,7 @@ export function renderSkillIndexFile(targetRoot, { workspaceRoot, env } = {}) {
     "",
     "> **Generated — do not hand-edit.** Rebuilt by `crewrun skills index --write` and whenever a proposed skill is approved. Load a skill with `skill.read`.",
     "",
-    "| Skill | Description | Roles | Scope |",
+    "| Skill | Description | Agents | Scope |",
     "|---|---|---|---|",
     ...skills.map((skill) => `| ${skill.id} | ${skill.description.replace(/\|/g, "/")} | ${skill.roles.join(", ") || "all"} | ${skill.scope} |`)
   ];

@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { crewDir } from "../crew-dirs.js";
-import { listRoleSpecs, readRoleDefaults, readRoleSpecFile } from "../role-spec.js";
+import { agentFile } from "../agent-paths.js";
+import { listRoleSpecs, readRoleDefaults, readAgentSpecForEditing } from "../agent-spec.js";
 import { loadRoleSettings, validateRoleSettings, readHeartbeatState } from "../pulse.js";
 import { describeScheduleRecurrence, recurrenceFromCron, SCHEDULE_WEEKDAYS, scheduleOverview } from "../schedules.js";
 import { listSkills } from "../skills.js";
@@ -21,7 +21,7 @@ const DEFAULT_CONNECTORS = [
     id: "slack",
     label: "Slack",
     initials: "S",
-    description: "Post a message or reply in a thread under the host’s approval policy.",
+    description: "Let your agents prepare Slack updates. Review the exact message before it is sent.",
     capabilities: ["Post message", "Reply to mention"],
     state: "not connected"
   },
@@ -29,8 +29,8 @@ const DEFAULT_CONNECTORS = [
     id: "gmail",
     label: "Gmail",
     initials: "G",
-    description: "Draft or send outbound mail with a narrow, user-approved connection.",
-    capabilities: ["Draft email", "Send email"],
+    description: "Review and send existing Gmail drafts. Enable inbox access only when you need it.",
+    capabilities: ["Send existing draft"],
     state: "not connected"
   }
 ];
@@ -66,7 +66,8 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
 
 export function renderPartial(page, models, options = {}) {
   switch (page) {
-    case "roles": return renderRoles(models, options);
+    case "roles":
+    case "agents": return renderRoles(models, options);
     case "scheduled": return renderScheduledTasks(models, options);
     case "skills": return renderSkills(models);
     case "approvals":
@@ -93,15 +94,15 @@ function renderDashboard(models) {
   <div>
     <p class="eyebrow">CrewRun</p>
     <h1>Dashboard</h1>
-    <p class="sub">Run and govern your roles from one local control plane.</p>
+    <p class="sub">Run and govern your agents from one local control plane.</p>
   </div>
   <div class="actions">
-    <a class="button secondary" href="/roles/new">Add role</a>
+    <a class="button secondary" href="/agents/new">Add agent</a>
     <a class="button" href="/approvals">Review approvals${pending ? ` (${pending})` : ""}</a>
   </div>
 </section>
 <section class="summary-grid" aria-label="Crew summary">
-  ${metric("Roles", roles.length, `${roles.length} roles`, "reviewable contracts")}
+  ${metric("Agents", roles.length, `${roles.length} agents`, "reviewable contracts")}
   ${metric("Scheduled tasks", enabledTasks, `${enabledTasks} task${enabledTasks === 1 ? "" : "s"} enabled`, `${models.schedules.length} total`) }
   ${metric("Approvals", pending, `${pending} proposal${pending === 1 ? "" : "s"} pending`, pending ? "operator attention needed" : "queue clear", pending ? "warn" : "success")}
   ${metric("This month", spend === null ? "—" : formatCurrency(spend), "usage and subscription estimate", usage ? `${usage.totals?.runs || 0} recorded runs` : "no ledger attached", usage ? "info" : "")}
@@ -110,7 +111,7 @@ function renderDashboard(models) {
     <div class="section-heading"><h2>Governance</h2><a class="button secondary tiny" href="/approvals">Open queue</a></div>
     <div class="card flat">
       <div class="list">
-        ${listRow("Role configuration", health, problems.length ? "danger" : warnings.length ? "warn" : "success")}
+        ${listRow("Agent configuration", health, problems.length ? "danger" : warnings.length ? "warn" : "success")}
         ${listRow("Approved preferences", `${models.preferences.length} active`, "info")}
         ${listRow("Connector connections", `${connected} connected`, connected ? "success" : "")}
         ${listRow("Audited actions", `${models.operations.audit.length} safe record${models.operations.audit.length === 1 ? "" : "s"}`, models.operations.audit.length ? "info" : "")}
@@ -120,54 +121,57 @@ function renderDashboard(models) {
 </section>
 ${problems.length || warnings.length ? `<section><div class="section-heading"><h2>Configuration review</h2></div>${[...problems.map((entry) => notice(entry, "warn")), ...warnings.map((entry) => notice(entry, "warn"))].join("")}</section>` : ""}
 <section>
-  <div class="section-heading"><h2>Built-in role tools</h2></div>
-  <div class="notice">Ordinary bridges include the governed-learning tools ${LEARNING_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}; a strict role contract must list each one it may use. A role receives ${WEB_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")} only when its reviewed spec enables web access. Host tools are granted live per role.</div>
+  <div class="section-heading"><h2>Built-in agent tools</h2></div>
+  <div class="notice">Ordinary bridges include the governed-learning tools ${LEARNING_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}; a strict agent contract must list each one it may use. An agent receives ${WEB_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")} only when its reviewed spec enables web access. Tools follow the permissions you grant each agent.</div>
 </section>`;
 }
 
-function renderRoles(models, { selectedRole = "", roleView = "list", roleTab = "manage" } = {}) {
-  const roles = Object.values(models.specs);
+function renderRoles(models, { selectedRole = "", roleView = "list", roleTab = "manage", agentSearch = "" } = {}) {
+  const all = Object.values(models.specs);
+  const roles = all.filter((spec) => `${spec.role} ${spec.title} ${spec.contract?.mandate || ""}`.toLowerCase().includes(agentSearch.toLowerCase()));
   const selected = roles.find((spec) => spec.role === selectedRole) || null;
   const detail = roleView === "detail";
-  const title = roleView === "create" ? "Add role" : detail ? "Manage role" : "Roles";
+  const title = roleView === "create" ? "Add agent" : detail ? "Manage agent" : "Agents";
   const subtitle = roleView === "create"
-    ? "Create a focused, versioned role specification."
+    ? "Create a focused, versioned agent specification."
     : detail && roleTab === "defaults"
-      ? "Edit the global baseline shared by every role."
+      ? "Edit the global baseline shared by every agent."
       : detail
-        ? "Edit this role’s operating surface and reviewed authority."
-        : "Define each role’s operating surface and review its authority.";
+        ? "Edit this agent’s operating surface and reviewed authority."
+        : "Give each agent a clear job, the right tools, and a rhythm for getting work done.";
   return `
 <section class="hero">
-  <div><p class="eyebrow">Roles</p><h1>${title}</h1><p class="sub">${subtitle}</p>${detail && selected ? renderRoleTabs(selected, roleTab) : ""}</div>
-  ${roleView === "list" ? `<a class="button" href="/roles/new">Add role</a>` : ""}
+  <div><p class="eyebrow">Agents</p><h1>${title}</h1><p class="sub">${subtitle}</p>${detail && selected ? renderRoleTabs(selected, roleTab) : ""}</div>
+  ${roleView === "list" ? `<a class="button" href="/agents/new">Add agent</a>` : ""}
 </section>
 ${roleView === "list" ? `
-<section class="section-heading"><h2>Role directory</h2><span class="muted">${roles.length} installed</span></section>
-${roles.length ? `<div class="role-grid">${roles.map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty("This crew has no roles yet.", "Add role", "/roles/new")}
+<form method="get" action="/agents" class="button-row"><label class="muted" for="agent-search">Find an agent</label><input style="max-width:320px" id="agent-search" name="q" type="search" value="${esc(agentSearch)}" placeholder="Search by name or responsibility"><button class="subtle">Search</button>${agentSearch ? '<a href="/agents">Clear</a>' : ""}</form>
+<section class="section-heading"><h2>Agent directory</h2><span class="muted">${roles.length} installed</span></section>
+${roles.length ? `<div class="agent-grid">${roles.map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty(all.length ? "No agents match your search." : "Start with one useful job: a daily brief, a weekly review, or an operations check.", all.length ? "Clear search" : "Create your first agent", all.length ? "/agents" : "/agents/new")}
 ` : ""}
 ${roleView === "create" ? `
 <section id="create-role" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><h2>Create a role</h2><span class="muted">Starts as a versioned project spec</span></div>
-  <form method="post" action="/roles/add">
+  <div class="section-heading" style="margin-top:0"><h2>Create an agent</h2><span class="muted">You can add tools and recurring tasks next</span></div>
+  <form method="post" action="/agents/add">
     <div class="form-grid three">
-      <div class="field"><label for="new-role">Role slug</label><input id="new-role" name="role" placeholder="analyst" pattern="[a-z][a-z0-9-]*" required><span class="help">lowercase letters, digits, hyphens</span></div>
+      <div class="field"><label for="new-role">Agent slug</label><input id="new-role" name="role" placeholder="analyst" pattern="[a-z][a-z0-9-]*" required><span class="help">lowercase letters, digits, hyphens</span></div>
       <div class="field"><label for="new-title">Title</label><input id="new-title" name="title" placeholder="Analyst"></div>
       <div class="field"><label for="new-runner">Model / runner</label>${runnerSelect(models, "", "new-runner")}</div>
+      <div class="field wide"><label for="new-instructions">What should this agent do?</label><textarea id="new-instructions" name="instructions" maxlength="20000" placeholder="Prepare a concise daily operations brief. Include evidence, open issues, and the next actions. Ask for approval before sending updates."></textarea><span class="help">Describe the result you want, what good work looks like, and any boundaries.</span></div>
     </div>
-    <div class="button-row" style="margin-top:13px"><button>Create role</button></div>
+    <div class="button-row" style="margin-top:13px"><button>Create agent</button></div>
   </form>
 </section>
 ` : ""}
-${detail && selected ? roleTab === "defaults" ? renderDefaultsEditor(selected, models) : renderRoleEditor(selected, models) : detail ? empty("This role was not found.", "Back to roles", "/roles") : ""}`;
+${detail && selected ? roleTab === "defaults" ? renderDefaultsEditor(selected, models) : renderRoleEditor(selected, models) : detail ? empty("This agent was not found.", "Back to agents", "/agents") : ""}`;
 }
 
 function renderRoleTabs(spec, active) {
-  const manage = `/roles/${encodeURIComponent(spec.role)}`;
+  const manage = `/agents/${encodeURIComponent(spec.role)}`;
   const defaults = `${manage}?tab=defaults`;
-  return `<nav class="role-tabs" aria-label="Role settings">
-    <a class="role-tab${active === "manage" ? " active" : ""}" href="${manage}"${active === "manage" ? ' aria-current="page"' : ""}>Manage</a>
-    <a class="role-tab${active === "defaults" ? " active" : ""}" href="${defaults}"${active === "defaults" ? ' aria-current="page"' : ""}>Shared defaults</a>
+  return `<nav class="agent-tabs" aria-label="Agent settings">
+    <a class="agent-tab${active === "manage" ? " active" : ""}" href="${manage}"${active === "manage" ? ' aria-current="page"' : ""}>Manage</a>
+    <a class="agent-tab${active === "defaults" ? " active" : ""}" href="${defaults}"${active === "defaults" ? ' aria-current="page"' : ""}>Shared defaults</a>
   </nav>`;
 }
 
@@ -176,48 +180,52 @@ function renderRoleCard(spec, models) {
   const runnerId = models.runnerFor(spec.role);
   const runner = runnerLabel(models, runnerId);
   const heartbeat = settings?.heartbeat
-    ? `every ${settings.heartbeat.intervalSeconds}s${settings.heartbeat.budgetUsdPerDay != null ? ` · $${settings.heartbeat.budgetUsdPerDay}/day` : ""}`
+    ? `every ${formatDuration(settings.heartbeat.intervalSeconds)}${settings.heartbeat.budgetUsdPerDay != null ? ` · $${settings.heartbeat.budgetUsdPerDay}/day` : ""}`
     : "off";
   const contract = contractFor(models, spec);
-  const title = spec.title || "Untitled role";
+  const title = spec.title || "Untitled agent";
   return `
-<article class="role-card">
+<article class="agent-card">
   <div class="card-head">
-    <div><div class="role-name" aria-label="${esc(`${spec.role} — ${title}`)}">${esc(spec.role)}</div><div class="role-title">${esc(title)}</div></div>
-    ${contract?.status ? pill(contract.status, toneFor(contract.status)) : pill("role", "info")}
+    <div><div class="agent-name" aria-label="${esc(`${spec.role} — ${title}`)}">${esc(spec.role)}</div><div class="agent-title">${esc(title)}</div></div>
+    ${contract?.status ? pill(contract.status, toneFor(contract.status)) : pill("agent", "info")}
   </div>
-  <div class="role-meta">
+  <div class="agent-meta">
     <div>Model <code>${esc(runner)}</code></div>
     <div>Memory ${spec.memory_pointers.length ? `${spec.memory_pointers.length} pointer${spec.memory_pointers.length === 1 ? "" : "s"}` : "none"} · ${spec.schedules.length} scheduled task${spec.schedules.length === 1 ? "" : "s"}</div>
     <div>Heartbeat <span class="pill ${settings?.heartbeat ? "on" : ""}">${esc(heartbeat)}</span></div>
-    ${contract?.summary ? `<div>${esc(contract.summary)}</div>` : ""}
+    ${spec.contract?.mandate || spec.instructions ? `<p class="agent-mandate">${esc((spec.contract?.mandate || spec.instructions).slice(0, 220))}</p>` : ""}
+    <div>Learning ${spec.reflections === false ? "off" : "reviewed reflections"}</div>
+    <div>Last check-in ${models.heartbeatState.roles?.[spec.role]?.lastRunAt ? when(models.heartbeatState.roles[spec.role].lastRunAt) : "Not run yet"}</div>
   </div>
-  <div class="card-footer"><span class="faint">${spec.web ? "web enabled" : "host tools only"}</span><a class="button secondary tiny" href="/roles/${encodeURIComponent(spec.role)}">Manage</a></div>
+  <div class="card-footer"><span class="faint">${spec.web ? "Web enabled" : "Web off"} · ${spec.contract?.authority?.tools?.length || 0} tool${spec.contract?.authority?.tools?.length === 1 ? "" : "s"}</span><a class="button secondary tiny" href="/agents/${encodeURIComponent(spec.role)}">Manage agent</a></div>
 </article>`;
 }
 
 function renderRoleEditor(spec, models) {
-  const own = readRoleSpecFile(models.targetRoot, spec.role) || {};
+  const own = readAgentSpecForEditing(models.targetRoot, spec.role);
   const raw = roleJson(models.targetRoot, spec, own);
   const ownPointers = Array.isArray(own.memory_pointers) ? own.memory_pointers.map(String) : [];
   return `
-<section id="role-detail" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>${esc(spec.role)} — ${esc(spec.title || "Untitled role")}</h2><span class="muted">Role contract basics</span></div><a class="button secondary tiny" href="/scheduled?role=${encodeURIComponent(spec.role)}">Manage tasks</a></div>
-  <form method="post" action="/roles/update">
+<section id="agent-detail" class="card" style="margin-top:16px">
+  <div class="section-heading" style="margin-top:0"><div><h2>${esc(spec.role)} — ${esc(spec.title || "Untitled agent")}</h2><span class="muted">Agent contract basics</span></div><a class="button secondary tiny" href="/scheduled?role=${encodeURIComponent(spec.role)}">Manage tasks</a></div>
+  <form method="post" action="/agents/update">
     <input type="hidden" name="role" value="${esc(spec.role)}">
     <div class="form-grid">
-      <div class="field"><label for="role-title">Title</label><input id="role-title" name="title" value="${esc(own.title ?? spec.title)}" placeholder="Operations lead"></div>
-      <div class="field"><label for="role-runner">Model / runner</label>${runnerSelect(models, own.runner ?? "", "role-runner")}<span class="help">Leave inherited to use <code>_defaults.json</code> or the project default.</span></div>
-      <div class="field wide"><label for="role-memory">Role memory pointers</label><textarea id="role-memory" name="memory_pointers" placeholder=".crew/roles/${esc(spec.role)}.md&#10;docs/domain-notes.md">${esc(ownPointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. Shared pointers in <code>_defaults.json</code> remain inherited.</span></div>
+      <div class="field"><label for="agent-title">Title</label><input id="agent-title" name="title" value="${esc(own.title ?? spec.title)}" placeholder="Operations lead"></div>
+      <div class="field"><label for="agent-runner">Model / runner</label>${runnerSelect(models, own.runner ?? "", "agent-runner")}<span class="help">Leave inherited to use <code>_defaults.json</code> or the project default.</span></div>
+      <div class="field wide"><label for="agent-instructions">Instructions</label><textarea id="agent-instructions" name="instructions" maxlength="20000" placeholder="Describe this agent’s job and the result you expect.">${esc(own.instructions || "")}</textarea><span class="help">Included in every turn, alongside your reference files.</span></div>
+      <div class="field wide"><label for="agent-memory">Agent memory pointers</label><textarea id="agent-memory" name="memory_pointers" placeholder=".crew/agents/${esc(spec.role)}.md&#10;docs/domain-notes.md">${esc(ownPointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. Shared pointers in <code>_defaults.json</code> remain inherited.</span></div>
     </div>
-    <div class="button-row" style="margin-top:13px"><button>Save role</button><a class="button secondary" href="/roles/${encodeURIComponent(spec.role)}">Discard changes</a></div>
+    <div class="button-row" style="margin-top:13px"><button>Save agent</button><a class="button secondary" href="/agents/${encodeURIComponent(spec.role)}">Discard changes</a></div>
   </form>
+  ${renderAgentBehavior(spec, own)}
   ${renderContractSummary(spec)}
   ${renderContractEditor(spec, own)}
   <details>
-    <summary>Advanced role JSON editor</summary>
+    <summary>Advanced agent JSON editor</summary>
     <p class="help" style="margin:8px 0">Use this only for reviewed fields not represented above. Saving preserves exactly this JSON object.</p>
-    <form method="post" action="/roles/save">
+    <form method="post" action="/agents/save">
       <input type="hidden" name="role" value="${esc(spec.role)}">
       <textarea class="code-input" name="json">${esc(raw)}</textarea>
       <div class="button-row" style="margin-top:10px"><button class="subtle">Save advanced JSON</button></div>
@@ -226,23 +234,45 @@ function renderRoleEditor(spec, models) {
 </section>`;
 }
 
+function renderAgentBehavior(spec, own) {
+  const options = (values, selected) => values.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
+  return `<section class="card flat" style="margin-top:16px">
+    <div class="section-heading" style="margin-top:0"><h3>Activity and learning</h3></div>
+    <form method="post" action="/agents/behavior">
+      <input type="hidden" name="role" value="${esc(spec.role)}">
+      <div class="form-grid">
+        <div class="field"><label for="heartbeat-mode">Automatic check-ins</label><select id="heartbeat-mode" name="heartbeat_mode">${options([["inherit", "Use shared defaults"], ["custom", "Set for this agent"]], own.heartbeat === undefined ? "inherit" : "custom")}</select></div>
+        <div class="field"><label for="heartbeat">Check-in interval</label><input id="heartbeat" name="heartbeat" value="${esc(spec.heartbeat?.interval || "off")}" placeholder="30m, 2h, or off"><span class="help">Runs while crewrun up is active. Use Scheduled for exact times.</span></div>
+        <div class="field wide"><label for="heartbeat-prompt">Check-in instructions</label><textarea id="heartbeat-prompt" name="heartbeat_prompt">${esc(spec.heartbeat?.prompt || "")}</textarea></div>
+        <div class="field"><label for="agent-web">Web access</label><select id="agent-web" name="web">${options([["inherit", "Use shared defaults"], ["off", "Off"], ["on", "Enabled"]], own.web === undefined ? "inherit" : own.web === false ? "off" : "on")}</select></div>
+        <div class="field"><label for="web-allow">Allowed websites</label><textarea id="web-allow" name="web_allow" placeholder="docs.example.com">${esc((spec.web?.allow || []).join("\n"))}</textarea><span class="help">One domain per line. Empty means open web access when enabled.</span></div>
+        <div class="field"><label for="agent-reflections">Reflections</label><select id="agent-reflections" name="reflections">${options([["inherit", "Use shared defaults"], ["on", "Learn from approved reflections"], ["off", "Off"]], own.reflections === undefined ? "inherit" : own.reflections === false ? "off" : "on")}</select><span class="help">Optional lessons from completed work. You review them in Approvals before future turns use them.</span></div>
+        <div class="field"><label for="reflection-limit">Recent lessons to include</label><input id="reflection-limit" name="reflection_limit" type="number" min="1" max="100" value="${spec.reflections?.limit || 10}"></div>
+      </div>
+      <div class="button-row" style="margin-top:12px"><button class="subtle">Save activity and learning</button></div>
+    </form>
+  </section>`;
+}
+
 function renderContractEditor(spec, own) {
   const contract = own.contract && typeof own.contract === "object" ? own.contract : null;
   if (!contract) {
     return `<section class="notice warn" style="margin-top:12px">
-      <div class="card-head"><div><h3>Start a governed contract</h3><p class="help" style="margin-top:3px">This is a deliberate migration step; it does not silently rewrite a legacy role.</p></div>
-      <form class="inline" method="post" action="/roles/initialize-contract"><input type="hidden" name="role" value="${esc(spec.role)}"><button class="tiny">Initialize v1 contract</button></form></div>
+      <div class="card-head"><div><h3>Start a governed contract</h3><p class="help" style="margin-top:3px">This is a deliberate migration step; it does not silently rewrite a legacy agent.</p></div>
+      <form class="inline" method="post" action="/agents/initialize-contract"><input type="hidden" name="role" value="${esc(spec.role)}"><button class="tiny">Initialize v1 contract</button></form></div>
     </section>`;
   }
   const tools = Array.isArray(contract.authority?.tools) ? contract.authority.tools : [];
   const toolLines = tools.map((tool) => `${tool.name || tool} | ${tool.impact || "external-write"}`).join("\n");
   return `<section class="card flat" style="margin-top:12px">
     <div class="section-heading" style="margin-top:0"><div><h3>Contract controls</h3><span class="muted">v${esc(contract.version || 1)} · saving creates revision ${esc(Number(contract.revision || 1) + 1)}</span></div></div>
-    <form method="post" action="/roles/contract">
+    <form method="post" action="/agents/contract">
       <input type="hidden" name="role" value="${esc(spec.role)}">
       <div class="form-grid">
-        <div class="field wide"><label for="contract-mandate">Mandate</label><textarea id="contract-mandate" name="mandate" maxlength="1000" placeholder="What this role is accountable for.">${esc(contract.mandate || "")}</textarea></div>
-        <div class="field wide"><label for="contract-tools">Authorized tools</label><textarea id="contract-tools" name="contract_tools" placeholder="slack.replyToMention | external-write&#10;knowledge.search | read">${esc(toolLines)}</textarea><span class="help">One tool per line: <code>tool.name | read</code>, <code>internal-write</code>, <code>external-write</code>, <code>destructive</code>, or <code>financial</code>. Data scopes, handoffs, approval floors, and budgets stay in the reviewed advanced JSON.</span></div>
+        <div class="field wide"><label for="contract-mandate">Mandate</label><textarea id="contract-mandate" name="mandate" maxlength="1000" placeholder="What this agent is accountable for.">${esc(contract.mandate || "")}</textarea></div>
+        <div class="field wide"><label for="contract-tools">Authorized tools</label><textarea id="contract-tools" name="contract_tools" placeholder="slack.replyToMention | external-write&#10;knowledge.search | read">${esc(toolLines)}</textarea><span class="help">One tool per line: <code>tool.name | read</code>, <code>internal-write</code>, <code>external-write</code>, <code>destructive</code>, or <code>financial</code>. Grant data access below for connected services. Handoffs, approval floors, and budgets stay in advanced JSON.</span></div>
+        <div class="field"><label for="contract-read">Data this agent may read</label><textarea id="contract-read" name="data_read" placeholder="connector:gmail:gmail">${esc((contract.authority?.data?.read || []).join("\n"))}</textarea></div>
+        <div class="field"><label for="contract-write">Data this agent may change</label><textarea id="contract-write" name="data_write" placeholder="connector:slack:slack&#10;connector:gmail:gmail">${esc((contract.authority?.data?.write || []).join("\n"))}</textarea><span class="help">For standalone Slack use connector:slack:slack. For Gmail use connector:gmail:gmail. Outgoing messages still require approval.</span></div>
       </div>
       <div class="button-row" style="margin-top:12px"><button class="subtle">Save contract revision</button></div>
     </form>
@@ -264,13 +294,13 @@ function renderContractSummary(spec) {
     budget.max_runs_per_day != null ? `${formatInt(budget.max_runs_per_day)} runs/day` : ""
   ].filter(Boolean);
   const detail = summary.status === "legacy"
-    ? "This role has no governed contract yet. Initialize a reviewed v1 contract before requiring contract enforcement."
+    ? "This agent has no governed contract yet. Initialize a reviewed v1 contract before requiring contract enforcement."
     : `${summary.mandate || "No mandate recorded."} ${tools.length ? `${tools.length} authorized tool${tools.length === 1 ? "" : "s"}.` : "No tools are authorized."}`;
   return `<section class="notice${summary.status === "governed" ? "" : " warn"}" style="margin-top:16px">
     <div class="card-head"><div><h3>Authority contract</h3><p class="help" style="margin-top:3px">${esc(detail)}</p></div>${pill(summary.status || "legacy", toneFor(summary.status))}</div>
     ${summary.version ? `<p class="help" style="margin-top:8px">v${esc(summary.version)} · revision ${esc(summary.revision)}${summary.fingerprint ? ` · ${esc(String(summary.fingerprint).slice(0, 12))}` : ""}</p>` : ""}
     ${tools.length ? `<p class="help" style="margin-top:8px">Tools: ${tools.map((tool) => `<code>${esc(tool.name || tool)}</code>`).join(" · ")}</p>` : ""}
-    ${approvals.length ? `<p class="help" style="margin-top:5px">Host approval: ${approvals.map((impact) => `<code>${esc(impact)}</code>`).join(" · ")}</p>` : ""}
+    ${approvals.length ? `<p class="help" style="margin-top:5px">Approval required: ${approvals.map((impact) => `<code>${esc(impact)}</code>`).join(" · ")}</p>` : ""}
     ${handoffs.send?.length || handoffs.receive?.length ? `<p class="help" style="margin-top:5px">Handoffs: send ${esc((handoffs.send || []).join(", ") || "none")} · receive ${esc((handoffs.receive || []).join(", ") || "none")}</p>` : ""}
     ${budgetParts.length ? `<p class="help" style="margin-top:5px">Budget: ${esc(budgetParts.join(" · "))}</p>` : ""}
   </section>`;
@@ -280,22 +310,22 @@ function renderDefaultsEditor(spec, models) {
   const defaults = models.defaults || {};
   const pointers = Array.isArray(defaults.memory_pointers) ? defaults.memory_pointers.map(String) : [];
   const raw = defaultsJson(models.targetRoot, defaults);
-  const tabUrl = `/roles/${encodeURIComponent(spec.role)}?tab=defaults`;
+  const tabUrl = `/agents/${encodeURIComponent(spec.role)}?tab=defaults`;
   return `
 <section id="shared-defaults" class="card">
-  <div class="section-heading" style="margin-top:0"><div><h3>Shared defaults</h3><span class="muted">Global baseline for every role; role-specific settings may override or extend it.</span></div></div>
-  <form method="post" action="/roles/defaults/update">
+  <div class="section-heading" style="margin-top:0"><div><h3>Shared defaults</h3><span class="muted">Global baseline for every agent; agent-specific settings may override or extend it.</span></div></div>
+  <form method="post" action="/agents/defaults/update">
     <input type="hidden" name="role" value="${esc(spec.role)}">
     <div class="form-grid">
-      <div class="field"><label for="defaults-runner">Default model / runner</label>${runnerSelect(models, String(defaults.runner || ""), "defaults-runner", "No shared model")}<span class="help">Roles without their own runner use this model.</span></div>
-      <div class="field wide"><label for="defaults-memory">Shared memory pointers</label><textarea id="defaults-memory" name="memory_pointers" placeholder=".crew/memory/doctrine.md&#10;.crew/memory/org-map.md">${esc(pointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. These load before each role’s own memory pointers.</span></div>
+      <div class="field"><label for="defaults-runner">Default model / runner</label>${runnerSelect(models, String(defaults.runner || ""), "defaults-runner", "No shared model")}<span class="help">Agents without their own runner use this model.</span></div>
+      <div class="field wide"><label for="defaults-memory">Shared memory pointers</label><textarea id="defaults-memory" name="memory_pointers" placeholder=".crew/memory/doctrine.md&#10;.crew/memory/org-map.md">${esc(pointers.join("\n"))}</textarea><span class="help">One repository-relative file per line. These load before each agent’s own memory pointers.</span></div>
     </div>
     <div class="button-row" style="margin-top:13px"><button class="subtle">Save shared defaults</button><a class="button secondary" href="${tabUrl}">Discard changes</a></div>
   </form>
   <details>
     <summary>Advanced shared defaults JSON</summary>
     <p class="help" style="margin:8px 0">Use this for reviewed shared settings not represented above, including heartbeat, hooks, web access, reflections, the contract floor, and host fields.</p>
-    <form method="post" action="/roles/defaults/save">
+    <form method="post" action="/agents/defaults/save">
       <input type="hidden" name="role" value="${esc(spec.role)}">
       <textarea class="code-input" name="json">${esc(raw)}</textarea>
       <div class="button-row" style="margin-top:10px"><button class="subtle">Save shared defaults JSON</button></div>
@@ -306,7 +336,7 @@ function renderDefaultsEditor(spec, models) {
 
 function defaultsJson(targetRoot, defaults) {
   try {
-    return readFileSync(path.join(targetRoot, crewDir(), "roles", "_defaults.json"), "utf8");
+    return readFileSync(agentFile(targetRoot, "_defaults"), "utf8");
   } catch {
     return JSON.stringify(defaults, null, 2);
   }
@@ -331,7 +361,7 @@ function renderScheduledTasks(models, { canRunNow = false, selectedRole = "", se
 </section>
 <section class="section-heading"><h2>Tasks</h2><span class="muted">${enabledTasks} enabled · ${models.schedules.length} total</span></section>
 ${renderTaskTable(models.schedules, { canRunNow, actions: true })}
-${canRunNow ? notice("Run task now starts this task immediately. It does not enable a disabled task.") : notice("Run task now is available when the crew host is running. Saved timing uses this host’s local time.", "warn")}
+${canRunNow ? notice("Run task now starts this task immediately. It does not enable a disabled task.") : notice("Run task now is available when crewrun up is running. Saved timing uses your computer’s local time.", "warn")}
 ${selected || showTaskEditor ? renderTaskForm(models, { task, selected, recurrence }) : ""}`;
 }
 
@@ -346,12 +376,12 @@ function renderTaskForm(models, { task, selected, recurrence }) {
   ];
   return `
 <section id="task-editor" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit task: ${esc(selected.title || selected.id)}` : "New task"}</h2><span class="muted">Runs in this host’s local time</span></div></div>
+  <div class="section-heading" style="margin-top:0"><div><h2>${selected ? `Edit task: ${esc(selected.title || selected.id)}` : "New task"}</h2><span class="muted">Runs in your computer’s local time</span></div></div>
   ${recurrence.cadence === "advanced" ? notice("This task already uses advanced timing. Keep that option to preserve it, or choose a standard repeat rule below to replace it.", "warn") : ""}
   ${Object.keys(models.specs).length ? `<form method="post" action="/scheduled/save">
     <input type="hidden" name="previous_role" value="${esc(selected?.role || "")}"><input type="hidden" name="previous_id" value="${esc(selected?.id || "")}"><input type="hidden" name="existing_cron" value="${esc(recurrence.existingCron)}">
     <div class="form-grid three">
-      <div class="field"><label for="task-role">Role</label>${roleSelect(models, task.role, "task-role")}</div>
+      <div class="field"><label for="task-role">Agent</label>${roleSelect(models, task.role, "task-role")}</div>
       <div class="field"><label for="task-id">Task ID</label><input id="task-id" name="id" value="${esc(task.id)}" placeholder="daily-brief" pattern="[a-z][a-z0-9-]*" required></div>
       <div class="field"><label for="task-title">Task title</label><input id="task-title" name="title" value="${esc(task.title || "")}" placeholder="Daily brief"></div>
     </div>
@@ -363,10 +393,10 @@ function renderTaskForm(models, { task, selected, recurrence }) {
       <div class="field"><label for="task-interval">Every N days</label><input id="task-interval" name="interval_days" type="number" min="2" max="31" value="${esc(recurrence.intervalDays)}"></div>
       <div class="field"><span class="help">Pick the field that matches “Runs.” Only that setting is used.</span></div>
     </div>
-    <div class="field" style="margin-top:12px"><label for="task-prompt">What should this role do?</label><textarea id="task-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(task.prompt)}</textarea></div>
+    <div class="field" style="margin-top:12px"><label for="task-prompt">What should this agent do?</label><textarea id="task-prompt" name="prompt" placeholder="Prepare the daily brief for review." required>${esc(task.prompt)}</textarea></div>
     <label class="checkbox" style="margin-top:12px"><input type="checkbox" name="enabled" value="1"${task.enabled ? " checked" : ""}> Enable this task</label>
     <div class="button-row" style="margin-top:13px"><button>${selected ? "Save task" : "Create task"}</button><a class="button secondary" href="/scheduled">Cancel</a></div>
-  </form>` : empty("Create a role before adding a task.", "Add role", "/roles/new")}
+  </form>` : empty("Create an agent before adding a task.", "Add agent", "/agents/new")}
 </section>`;
 }
 
@@ -377,10 +407,10 @@ function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = 
       <form class="inline" method="post" action="/scheduled/delete"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="danger tiny">Delete task</button></form>
       ${canRunNow
         ? `<form class="inline" method="post" action="/scheduled/run"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="tiny">Run task</button></form>`
-        : `<span class="button secondary tiny disabled" title="Start the crew host to run this task now">Run task</span>`}` : "";
+        : `<span class="button secondary tiny disabled" title="Start crewrun up to run this task now">Run task</span>`}` : "";
     return [
       `<strong>${esc(task.title || task.id)}</strong><div class="faint"><code>${esc(task.role)}:${esc(task.id)}</code></div>`,
-      `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">host local time</div>`,
+      `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">local time</div>`,
       pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
       compact ? when(task.nextRunAt) : `${esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
       compact ? "" : when(task.nextRunAt),
@@ -399,18 +429,18 @@ function renderSkills(models) {
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Roles can read approved skills on demand; proposals land in the approval queue.</p></div><a class="button" href="/approvals">Review proposals</a></section>
+<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand; proposals land in the approval queue.</p></div><a class="button" href="/approvals">Review proposals</a></section>
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
-${table(["skill", "description", "roles", "scope"], rows, "No skills yet — roles can propose them with skill.propose.")}`;
+${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.")}`;
 }
 
 function renderApprovals(models, { canDecideApprovals = false } = {}) {
   const hostRows = models.operations.approvals.filter((entry) => entry.status === "pending").map((entry) => [
     pill(entry.kind || "host", toneFor(entry.risk || entry.status)),
     `<code>${esc(entry.id)}</code>`,
-    `${esc(entry.title || entry.description || "Approval requested")}${entry.description && entry.title ? `<div class="faint">${esc(entry.description)}</div>` : ""}`,
+    `${esc(entry.title || entry.description || "Approval requested")}${entry.description && entry.title ? `<div class="faint approval-preview">${esc(entry.description)}</div>` : ""}`,
     esc(entry.requestedBy || entry.role || "host"),
-    (entry.source === "crewrun" || canDecideApprovals) ? approvalButtons(entry.id) : '<span class="muted">Host decision required</span>'
+    (entry.source === "crewrun" || canDecideApprovals) ? approvalButtons(entry.id) : '<span class="muted">Review in the connected application</span>'
   ]);
   const proposalRows = [
     ...models.skillProposals.map((proposal) => ["skill", proposal]),
@@ -425,9 +455,9 @@ function renderApprovals(models, { canDecideApprovals = false } = {}) {
      <form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Approvals</p><h1>Approvals</h1><p class="sub">This queue combines host action approvals with crewrun skill and memory proposals.</p></div></section>
-<section class="section-heading"><h2>Host action approvals</h2><span class="muted">${hostRows.length} pending</span></section>
-${table(["kind", "id", "request", "requested by", "decision"], hostRows, "No external actions are awaiting approval. Attach a host approval queue to surface Slack, Gmail, and other connector actions here.")}
+<section class="hero"><div><p class="eyebrow">Approvals</p><h1>Approvals</h1><p class="sub">This queue combines outgoing actions with crewrun skill and memory proposals.</p></div></section>
+<section class="section-heading"><h2>Outgoing actions</h2><span class="muted">${hostRows.length} pending</span></section>
+${table(["kind", "id", "request", "requested by", "decision"], hostRows, "No external actions are awaiting approval. Slack and Gmail messages appear here when an agent requests delivery.")}
 <section class="section-heading"><h2>Memory and skill proposals</h2><span class="muted">${proposalRows.length} pending</span></section>
 ${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.")}`;
 }
@@ -445,8 +475,8 @@ function renderAudit(models) {
   ]);
   return `
 <section class="hero"><div><p class="eyebrow">Audit</p><h1>Audit</h1><p class="sub">Review safe metadata for each governed action. Inputs, outputs, credentials, and error text are never rendered here.</p></div></section>
-<section class="section-heading"><h2>Host audit records</h2><span class="muted">${rows.length} safe record${rows.length === 1 ? "" : "s"}</span></section>
-${table(["time", "actor / role", "model", "action", "authority", "data", "budget", "outcome"], rows, "No host audit records are attached. Return an audit array from the host operations snapshot to surface governed activity.")}`;
+<section class="section-heading"><h2>Action history</h2><span class="muted">${rows.length} safe record${rows.length === 1 ? "" : "s"}</span></section>
+${table(["time", "actor / agent", "model", "action", "authority", "data", "budget", "outcome"], rows, "No actions recorded yet. Connected-service activity will appear here.")}`;
 }
 
 function renderAuditAuthority(authority = {}) {
@@ -535,7 +565,7 @@ function renderProviders(models) {
     ${listRow("Codex runtime", tools.codex.available ? "available" : "not found", tools.codex.available ? "success" : "warn")}
     ${listRow("Model catalog", models.catalog?.updated_at ? `updated ${when(models.catalog.updated_at)}` : "not refreshed", models.catalog?.updated_at ? "info" : "")}
   </div></div>
-  <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Encrypted secret store</h2></div><p class="usage-amount">${secretsFileExists() ? isUnlocked() ? "Unlocked" : "Locked" : "Not created"}</p><p class="muted" style="margin-top:8px">${secretsLocked ? "Unlock it in the operator process to inspect configured key names." : "Keys are kept out of role prompts and this dashboard."}</p></div>
+  <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Encrypted secret store</h2></div><p class="usage-amount">${secretsFileExists() ? isUnlocked() ? "Unlocked" : "Locked" : "Not created"}</p><p class="muted" style="margin-top:8px">${secretsLocked ? "Unlock it in the operator process to inspect configured key names." : "Keys are kept out of agent prompts and this dashboard."}</p></div>
 </section>
 <section class="section-heading"><h2>Credential availability</h2><span class="muted">names and state only</span></section>
 ${table(["provider", "environment name", "state"], keyRows, "No known provider credentials.")}
@@ -545,10 +575,8 @@ ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</
 }
 
 function renderConnectors(models, { canConnect = false, canDisconnect = false } = {}) {
-  const hasHostData = models.operations.hasConnectorData;
   return `
-<section class="hero"><div><p class="eyebrow">Connectors</p><h1>Integrations</h1><p class="sub">Slack and Gmail connections belong to the host’s OAuth store. Roles receive bounded actions, never OAuth tokens.</p></div></section>
-${hasHostData ? "" : notice("No connector host is attached. These cards are safe placeholders: this console will not request or store credentials on its own.")}
+<section class="hero"><div><p class="eyebrow">Connectors</p><h1>Integrations</h1><p class="sub">Connect your services, grant agents the tools they need, and review outgoing messages in Approvals. Available with standalone Crewrun or your own host.</p></div></section>
 <section class="connector-grid" style="margin-top:16px">${models.operations.connectors.map((connector) => renderConnectorCard(connector, { canConnect, canDisconnect })).join("")}</section>`;
 }
 
@@ -557,18 +585,33 @@ function renderConnectorCard(connector, { canConnect, canDisconnect }) {
   const action = connector.connected
     ? canDisconnect
       ? `<form method="post" action="/connectors/disconnect"><input type="hidden" name="id" value="${esc(connector.connectionId || connector.id)}"><button class="secondary">Disconnect</button></form>`
-      : `<span class="button secondary disabled">Managed by host</span>`
+      : `<span class="muted">Managed by your integration</span>`
+    : connector.localSetup
+      ? renderConnectorSetup(connector)
     : connector.connectUrl && safeHref(connector.connectUrl)
       ? `<a class="button" href="${esc(safeHref(connector.connectUrl))}">Continue connection</a>`
       : canConnect
         ? `<form method="post" action="/connectors/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>Connect ${esc(connector.label)}</button></form>`
-        : `<span class="button secondary disabled">Host connection required</span>`;
-  return `<article class="connector-card">
+        : `<span class="muted">Connection setup is unavailable in this integration.</span>`;
+  return `<article class="connector-card${connector.localSetup && !connector.connected ? " local-setup" : ""}">
     <div class="card-head"><div style="display:flex;gap:9px;align-items:center"><span class="connector-icon">${esc(connector.initials || String(connector.label || "?").slice(0, 1).toUpperCase())}</span><div><h2>${esc(connector.label)}</h2><span class="faint">${esc(connector.account || connector.id)}</span></div></div>${pill(state, toneFor(state))}</div>
-    <p class="description">${esc(connector.description || "A host-controlled connector.")}</p>
+    <p class="description">${esc(connector.description || "A connected service.")}</p>
     <p class="capabilities">${(connector.capabilities || []).map((entry) => `<code>${esc(entry)}</code>`).join(" · ") || "No actions advertised"}</p>
     <div class="card-footer">${action}</div>
   </article>`;
+}
+
+function renderConnectorSetup(connector) {
+  const gmail = connector.id === "gmail";
+  return `<details class="connector-setup"><summary>Connect ${esc(connector.label)}</summary>
+    <form method="post" action="/connectors/connect" autocomplete="off">
+      <input type="hidden" name="id" value="${esc(connector.id)}">
+      <p class="help" style="margin:10px 0">${gmail ? 'Use a Google OAuth client with the Gmail API enabled and a refresh token granted gmail.compose. A refresh token keeps scheduled work connected. <a href="https://developers.google.com/identity/protocols/oauth2/native-app" target="_blank" rel="noreferrer">Google setup guide</a>.' : 'Install a Slack app with chat:write and invite it to the channels you want to use. Add app_mentions:read for the reply-to-mention action. <a href="https://docs.slack.dev/authentication/tokens/" target="_blank" rel="noreferrer">Slack token guide</a>.'}</p>
+      ${gmail ? `<div class="field"><label for="gmail-client">Google client ID</label><input id="gmail-client" name="client_id" required></div><div class="field"><label for="gmail-secret">Client secret</label><input id="gmail-secret" name="client_secret" type="password" required></div><div class="field"><label for="gmail-refresh">Refresh token</label><input id="gmail-refresh" name="refresh_token" type="password" required></div><label class="checkbox"><input type="checkbox" name="gmail_read" value="1"> Allow inbox search and reads (also needs gmail.readonly)</label>` : '<div class="field"><label for="slack-token">Slack OAuth token</label><input id="slack-token" name="access_token" type="password" placeholder="xoxb-…" required></div>'}
+      <p class="help" style="margin:10px 0">Credentials are saved in your private local Crewrun directory, outside the project. After connecting, grant the actions in your agent’s Authorized tools.</p>
+      <button>Verify and connect</button>
+    </form>
+  </details>`;
 }
 
 function metric(label, value, summary, detail, tone = "") {
@@ -618,7 +661,7 @@ function approvalButtons(id) {
 
 function roleJson(targetRoot, spec, own) {
   try {
-    return readFileSync(path.join(targetRoot, crewDir(), "roles", `${spec.role}.json`), "utf8");
+    return readFileSync(agentFile(targetRoot, spec.role), "utf8");
   } catch {
     return JSON.stringify({
       ...(own.title || spec.title ? { title: own.title || spec.title } : {}),
@@ -774,6 +817,7 @@ function normalizeConnector(value = {}) {
   return {
     id,
     connectionId,
+    localSetup: value.localSetup === true,
     label: String(value.label || value.name || providerLabel(provider) || id || "Connector").trim(),
     initials: String(value.initials || "").trim().slice(0, 2),
     description: String(value.description || "").trim(),

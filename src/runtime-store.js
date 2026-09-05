@@ -224,7 +224,7 @@ export function createRuntimeStore({ targetRoot, env = process.env, now = Date.n
         if (current && receipt) event(action.run_id, "action.late_receipt", { receipt, nextAction: "Review this late receipt when reconciling delivery." }, action.id);
         return false;
       }
-      if (status === "retry_wait" && current.attempt >= 5) status = "failed";
+      if (status === "retry_wait" && current.attempt >= 5) { status = "failed"; error = `Retry limit reached after ${current.attempt} attempts. Review the provider response before requesting a new approval. ${error || ""}`; }
       db.prepare("UPDATE runtime_actions SET status=?,receipt=?,error=?,available_at=?,lease=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(status, receipt ? json(receipt) : null, error, now() + Math.max(1000, retryAfterMs), now(), action.id);
       event(action.run_id, `action.${status}`, { receipt, error }, action.id);
       return true;

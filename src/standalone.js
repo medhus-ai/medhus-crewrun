@@ -31,6 +31,8 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
   const dispatches = new WeakMap();
   const controllers = new Map();
   const executions = new Set();
+  const deliveries = new Set();
+  let stopping = false;
   let runner, timer, activeWork;
   const readState = () => ({ connections: Object.fromEntries(PROVIDERS.map((id) => [id, store.meta(`connection:${id}`)]).filter(([, value]) => value)) });
   // Credentials are updated per connection, preventing concurrent account edits from
@@ -285,7 +287,14 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
       return `/tasks?run=${action.run_id}`;
     }
   };
-  async function deliver(id) {
+  function deliver(id) {
+    if (stopping) return Promise.resolve();
+    const promise = dispatch(id);
+    deliveries.add(promise);
+    promise.finally(() => deliveries.delete(promise)).catch(() => {});
+    return promise;
+  }
+  async function dispatch(id) {
     const action = store.claimAction(id);
     if (!action) return;
     const context = {};
@@ -320,24 +329,27 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
     } finally { clearInterval(heartbeat); controllers.delete(run.id); }
   }
   async function tick() {
-    if (activeWork) return;
+    if (activeWork || stopping) return;
     activeWork = (async () => {
       store.recover();
       await deliver();
+      if (stopping) return;
       const run = store.claimRun();
       if (run) await execute(run);
     })();
     try { await activeWork; } finally { activeWork = null; }
   }
   async function stop() {
+    stopping = true;
     clearInterval(timer); timer = null;
     for (const controller of controllers.values()) controller.abort();
     await activeWork;
-    await Promise.allSettled([...executions]);
+    await Promise.allSettled([...executions, ...deliveries]);
   }
   return {
     tools, operations, store, tick, deliver,
     runTurn(agent, prompt, meta = {}) {
+      if (stopping) throw new Error("The runtime is stopped.");
       const run = store.enqueue({ agent, prompt, workflow: meta.workflow, dedupeKey: meta.dedupeKey });
       const claimed = store.claimRun(run.id);
       if (!claimed) return Promise.resolve({ ok: true, runId: run.id, status: run.status });
@@ -346,7 +358,7 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
       promise.finally(() => executions.delete(promise)).catch(() => {});
       return promise;
     },
-    start() { if (!timer) { void tick().catch((error) => log(`[runtime] ${error.message}`)); timer = setInterval(() => void tick().catch((error) => log(`[runtime] ${error.message}`)), 1000); timer.unref?.(); } },
+    start() { stopping = false; if (!timer) { void tick().catch((error) => log(`[runtime] ${error.message}`)); timer = setInterval(() => void tick().catch((error) => log(`[runtime] ${error.message}`)), 1000); timer.unref?.(); } },
     stop,
     async close() { await stop(); store.close(); }
   };

@@ -168,3 +168,27 @@ test("Gmail 403 rate-limit rejections retry safely and search matches remain rev
   assert.ok(runtime.store.snapshot().runs[0].timeline.some((e) => e.type === "action.receipt_candidate"));
   assert.equal(sends, 2);
 });
+
+test("shutdown finishes an in-flight receipt without starting the next queued model turn", async (t) => {
+  const f = fixture(t);
+  writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ contract: { version: 1, authority: { tools: [{ name: "slack.postMessage", impact: "external-write" }], data: { write: ["connector:slack:slack"] } } } }));
+  let finishSend, startedSend, turns = 0;
+  const sending = new Promise((resolve) => { startedSend = resolve; });
+  const runtime = f.keep(createStandaloneRuntime({ ...f.options, executeTurn: async () => { turns++; return { ok: true, text: "Should not start" }; }, fetchImpl: async (url) => {
+    if (url.endsWith("auth.test")) return Response.json({ ok: true }, { headers: { "x-oauth-scopes": "chat:write" } });
+    startedSend();
+    return new Promise((resolve) => { finishSend = () => resolve(Response.json({ ok: true, channel: "C123", ts: "13.1" })); });
+  } }));
+  await runtime.operations.connect({ connectorId: "slack", credentials: { access_token: "xoxb-private-fixture" } });
+  const action = await runtime.tools.registry.call({ role: "ops", toolName: "slack.postMessage", input: { channel: "C123", text: "Final update" } });
+  await runtime.operations.decideApproval({ id: action.actionId, action: "approve" });
+  const queued = runtime.store.enqueue({ agent: "ops", prompt: "Next task" });
+  const work = runtime.tick();
+  await sending;
+  const stopping = runtime.stop();
+  finishSend();
+  await stopping; await work;
+  assert.equal(turns, 0);
+  assert.equal(runtime.store.getRun(queued.id).status, "queued");
+  assert.equal(runtime.store.getAction(action.actionId).status, "delivered");
+});

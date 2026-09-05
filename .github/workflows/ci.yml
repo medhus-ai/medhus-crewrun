@@ -32,6 +32,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      # Node 20 bundles node-gyp 10, which cannot detect VS 2026 on windows-latest.
+      # npm 11.6.3 includes node-gyp 12.1; use a supported Python for its source builds.
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.12'
+      - run: npm install --global npm@11.6.3
+        if: runner.os == 'Windows'
       - run: npm ci
         shell: bash
       - run: npm test

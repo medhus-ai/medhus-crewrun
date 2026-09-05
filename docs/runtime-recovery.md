@@ -25,6 +25,10 @@ timeout. State lives at `CREW_HOME/runtime/<project-hash>/state.sqlite` (default
 an owner-only directory and database file on Unix. Windows uses the operator account's filesystem
 permissions. Credentials and exact review payloads are private operator state, outside the repo;
 the database is not encrypted. SQLite's native module is a required runtime dependency.
+If no prebuilt binary is available, installation needs a C++ toolchain and Python. For Node 20
+with Visual Studio 2026, use npm 11.6.3 or a compatible newer npm so its node-gyp can detect that
+compiler; the bundled npm 10 cannot. Windows CI uses npm 11.6.3 and Python 3.12 and runs the native
+database tests. [node-gyp Visual Studio support](https://github.com/nodejs/node-gyp/blob/main/CHANGELOG.md).
 
 Runs, attempts, actions, trigger cursors, artifacts, receipts and events commit transactionally.
 Claims have unique lease tokens and deadlines. Workers renew their leases; stale workers cannot

@@ -45,7 +45,11 @@ if (command === "--version" || command === "-v") {
   const targetRoot = rest.find((arg) => !arg.startsWith("-"));
   if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--host <module>]");
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  await createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, log }).listen();
+  const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, log });
+  await consoleApp.listen();
+  const shutdown = () => { void consoleApp.close().finally(() => process.exit(0)); };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30);
 } else if (command === "skills" && rest[0] === "index") {
   const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-")) || ".";

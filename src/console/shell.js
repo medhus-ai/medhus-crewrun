@@ -266,7 +266,7 @@ export function renderPage(page, content, { targetRoot, version = "", backHref =
 <div class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-controls="sidebar" aria-valuemin="220" aria-valuemax="420" aria-valuenow="278" aria-valuetext="278 pixels wide" tabindex="0" title="Drag to resize the sidebar; double-click to reset"></div>
 <main id="main-content">
 ${content}
-<footer>crewrun console${version ? ` v${esc(version)}` : ""} · configuration is written to this project’s <code>.crew/</code> files.</footer>
+<footer>crewrun console${version ? ` v${esc(version)}` : ""} · Review work and manage your agents.</footer>
 </main>
 <script>${RESIZER_SCRIPT}</script>
 </body></html>`;

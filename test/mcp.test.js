@@ -167,8 +167,7 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
     inputSchema: () => ({}),
     call: async () => ({})
   }).toolHandlers({ role: "ops", toolContext: { targetRoot: root } }).find((handler) => handler.toolName === "memory.reflect");
-  const written = await kernelReflectHandler.invoke({ text: "kernel loop works" });
-  assert.equal(written.isError, undefined, "built-in reflect writes to the crew memory store");
+  assert.equal(kernelReflectHandler, undefined, "optional reflection proposals are off by default");
 
   const optedOut = createMcpBridge({
     serverName: "strict",

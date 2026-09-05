@@ -3,14 +3,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync }
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { createStandaloneRuntime, standaloneStatePath } from "../src/standalone.js";
-import { approveAction, getActionApproval } from "../src/action-approvals.js";
+import { createStandaloneRuntime } from "../src/standalone.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 function fixture(t) {
   const parent = mkdtempSync(path.join(os.tmpdir(), "crew-standalone-"));
-  t.after(() => rmSync(parent, { recursive: true, force: true }));
+
   const root = path.join(parent, "repo");
   const env = { CREW_HOME: path.join(parent, "private") };
   mkdirSync(path.join(root, ".crew/agents"), { recursive: true });
@@ -29,6 +28,7 @@ function fixture(t) {
     throw new Error(`Unexpected request: ${url}`);
   };
   const runtime = createStandaloneRuntime({ targetRoot: root, env, fetchImpl });
+  t.after(async () => { await runtime.close(); rmSync(parent, { recursive: true, force: true }); });
   const call = (toolName, input) => runtime.tools.registry.call({ role: "ops", toolName, input });
   return { root, env, spec, specFile, runtime, requests, call, setDraft: (value) => { draft = Buffer.from(value).toString("base64url"); } };
 }
@@ -39,32 +39,33 @@ test("standalone Slack verifies credentials, survives restart, reviews exact pay
   const snapshot = await f.runtime.operations.getSnapshot();
   assert.equal(snapshot.connectors[0].status, "connected");
   assert.doesNotMatch(JSON.stringify(snapshot), /xoxb-this-is-private/);
-  if (process.platform !== "win32") assert.equal(statSync(standaloneStatePath(f.root, f.env)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(f.runtime.store.file).mode & 0o777, 0o600);
   const restarted = createStandaloneRuntime({ targetRoot: f.root, env: f.env });
   assert.equal((await restarted.operations.getSnapshot()).connectors[0].status, "connected");
-  await assert.rejects(f.call("slack.postMessage", { channel: "C123", text: "Exact reviewed update" }), /approval/);
+  await restarted.close();
+  assert.equal((await f.call("slack.postMessage", { channel: "C123", text: "Exact reviewed update" })).status, "awaiting_approval");
   const approval = (await f.runtime.operations.getSnapshot()).approvals[0];
   assert.match(approval.summary, /Exact reviewed update/);
   assert.equal(f.requests.filter((r) => r.url.endsWith("chat.postMessage")).length, 0);
-  approveAction({ targetRoot: f.root, env: f.env, approvalId: approval.id });
+  await f.runtime.operations.decideApproval({ id: approval.id, action: "approve" });
   await f.runtime.operations.afterApproval({ id: approval.id, action: "approve" });
   await f.runtime.operations.afterApproval({ id: approval.id, action: "approve" });
   assert.equal(f.requests.filter((r) => r.url.endsWith("chat.postMessage")).length, 1);
-  assert.equal(getActionApproval({ targetRoot: f.root, env: f.env, approvalId: approval.id }).status, "used");
-  assert.doesNotMatch(readFileSync(standaloneStatePath(f.root, f.env), "utf8"), /Exact reviewed update/);
+  assert.equal(f.runtime.store.getAction(approval.id).status, "delivered");
+  assert.equal(f.runtime.store.getAction(approval.id).receipt.ts, "100.1");
 });
 
 test("standalone rechecks agent authority and hides disconnected accounts", async (t) => {
   const f = fixture(t);
   await f.runtime.operations.connect({ connectorId: "slack", credentials: { access_token: "xoxb-this-is-private" } });
   assert.ok(f.runtime.tools.toolHandlers({ role: "ops" }).some((tool) => tool.toolName === "slack.postMessage"));
-  await assert.rejects(f.call("slack.postMessage", { channel: "C123", text: "Review me" }), /approval/);
+  assert.equal((await f.call("slack.postMessage", { channel: "C123", text: "Review me" })).status, "awaiting_approval");
   const approval = (await f.runtime.operations.getSnapshot()).approvals[0];
-  approveAction({ targetRoot: f.root, env: f.env, approvalId: approval.id });
+  await f.runtime.operations.decideApproval({ id: approval.id, action: "approve" });
   f.spec.contract.authority.tools = [];
   f.spec.contract.revision++;
   writeFileSync(f.specFile, JSON.stringify(f.spec));
-  await assert.rejects(f.runtime.operations.afterApproval({ id: approval.id, action: "approve" }), /not allowed/);
+  assert.match((await f.runtime.operations.afterApproval({ id: approval.id, action: "approve" })).error, /not allowed/);
   assert.equal(f.requests.filter((r) => r.url.endsWith("chat.postMessage")).length, 0);
   f.runtime.operations.disconnect({ connectorId: "slack" });
   assert.ok(!f.runtime.tools.toolHandlers({ role: "ops" }).some((tool) => tool.toolName.startsWith("slack.")));
@@ -96,10 +97,10 @@ test("Gmail refreshes credentials, keeps reads opt-in, and pins the reviewed dra
   const names = f.runtime.tools.toolHandlers({ role: "ops" }).map((tool) => tool.toolName);
   assert.ok(names.includes("gmail.sendDraft"));
   assert.ok(!names.includes("gmail.getMessage"));
-  await assert.rejects(f.call("gmail.sendDraft", { draftId: "draft123" }), /approval/);
+  assert.equal((await f.call("gmail.sendDraft", { draftId: "draft123" })).status, "awaiting_approval");
   const approval = (await f.runtime.operations.getSnapshot()).approvals[0];
   assert.match(approval.summary, /customer@example.test/);
-  approveAction({ targetRoot: f.root, env: f.env, approvalId: approval.id });
+  await f.runtime.operations.decideApproval({ id: approval.id, action: "approve" });
   await f.runtime.operations.afterApproval({ id: approval.id, action: "approve" });
   const send = f.requests.find((r) => r.url.endsWith("/drafts/send"));
   assert.match(Buffer.from(JSON.parse(send.options.body).message.raw, "base64url").toString(), /Project complete/);
@@ -111,10 +112,10 @@ test("Gmail draft edits require a new review and invalid credentials are never s
   const f = fixture(t);
   await assert.rejects(f.runtime.operations.connect({ connectorId: "gmail", credentials: {} }), /refresh token/);
   await f.runtime.operations.connect({ connectorId: "gmail", credentials: { client_id: "client", client_secret: "secret", refresh_token: "refresh" } });
-  await assert.rejects(f.call("gmail.sendDraft", { draftId: "draft123" }), /approval/);
+  assert.equal((await f.call("gmail.sendDraft", { draftId: "draft123" })).status, "awaiting_approval");
   const approval = (await f.runtime.operations.getSnapshot()).approvals[0];
-  approveAction({ targetRoot: f.root, env: f.env, approvalId: approval.id });
+  await f.runtime.operations.decideApproval({ id: approval.id, action: "approve" });
   f.setDraft("To: someone-else@example.test\r\n\r\nChanged");
-  await assert.rejects(f.runtime.operations.afterApproval({ id: approval.id, action: "approve" }), /draft changed/);
+  assert.match((await f.runtime.operations.afterApproval({ id: approval.id, action: "approve" })).error, /draft changed/);
   assert.equal(f.requests.filter((r) => r.url.endsWith("/drafts/send")).length, 0);
 });

@@ -131,6 +131,7 @@ export function createMcpBridge(registry) {
           const validation = !crew && registry.validate ? registry.validate(toolName, args) : { ok: true, input: args };
           if (!validation.ok) return toolError(new Error(validation.error));
           try {
+            registry.assertContext?.(toolContext);
             // Host tools receive the same enforcement through createToolBroker. Kernel tools do
             // not pass through that broker, so recheck their role contract at invocation too.
             assertCrewToolAuthority(role, toolName, toolContext);

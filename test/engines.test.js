@@ -475,7 +475,11 @@ test("runRoleCapture drops tool noise and resolves ok:false on failure instead o
   });
   t.after(() => setEngineForTests("claude-agent", null));
   const runner = createRoleRunner({ tools: demoBridge() });
-  assert.deepEqual(await runner.runRoleCapture({ root: target, role: "ceo", prompt: "brief" }), { ok: true, text: "real answer" });
+  const captured = await runner.runRoleCapture({ root: target, role: "ceo", prompt: "brief" });
+  assert.equal(captured.ok, true);
+  assert.equal(captured.text, "real answer");
+  assert.equal(captured.runnerId, "test-claude-capture");
+  assert.equal(captured.engineId, "claude-agent");
   const failed = await runner.runRoleCapture({ root: target, role: "ceo", prompt: "brief" });
   assert.equal(failed.ok, false);
   assert.match(failed.reason, /runner exited 2: bad/);

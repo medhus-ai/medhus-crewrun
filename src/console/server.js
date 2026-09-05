@@ -117,7 +117,8 @@ function redirectTarget(value, fallback) {
 export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {} } = {}) {
   if (!targetRoot) throw new Error("createConsole requires targetRoot");
   const root = path.resolve(targetRoot);
-  operations ||= up?.operations || createStandaloneRuntime({ targetRoot: root, env, log }).operations;
+  const standalone = !operations && !up?.operations ? createStandaloneRuntime({ targetRoot: root, env, log }) : null;
+  operations ||= up?.operations || standalone?.operations;
 
   async function snapshot() {
     // The kernel's small host-local approval queue is useful even without a product host. A
@@ -127,7 +128,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const getter = typeof operations === "function" ? operations : operations?.getSnapshot || operations?.snapshot;
       const value = typeof getter === "function" ? await getter({ targetRoot: root }) : operations;
       const hostSnapshot = value && typeof value === "object" ? value : {};
-      const merged = new Map(coreApprovals.map((approval) => [approval.id, approval]));
+      const merged = new Map(coreApprovals.filter((a) => !(hostSnapshot.supersededApprovalIds || []).includes(a.id)).map((approval) => [approval.id, approval]));
       for (const approval of Array.isArray(hostSnapshot.approvals) ? hostSnapshot.approvals : []) {
         if (approval && typeof approval === "object") merged.set(String(approval.id || ""), approval);
       }
@@ -333,7 +334,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/scheduled/run") {
       if (!up?.scheduler?.runNow) throw new Error("run task now needs the console attached to a running crew loop");
-      void up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") }).catch((error) => log(`[console] run-now failed: ${error.message}`));
+      void Promise.resolve(up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") })).catch((error) => log(`[console] run-now failed: ${error.message}`));
       return "/scheduled";
     }
     if (pathname === "/proposals/decide") {
@@ -346,7 +347,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       };
       const fn = handlers[kind];
       if (!fn) throw new Error("proposal kind must be skill, pref, or reflection");
-      fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator" });
+      fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator", target: form.target, key: form.key, description: form.description, env });
       return "/approvals";
     }
     if (pathname === "/approvals/decide") {
@@ -368,6 +369,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (pathname === "/connectors/disconnect") {
       return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/connectors");
     }
+    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
+    if (pathname === "/tasks/control") return callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || "") }, "/tasks");
+    if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/tasks");
+    if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/tasks");
     throw new Error("unknown action");
   }
 
@@ -392,6 +397,12 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         response.writeHead(303, { location: back }).end();
         return;
       }
+      if (url.pathname === "/tasks/artifact") {
+        const data = await snapshot();
+        const artifact = (data.runs || []).flatMap((r) => r.artifacts || []).find((a) => a.id === url.searchParams.get("id"));
+        if (!artifact) { response.writeHead(404).end("Artifact not found"); return; }
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8", "content-disposition": 'attachment; filename="crewrun-result.txt"' }).end(artifact.content); return;
+      }
       const page = pageFromUrl(url.pathname);
       if (!page) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const roles = page === "agents" ? roleRoute(url) : null;
@@ -400,6 +411,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const models = collectModels(root, { knownEvents, operations: hostOperations });
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
+        selectedRun: String(url.searchParams.get("run") || ""),
+        canManageTasks: Boolean(operation(["enqueueTask"])),
         canRunNow: Boolean(up?.scheduler?.runNow),
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
@@ -427,9 +440,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     server,
     listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, () => {
       server.removeListener("error", reject);
+      standalone?.start();
       log(`[console] http://${host}:${server.address().port}/`);
       resolve(server.address().port);
     }); }),
-    close: () => new Promise((resolve) => server.close(resolve))
+    close: async () => { await standalone?.close(); return new Promise((resolve) => server.close(resolve)); }
   };
 }

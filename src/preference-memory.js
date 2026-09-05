@@ -7,6 +7,14 @@ import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 const SCOPES = new Set(["user", "workspace", "repository"]);
 const KEY_PATTERN = /^[a-z][a-z0-9._-]{1,79}$/;
 
+// Trusted operator/host API for an explicit user instruction. Do not expose this
+// approval shortcut as an agent tool; inferred preferences use prefs.propose.
+export function saveUserPreference(input = {}) {
+  if (!String(input.evidence || "").trim()) throw new Error("Include the explicit user instruction as evidence.");
+  const proposal = proposePreference({ ...input, proposedBy: "user" });
+  return approvePreference({ ...input, proposalId: proposal.id, approvedBy: "user" });
+}
+
 export function proposePreference({ targetRoot, workspaceRoot, key, statement, scope = "repository", evidence = "", proposedBy = "agent", env = process.env } = {}) {
   const root = path.resolve(targetRoot || process.cwd());
   const normalized = normalizePreferenceInput({ key, statement, scope });

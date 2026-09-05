@@ -419,3 +419,21 @@ valid; host tool registries continue receiving the same `role` property.
 
 Agent specs may include `instructions`, a plain string injected in each new turn. The console
 edits this field directly. Reflections remain optional and inherit `false` from shared defaults.
+
+## Standalone recovery and learning update
+
+`runtime-store` and `runtime-scheduler` add optional SQLite-backed standalone execution without
+changing the file-backed host helper contracts. See [runtime recovery](runtime-recovery.md) for
+claims, delivery states, operations methods and deployment limits. `runRoleCapture` /
+`runAgentCapture` additionally accept `signal` and return `usage`, `runnerId`, `engineId`,
+`provider` and `engineSessionId` when available. Existing `ok`, `text`, and `reason` remain.
+
+Reflections are off by default. `reflections: true` (or an existing options object) enables
+optional proposals; the old `limit` field remains readable for compatibility but no journal is
+automatically injected. `memory.reflect` requires `target`, `key`, `text`, and `evidence`, plus
+`description` for Skills. Approval promotes an update into a preference or Skill. Pending
+proposals expire after 30 days. Existing journals and legacy pending proposals remain available
+for manual review; the console asks for a destination before approving a legacy proposal.
+`skill.propose` now requires evidence of user/application relevance or improved reliability.
+Trusted operators may use `saveUserPreference` for an explicit user instruction; agents only
+receive the proposal API. Skills retain their existing name and on-disk formats.

@@ -13,14 +13,31 @@ An open-source, host-neutral agent runtime (Apache-2.0, npm `medhus-crewrun`), e
 2026-08-31 from its first production hosts so any application can share it. The kernel holds only
 host-neutral code; product identity is injected (see README → Host contract). Hosts pin a tag.
 
+## Current implementation: recoverable standalone work
+
+- Standalone run/action state, credentials, trigger cursors, durable outbox, event timeline,
+  artifacts and the existing budget ledger now share a private SQLite database. Atomic leases
+  fence concurrent workers. Expired sends become uncertain; expired model turns require review
+  and explicit retry. Pause/cancel prevent future claims and interrupt active model capture.
+- Tasks provides immediate requests, dependencies, saved results/downloads, approval and delivery
+  status, reconciliation, pause/resume/cancel, and explicit deliverable acceptance. Usage reports
+  recorded cost per accepted output and flags unknown usage. Native SQLite is a runtime dependency.
+- Skills remain **Skills**. Save user/application-specific context and repeatable procedures;
+  generic instructions need evidence of improved reliability. Reflections are off by default,
+  expire after 30 days, and promote into preferences or Skills after review. Existing journals
+  are retained but no longer automatically injected; no routine after-action journal is created.
+- See [runtime recovery](runtime-recovery.md) for the implementation boundaries and migration.
+  Earlier completion notes below describe their original releases; this section supersedes any
+  older claim that reflections auto-inject or standalone queues/usage require a custom host.
+
 ## Boundaries (what stays out)
 
 Anything with a product opinion belongs in a host, never in the kernel:
 
-- Workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
+- Product-specific workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
   Azure DevOps), PR sync, and merge policy.
 - Product-branded UI shells, application control APIs and account-specific OAuth callbacks. Standalone Slack/Gmail
-  provider calls and private operator connection storage are bundled in `standalone.js`. The dependency-free local operations console is intentionally in the kernel; hosts feed
+  provider calls and private operator connection storage are bundled in `standalone.js`. The local operations console is intentionally in the kernel; hosts feed
   it data and actions through the stable `operations` surface.
 - Agent catalogs and domain-specific file tooling.
 - Memory file content (doctrine, conventions) — each host's own; the runtime reads only explicit
@@ -40,7 +57,7 @@ Anything with a product opinion belongs in a host, never in the kernel:
   supports Claude in-process tools and Codex stdio. Incoming events and draft creation remain
   separate work; the Slack event host example is preserved.
 - README leads with the CLI. [Product direction](product-direction.md) records the recommendations
-  on reflections, Skills/SOPs, reliability, customer outcomes and competitive validation.
+  on reflections, Skills, reliability, customer outcomes and competitive validation.
 
 
 - Governed agents and external actions (v0.6.0): agent specs now carry contract v1 — revision,

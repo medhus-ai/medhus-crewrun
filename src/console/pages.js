@@ -14,6 +14,7 @@ import { agentRunnerProfiles, detectRunnerTools, runnerProfileLabel } from "../r
 import { knownSecretStatus, isUnlocked, secretsFileExists } from "../secret-store.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
+import { renderTasks } from "./tasks.js";
 import { esc } from "./shell.js";
 
 const DEFAULT_CONNECTORS = [
@@ -49,8 +50,14 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
     defaults: readRoleDefaults(targetRoot),
     settings,
     validation: validateRoleSettings(settings, { knownEvents }),
-    schedules: scheduleOverview({ targetRoot }),
-    heartbeatState: readHeartbeatState(targetRoot),
+    schedules: scheduleOverview({ targetRoot }).map((schedule) => {
+      const run = normalizedOperations.runs.find((r) => r.workflow === `schedule:${schedule.role}:${schedule.id}`);
+      return run ? { ...schedule, lastStatus: run.desired !== "active" ? run.desired : run.status, lastRunAt: new Date(run.updated_at).toISOString(), runId: run.id } : schedule;
+    }),
+    heartbeatState: { roles: { ...readHeartbeatState(targetRoot).roles, ...Object.fromEntries(Object.keys(specs).flatMap((agent) => {
+      const run = normalizedOperations.runs.find((r) => r.workflow === `heartbeat:${agent}`);
+      return run ? [[agent, { lastRunAt: new Date(run.updated_at).toISOString() }]] : [];
+    })) } },
     skills: listSkills({ targetRoot }),
     skillProposals: listSkillProposals({ targetRoot }),
     prefProposals: listPreferenceProposals({ targetRoot }),
@@ -66,6 +73,7 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
 
 export function renderPartial(page, models, options = {}) {
   switch (page) {
+    case "tasks": return renderTasks(models, options);
     case "roles":
     case "agents": return renderRoles(models, options);
     case "scheduled": return renderScheduledTasks(models, options);
@@ -85,7 +93,7 @@ function renderDashboard(models) {
   const roles = Object.values(models.specs);
   const enabledTasks = models.schedules.filter((task) => task.enabled).length;
   const pending = models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length + models.operations.approvals.filter((entry) => entry.status === "pending").length;
-  const usage = currentUsage(models.operations.usage);
+  const usage = currentUsage(models.operations.usage) || (models.operations.usage?.months ? { month: "Current month", totals: {} } : null);
   const spend = usage ? spendFor(usage.totals) : null;
   const connected = models.operations.connectors.filter((connector) => connector.connected).length;
   const health = problems.length ? "needs review" : warnings.length ? "warnings" : "healthy";
@@ -246,8 +254,8 @@ function renderAgentBehavior(spec, own) {
         <div class="field wide"><label for="heartbeat-prompt">Check-in instructions</label><textarea id="heartbeat-prompt" name="heartbeat_prompt">${esc(spec.heartbeat?.prompt || "")}</textarea></div>
         <div class="field"><label for="agent-web">Web access</label><select id="agent-web" name="web">${options([["inherit", "Use shared defaults"], ["off", "Off"], ["on", "Enabled"]], own.web === undefined ? "inherit" : own.web === false ? "off" : "on")}</select></div>
         <div class="field"><label for="web-allow">Allowed websites</label><textarea id="web-allow" name="web_allow" placeholder="docs.example.com">${esc((spec.web?.allow || []).join("\n"))}</textarea><span class="help">One domain per line. Empty means open web access when enabled.</span></div>
-        <div class="field"><label for="agent-reflections">Reflections</label><select id="agent-reflections" name="reflections">${options([["inherit", "Use shared defaults"], ["on", "Learn from approved reflections"], ["off", "Off"]], own.reflections === undefined ? "inherit" : own.reflections === false ? "off" : "on")}</select><span class="help">Optional lessons from completed work. You review them in Approvals before future turns use them.</span></div>
-        <div class="field"><label for="reflection-limit">Recent lessons to include</label><input id="reflection-limit" name="reflection_limit" type="number" min="1" max="100" value="${spec.reflections?.limit || 10}"></div>
+        <div class="field"><label for="agent-reflections">Reflections</label><select id="agent-reflections" name="reflections">${options([["inherit", "Use shared defaults"], ["on", "Allow optional improvement proposals"], ["off", "Off"]], own.reflections === undefined ? "inherit" : own.reflections === false ? "off" : "on")}</select><span class="help">Off by default. Reviewed proposals update saved context or Skills; routine journals are never added to prompts.</span></div>
+
       </div>
       <div class="button-row" style="margin-top:12px"><button class="subtle">Save activity and learning</button></div>
     </form>
@@ -412,7 +420,7 @@ function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = 
       `<strong>${esc(task.title || task.id)}</strong><div class="faint"><code>${esc(task.role)}:${esc(task.id)}</code></div>`,
       `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">local time</div>`,
       pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
-      compact ? when(task.nextRunAt) : `${esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
+      compact ? when(task.nextRunAt) : `${task.runId ? `<a href="/tasks?run=${esc(task.runId)}">${esc(task.lastStatus)}</a>` : esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
       compact ? "" : when(task.nextRunAt),
       manage
     ];
@@ -449,9 +457,9 @@ function renderApprovals(models, { canDecideApprovals = false } = {}) {
   ].map(([kind, proposal]) => [
     pill(kind, "info"),
     `<code>${esc(proposal.id)}</code>`,
-    esc(kind === "skill" ? `${proposal.skillId} — ${proposal.description}` : kind === "reflection" ? `${proposal.role} — ${proposal.text}` : `${proposal.key} — ${proposal.statement}`),
+    esc(kind === "skill" ? `${proposal.skillId} — ${proposal.description}` : kind === "reflection" ? `${proposal.role} → ${proposal.target || "choose destination"} ${proposal.key || ""} — ${proposal.text}` : `${proposal.key} — ${proposal.statement}`),
     esc(proposal.proposedBy || ""),
-    `<form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="approve"><button class="tiny">Approve</button></form>
+    `<form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="approve">${kind === "reflection" && !proposal.target ? `<label>Save as<select name="target"><option value="preference">Context / preference</option><option value="skill">Skill</option></select></label><label>Stable key<input name="key" required></label><label>Skill description (if needed)<input name="description"></label>` : ""}<button class="tiny">Approve</button></form>
      <form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
   ]);
   return `
@@ -507,7 +515,7 @@ function renderAuditBudget(budget = {}) {
 }
 
 function renderUsage(models) {
-  const usage = currentUsage(models.operations.usage);
+  const usage = currentUsage(models.operations.usage) || (models.operations.usage?.months ? { month: "Current month", totals: {} } : null);
   if (!usage) {
     return `
 <section class="hero"><div><p class="eyebrow">Usage</p><h1>Usage</h1><p class="sub">Attach a host budget ledger to show reported spend, subscription estimates, token usage, and outcomes.</p></div></section>
@@ -529,11 +537,13 @@ ${empty("No usage ledger is attached to this console. The UI stays read-only and
   return `
 <section class="hero"><div><p class="eyebrow">Usage</p><h1>Usage</h1><p class="sub">${esc(usage.month || "Current period")} · reported API spend and equivalent estimates for local subscription runs stay visibly separate.</p></div><span class="pill ${estimatedOnly ? "warn" : "info"}">${estimatedOnly ? "estimate-led" : "ledger-backed"}</span></section>
 <section class="summary-grid">
+  ${models.operations.delivery ? metric("Accepted deliverables", formatInt(models.operations.delivery.delivered), "accepted this month", models.operations.delivery.costPerDelivered == null ? "Accept a result to calculate cost per deliverable" : formatCurrency(models.operations.delivery.costPerDelivered) + " recorded cost per accepted deliverable (includes estimates)") : ""}
   ${metric("Total spend", formatCurrency(spendFor(totals)), "spend", formatCurrency(totals.estimatedCostUsd || 0) + " subscription estimate", "info")}
   ${metric("Runs", formatInt(totals.runs), "runs", formatInt(totals.failures) + " failed", totals.failures ? "warn" : "success")}
   ${metric("Tokens", formatTokens(Number(totals.inputTokens || 0) + Number(totals.outputTokens || 0)), "tokens", formatTokens(totals.inputTokens) + " in · " + formatTokens(totals.outputTokens) + " out")}
   ${metric("Duration", formatDuration(totals.durationSeconds), "recorded runtime", usage.source ? String(usage.source) : "host ledger")}
 </section>
+${models.operations.outcomes?.unknownUsageAttempts ? `<p class="help">${models.operations.outcomes.unknownUsageAttempts} attempts have unknown usage. Reported costs may be incomplete.</p>` : ""}
 <section class="section-heading"><h2>By runner</h2><span class="muted">${runnerRows.length} runners</span></section>
 ${table(["runner", "runs", "tokens", "reported", "estimate", "failed"], runnerRows, "No runs recorded for this period.")}
 <section class="section-heading"><h2>By engine</h2></section>
@@ -795,6 +805,9 @@ function normalizeOperations(value) {
     ...normalizedConnectors.filter((entry) => entry.id && !DEFAULT_CONNECTORS.some((base) => base.id === entry.id))
   ];
   return {
+    runs: asArray(source.runs),
+    delivery: source.delivery || null,
+    outcomes: source.outcomes || null,
     usage: source.usage || source.budget || source.ledger || null,
     providers: asArray(source.providers).map(normalizeProvider),
     connectors,

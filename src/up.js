@@ -6,6 +6,7 @@ import { listReflectionProposals } from "./reflection-proposals.js";
 import { listSkillProposals } from "./skill-proposals.js";
 import { listPreferenceProposals } from "./preference-memory.js";
 import { createScheduler } from "./schedules.js";
+import { createRuntimeScheduler } from "./runtime-scheduler.js";
 import { createStandaloneRuntime } from "./standalone.js";
 
 // The crew loop as a library: schedules + heartbeats + hooks + host housekeeping around one
@@ -54,15 +55,16 @@ export function createUp({
 
   const standalone = host.runTurn ? null : createStandaloneRuntime({ targetRoot: root, env, log });
   const runTurn = host.runTurn || standalone.runTurn;
+  const durableTriggers = Boolean(standalone && !host.runSchedule);
 
   let hooksNoticeShown = false;
-  const enqueue = host.enqueue || (() => {
+  const enqueue = host.enqueue || (standalone ? ({ role, body, externalId }) => standalone.store.enqueue({ agent: role, prompt: body, workflow: "hook", dedupeKey: externalId }) : (() => {
     if (!hooksNoticeShown) {
       hooksNoticeShown = true;
       log("[up] hooks are disabled: the host provides no enqueue({ role, body, externalId })");
     }
     return { created: false };
-  });
+  }));
 
   const pulse = createPulse({
     targetRoot: root,
@@ -76,7 +78,7 @@ export function createUp({
     now
   });
 
-  const scheduler = createScheduler({
+  const scheduler = durableTriggers ? createRuntimeScheduler({ targetRoot: root, runtime: standalone, env, now, log }) : createScheduler({
     targetRoot: root,
     run: host.runSchedule || ((schedule) => runTurn(schedule.role, schedule.prompt, { workflow: "schedule", label: `schedule:${schedule.id}`, schedule })),
     env,
@@ -89,13 +91,15 @@ export function createUp({
 
   async function tickOnce() {
     await scheduler.tick();
-    await pulse.tickHeartbeats();
+    if (!durableTriggers) await pulse.tickHeartbeats();
+    if (standalone) await standalone.tick();
     await host.tick?.({ emit: pulse.emit });
   }
 
   async function start() {
+    standalone?.start();
     scheduler.start();
-    const heartbeat = setInterval(() => { void pulse.tickHeartbeats(); }, heartbeatTickMs);
+    const heartbeat = setInterval(() => { if (!durableTriggers) void pulse.tickHeartbeats(); }, heartbeatTickMs);
     heartbeat.unref?.();
     timers.push(heartbeat);
     if (host.tick) {
@@ -114,7 +118,8 @@ export function createUp({
   }
 
   async function stop() {
-    scheduler.stop();
+    await scheduler.stop();
+    await standalone?.stop();
     for (const timer of timers) clearInterval(timer);
     timers = [];
     await host.stop?.();

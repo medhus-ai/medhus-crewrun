@@ -105,7 +105,7 @@ export function loadRoleSpec(targetRoot, role) {
   const defaultPointers = Array.isArray(defaults.memory_pointers) ? defaults.memory_pointers.map(String) : [];
   const ownPointers = Array.isArray(own?.memory_pointers) ? own.memory_pointers.map(String) : [];
   const reflectionSetting = own?.reflections ?? defaults.reflections;
-  const reflections = reflectionSetting === false
+  const reflections = (reflectionSetting === false || reflectionSetting == null)
     ? false
     : { limit: Math.max(1, Math.min(Number(own?.reflections?.limit ?? defaults.reflections?.limit ?? 10) || 10, 100)) };
   // The contract stays alongside the ordinary role spec so it is versioned and code-reviewed

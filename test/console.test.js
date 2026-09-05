@@ -30,7 +30,7 @@ async function project() {
 
 test("console renders pages and performs actions over the project's .crew", async () => {
   const { parent, root } = await project();
-  const proposal = proposeSkill({ targetRoot: root, id: "weekly-brief", description: "Draft the brief", content: "steps", proposedBy: "ops" });
+  const proposal = proposeSkill({ evidence: "The user requested this weekly procedure.", targetRoot: root, id: "weekly-brief", description: "Draft the brief", content: "steps", proposedBy: "ops" });
   const manualRuns = [];
   const console_ = createConsole({
     targetRoot: root,
@@ -92,7 +92,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.doesNotMatch(managedRole, /Back to Crew/);
     assert.match(managedRole, /Activity and learning/);
     assert.match(managedRole, /name="instructions"/);
-    assert.match(managedRole, /Learn from approved reflections/);
+    assert.match(managedRole, /Allow optional improvement proposals/);
     assert.equal((await fetch(base + "/roles/ops")).status, 200, "legacy bookmarks remain usable");
     const denied = await fetch(base + "/agents/update", { method: "POST", headers: { origin: "https://untrusted.example" }, body: new URLSearchParams({ role: "ops", title: "Unauthorized" }) });
     assert.equal(denied.status, 403);
@@ -258,11 +258,11 @@ test("console renders pages and performs actions over the project's .crew", asyn
 
     // The dashboard queue handles proposal-gated role reflections too; approval is the only
     // path from a role's suggestion into its next-turn durable journal.
-    const reflection = proposeReflection({ targetRoot: root, role: "ops", text: "Start with the current blocker." });
+    const reflection = proposeReflection({ target: "preference", key: "weekly-blocker", evidence: "The user wants their blocker first.", targetRoot: root, role: "ops", text: "Start with the current blocker." });
     const approvals = await (await fetch(base + "/approvals")).text();
     assert.match(approvals, /Start with the current blocker\./);
     await fetch(base + "/proposals/decide", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `id=${reflection.id}&kind=reflection&action=approve` });
-    assert.match(await readFile(path.join(root, ".crew", "memory", "reflections", "ops.md"), "utf8"), /Start with the current blocker\./);
+    assert.match(await readFile(path.join(root, ".crew", "memory", "preferences.json"), "utf8"), /Start with the current blocker\./);
 
     // add a role, then save an edited spec
     const addedRole = await fetch(base + "/agents/add", {

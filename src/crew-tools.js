@@ -17,8 +17,8 @@ export const CREW_TOOL_NAMES = [...LEARNING_TOOL_NAMES, ...WEB_TOOL_NAMES];
 
 const DESCRIPTIONS = {
   "skill.read": "Load one skill from the index by id.",
-  "memory.reflect": "Propose one or two sentences for your private journal: what worked, or what to avoid next time. An operator must approve it before it becomes durable memory.",
-  "skill.propose": "Propose a reusable skill (id, description, content) — the operator approves it before it becomes durable.",
+  "memory.reflect": "Optionally propose an evidence-backed update to user/application context (preference) or a specific repeatable procedure (skill). Only use after a useful discovery; never reflect after every action. Approval promotes the update to its destination; no journal is created.",
+  "skill.propose": "Propose a user/application-specific repeatable procedure, or a reliability improvement supported by evidence. Avoid generic advice the model can infer. Operator review is required.",
   "prefs.propose": "Propose a short durable working preference (key, statement) — the operator approves it before it applies.",
   "web.fetch": "GET one public http(s) URL and return its text (HTML stripped, capped). Read-only; subject to your agent's allowlist.",
   "web.search": "Search the web (DuckDuckGo) and return up to `max_results` rows of title, url, snippet. Follow up with web.fetch."
@@ -26,8 +26,8 @@ const DESCRIPTIONS = {
 
 const SCHEMAS = {
   "skill.read": (z) => ({ id: z.string() }),
-  "memory.reflect": (z) => ({ text: z.string(), ref: z.string().optional() }),
-  "skill.propose": (z) => ({ id: z.string(), description: z.string(), content: z.string(), agents: z.string().optional(), roles: z.string().optional() }),
+  "memory.reflect": (z) => ({ text: z.string(), target: z.enum(["preference", "skill"]), key: z.string(), evidence: z.string(), description: z.string().optional(), ref: z.string().optional() }),
+  "skill.propose": (z) => ({ id: z.string(), description: z.string(), content: z.string(), evidence: z.string(), agents: z.string().optional(), roles: z.string().optional() }),
   "prefs.propose": (z) => ({ key: z.string(), statement: z.string(), evidence: z.string().optional() }),
   "web.fetch": (z) => ({ url: z.string() }),
   "web.search": (z) => ({ query: z.string(), max_results: z.string().optional() })
@@ -48,11 +48,15 @@ export function webAccessFor(role, context) {
 
 const REGISTRY = {
   "skill.read": async (input, { role, context }) => readSkill({ targetRoot: rootFrom(context), id: input?.id, role }),
-  "memory.reflect": async (input, { role, context }) => proposeReflection({ targetRoot: rootFrom(context), role, text: input?.text, ref: input?.ref || "", proposedBy: role }),
+  "memory.reflect": async (input, { role, context }) => {
+    const root = rootFrom(context);
+    if (!loadRoleSpec(root, role)?.reflections) throw new Error("Optional reflection proposals are disabled for this agent.");
+    return proposeReflection({ targetRoot: root, role, text: input?.text, ref: input?.ref || "", proposedBy: role, target: input?.target, key: input?.key, evidence: input?.evidence, description: input?.description });
+  },
   "skill.propose": async (input, { role, context }) => proposeSkill({
     targetRoot: rootFrom(context), id: input?.id, description: input?.description, content: input?.content,
     roles: String(input?.agents ?? input?.roles ?? "").split(",").map((entry) => entry.trim()).filter(Boolean),
-    scope: "repository", proposedBy: role
+    scope: "repository", evidence: input?.evidence, proposedBy: role
   }),
   "prefs.propose": async (input, { role, context }) => proposePreference({
     targetRoot: rootFrom(context), key: input?.key, statement: input?.statement,
@@ -70,15 +74,15 @@ const REGISTRY = {
   }
 };
 
-// Built-in tool names for one role in one tool context: the learning tools always, the web
-// tools only when the role's spec enables them AND the engine is not already providing its own
-// web tools for this turn (context.nativeWeb — set by the runner for Claude/Codex). Without a
-// targetRoot nothing can be resolved, so only the ungated tools are offered.
+// Reflection and web tools are opt-in. Native engine web tools suppress the fallback web
+// pair. Without a targetRoot, only the ungated Skill and preference tools are offered.
 export function crewToolNamesFor(role, context = {}) {
-  if (context?.nativeWeb) return [...LEARNING_TOOL_NAMES];
+  const root = context?.targetRoot || context?.root;
+  const learning = LEARNING_TOOL_NAMES.filter((name) => name !== "memory.reflect" || root && loadRoleSpec(root, role)?.reflections);
+  if (context?.nativeWeb) return [...learning];
   const web = webAccessFor(role, context);
-  if (!web) return [...LEARNING_TOOL_NAMES];
-  return [...LEARNING_TOOL_NAMES, "web.fetch", ...(web.search ? ["web.search"] : [])];
+  if (!web) return [...learning];
+  return [...learning, "web.fetch", ...(web.search ? ["web.search"] : [])];
 }
 
 export const crewToolDefinitions = {
@@ -91,5 +95,5 @@ export const crewToolDefinitions = {
     if (!tool) throw new Error(`tool ${toolName} is not registered`);
     return tool(input, { role, context });
   },
-  alwaysLoad: (toolName) => ["skill.read", "memory.reflect", "web.fetch", "web.search"].includes(toolName)
+  alwaysLoad: (toolName) => ["skill.read", "web.fetch", "web.search"].includes(toolName)
 };

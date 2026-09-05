@@ -46,7 +46,7 @@ node bin/crewrun.js up . --console
 ```
 
 Open **http://127.0.0.1:4400**, choose **Agents → Add agent**, describe its job, and select
-an installed runner. Add recurring work under **Scheduled**. The loop runs while the command
+an installed runner. Create an immediate task under **Tasks**, or add recurring work under **Scheduled**. The loop runs while the command
 stays open. You can open an empty project; no hand-written configuration or host module is required.
 
 For the published package:
@@ -61,6 +61,18 @@ crewrun proposals list ./my-project     # review proposed learning
 
 The commands above use your installed version; changes on GitHub main reach npm only after a
 release. A signed-in supported vendor runtime or a configured API runner is needed to run turns.
+
+## Recoverable tasks and visible results
+
+Standalone mode now includes a transactional SQLite run store, durable delivery outbox and the
+existing usage ledger. **Tasks** shows saved artifacts, external receipts, required approvals,
+blocked dependencies, retry times, and the next action. Use **Accept deliverable** after reviewing
+the result; **Usage** shows recorded cost per accepted deliverable, keeping estimates visible.
+
+Pause or cancel tasks from their detail page. Queued work survives a restart. Interrupted model
+turns require review and an explicit retry; resume restarts a paused turn from its saved task,
+not from an exact model checkpoint. An external send already in flight can still complete.
+Ambiguous sends require reconciliation before any resend. [Recovery and storage details](docs/runtime-recovery.md).
 
 ## Slack and Gmail, with or without a host
 
@@ -78,8 +90,8 @@ Slack/Gmail tools available to embedded hosts. A custom `--host` module is optio
   under data the agent may change. For Gmail reads, grant `gmail.searchMetadata | read` and/or
   `gmail.getMessage | read`, plus `connector:gmail:gmail` under data it may read.
 - **Review and deliver:** outgoing requests appear in Approvals with the message or draft
-  contents. Approval executes the reviewed request after rechecking authority. A changed draft,
-  account, or contract needs a new review. Successful deliveries appear in Audit.
+  contents. Approval durably queues the reviewed request; the worker rechecks authority before delivery. A changed draft,
+  account, or contract needs a new review. Receipts and unresolved deliveries appear in the task timeline.
 
 Gmail currently sends an **existing draft**; draft creation and incoming Slack mention/event
 subscriptions are not part of the standalone adapter. Use the [Slack host example](examples/slack/README.md)
@@ -142,7 +154,7 @@ A project is any directory with a `.crew/` folder. Each agent is a spec at
   "title": "Analyst",
   "runner": "claude-agent-sonnet-high",
   "memory_pointers": [".crew/agents/analyst.md", "docs/analyst-notes.md"],
-  "reflections": { "limit": 10 },
+  "reflections": false,
   "hooks": ["task.assigned"],
   "heartbeat": "off",
   "web": { "allow": ["*.arxiv.org", "github.com"] },
@@ -169,9 +181,9 @@ never see any web tool, so the model cannot be talked into browsing.
 shared floor). Contract defaults are a floor too: an agent may add authority, but cannot relax a
 default approval requirement or budget cap. Pointers may name any file in the repository —
 including the agent's own optional `.md` prose, which is read only when listed. The `instructions`
-field is a convenient alternative, editable directly from the Agents page. A bounded window
-of the agent's **operator-approved** reflections (`memory.reflect` creates a proposal) is
-injected back each turn. Legacy projects keep working: `.md` frontmatter,
+field is a convenient alternative, editable directly from the Agents page. Reflections are off
+by default. When enabled, `memory.reflect` proposes a specific update to context or a Skill;
+approval promotes it to that destination. Legacy journals remain on disk and are not injected. Legacy projects keep working: `.md` frontmatter,
 `memory/ai-runners.json`, and a global `schedules.json` all still resolve. Concrete runner
 profiles are machine-level, in `~/.crew/ai-runners.json`, so keys and vendor choices never enter
 a repository.
@@ -193,6 +205,7 @@ its tasks are not scheduled twice. Shared defaults also fall back to the legacy 
 | `mcp`, `mcp-stdio` | `createMcpBridge(registry)` — host-tool MCP server bridge: in-process for Claude, stdio for Codex |
 | `tool-broker`, `agent-contract` | Agent allowlist + versioned authority enforcement, handoff checks, and redacted tamper-evident action audit |
 | `action-approvals` | Host-local, single-use approval queue for high-impact actions; stores summaries and digests, never action payloads or credentials |
+| `runtime-store`, `runtime-scheduler` | Transactional standalone tasks, atomic claims, delivery outbox, recovery, artifacts and trigger cursors |
 | `connectors`, `standalone` | Slack/Gmail permissions and actions; standalone connection setup, token refresh, exact action review and provider calls; optional host overrides |
 | `crew-tools`, `web` | Built-in tools available on each bridge: proposal-gated learning tools + `skill.read`, and per-agent gated `web.fetch` / `web.search` (all subject to a strict agent contract when one is enforced) |
 | `agent-capabilities` | Subagent policy per agent kind; Claude subagent definitions |
@@ -207,7 +220,7 @@ its tasks are not scheduled twice. Shared defaults also fall back to the legacy 
 | `up` | `createUp({ targetRoot, host })` + the `crewrun up` CLI — the crew loop (schedules, heartbeats, hooks, host housekeeping) around one project; the optional host module injects tools, turn recording, routing, and lifecycle |
 | `pulse` | Agent heartbeats (`heartbeat: 30m` frontmatter, 1s–1y, budget-capped, non-overlapping) and event hooks (`hooks: […]` → debounced enqueue), host-routed |
 | `skills`, `skill-proposals` | Scoped `SKILL.md` skills; agent-proposed skills that a human approves into a scope |
-| `preference-memory`, `reflection-proposals`, `reflections`, `recall` | Approved preferences and per-agent journals; episodic recall over past conversations |
+| `preference-memory`, `reflection-proposals`, `reflections`, `recall` | Approved context and optional improvement proposals; legacy journal readers and episodic recall |
 | `execution-policy` | Container sandbox policy |
 | `console/*` | Local operations UI for agents, schedules, approvals, audit, connectors, providers, and usage; host data arrives through the stable operations API |
 | `auth`, `request-context`, `markdown`, `process`, `platform`, `frontmatter`, `agent-output` | Framework-free helpers for a host UI and OS |
@@ -303,8 +316,8 @@ contract cards and handles Connect / Disconnect / approval decisions. See the st
 ```
 
 (`"heartbeat": "30m"` shorthand works; intervals 1s … 1y as s|m|h|d|w|mo|y.) A heartbeat is a periodic autonomous turn: missed windows fire once, a pulse never overlaps
-itself, and run state lives in the crew home. A hook firing is delivered through the host's
-enqueue with a debounced externalId, so bursts and retries coalesce (`pulse` module).
+itself, and run state lives in the crew home. Standalone hooks enqueue durable tasks with a
+debounced externalId; embedded hosts may supply their own enqueue implementation (`pulse` module).
 
 Four ways work reaches an agent without a person typing in a chat — hooks and heartbeats above, plus:
 
@@ -323,29 +336,32 @@ Four ways work reaches an agent without a person typing in a chat — hooks and 
   `<crew dir>/schedules.json` remain readable. `createScheduler({ targetRoot, run })` ticks,
   fires each due task once (a task that missed several windows fires once, not per
   window), and records outcomes under the crew home so the repository never churns. Scheduling
-  is deliberately **host-owned**: this helper is for one scheduler process per project, not
-  distributed claiming. A multi-process host must elect one scheduler owner or claim scheduled
+  in the exported `createScheduler` helper is for one host scheduler process per project.
+  Standalone `up` uses the transactional `runtime-scheduler` instead. A multi-process host must elect one scheduler owner or claim scheduled
   work transactionally in its own database/queue before it calls `runner.runAgentCapture`;
   `handoffs` shows the token-and-expiry claim pattern. A run whose scheduler process died becomes
   due after an hour by default (`staleAfterMs`).
 
 ## Memory and learning
 
-CrewRun keeps durable learning *proposed → approved → reviewable*. Agent memory pointers, skills,
-preferences, contracts, and per-agent reflections are inspectable project state a human can edit
-or revoke. Reflections remain bounded and private to their agent, rather than becoming unbounded
-shared memory.
+Crewrun saves what a model cannot infer reliably: user/application facts, preferences, and
+repeatable procedures specific to that user's work. **Skills** is the name throughout the product;
+no generic Skills are installed by default. Keep a general procedure only when evidence shows a
+reliability benefit. Prefer updating an existing entry over adding another one.
 
-| Layer | What it is | Who writes it |
+| Layer | Purpose | Persistence |
 |---|---|---|
-| Agent memory | Files named in an agent's `memory_pointers`, injected into every turn (a doctrine, house rules, domain notes) | Humans; versioned with the repo |
-| Skills | `.crew/skills/<id>/SKILL.md` — reusable, scoped workflows (user → workspace → repository), indexed in the prompt and loaded on demand | Humans, or agents via **skill proposals** a human approves |
-| Preferences | Short approved statements with repository > workspace > user precedence | Agents propose (`preference-memory`), humans approve |
-| Reflections | A bounded per-agent journal ("what worked, what to avoid"), injected only for that agent | Agents propose through `memory.reflect`; an operator approves the entry |
-| Recall | "What happened last time this agent touched this task or file" — a query over the conversation store, summarised to ask + outcome | Nobody; it is derived |
+| Agent context | User/application facts, house rules and project details | Reviewed files in `memory_pointers` |
+| Skills | Specific procedures with a trigger, inputs and acceptance checks | Flat `.crew/skills/<id>.md` or `<id>/SKILL.md`; loaded when relevant |
+| Preferences | Short working preferences, with repository > workspace > user precedence | Agent suggestions require review; trusted operators can save explicit user instructions with `saveUserPreference` |
+| Reflections | Optional evidence-backed proposals to update context or a Skill | Off by default, deduplicated while pending, expire after 30 days; approval promotes the update, without appending a journal |
+| Recall | Relevant previous asks and outcomes | Derived from the conversation store |
 
-What it deliberately does not do: unsupervised "remember everything" vector memory. Silent
-drift, no provenance, and nothing to revoke are the failure modes that model avoids.
+Do not generate reflections after every action or save generic advice the model already knows.
+Enable proposals with `"reflections": true` only when useful. Each proposal names `target`
+(`preference` or `skill`), a stable `key`, the proposed `text`, and `evidence`; Skill updates also
+need a `description`. Existing reflection files remain available for manual migration and are
+never automatically injected. Agent-inferred changes still require review.
 
 ## Host integration
 

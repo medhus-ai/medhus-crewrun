@@ -32,8 +32,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      # better-sqlite3 is dev-only (ledger/conversation tests) and has no prebuilt binary for every
-      # Windows runner; skip native builds there and let those tests skip themselves.
-      - run: npm ci ${{ runner.os == 'Windows' && '--ignore-scripts' || '' }}
+      - run: npm ci
         shell: bash
       - run: npm test

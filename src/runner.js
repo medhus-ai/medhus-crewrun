@@ -7,7 +7,6 @@ import { createCrewOnlyBridge } from "./mcp.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadRoleSpec } from "./role-spec.js";
 import { roleContractInstructions } from "./role-contract.js";
-import { readReflections, reflectionsPrompt } from "./reflections.js";
 import { createContainerEngine } from "./engines/container.js";
 import { getEngine } from "./engines/index.js";
 import { readExecutionPolicy } from "./execution-policy.js";
@@ -17,7 +16,9 @@ import { defaultRunnerProfileId, resolveRunnerProfile, roleRunnerId } from "./ru
 import { listSkills, skillIndexPrompt } from "./skills.js";
 import { createExecuteWorktree } from "./workspace.js";
 
-// Hosts declare the memory files every role receives (`universalMemory`); the runtime injects none by default.
+const LEARNING_POLICY = "Save only durable user/application facts and preferences or useful repeatable Skills. Do not save generic advice the model can infer. Prefer updating an existing entry. Agent-inferred changes require operator review; a trusted operator may directly save an explicit user instruction. Reflections are optional temporary proposals to improve context or a Skill, never a routine after-action journal. Existing journals are archived and are not injected into prompts.";
+
+// Hosts declare shared memory files; none are installed by default.
 const DEFAULT_UNIVERSAL_MEMORY = [];
 const DEFAULT_MEMORY_TITLES = {};
 const DEFAULT_NOISE = /^\s*(?:\[(cmd|edit|mcp|search|tool|worktree|subagent)\b|mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_]+$)/i;
@@ -122,6 +123,7 @@ export function createRoleRunner({
       ...contextSections({ rolePrompt, memory }),
       ...contextBlock(preferencePrompt(preferences)),
       ...contextBlock(skillIndexPrompt(skills)),
+      ...contextBlock(LEARNING_POLICY),
       ...contextBlock(capabilityInstructions(capabilities || capabilityProfile(role, {}))),
       ...contextBlock(context),
       "## Conversation so far"
@@ -141,6 +143,7 @@ export function createRoleRunner({
       ...contextSections({ rolePrompt, memory }),
       ...contextBlock(preferencePrompt(preferences)),
       ...contextBlock(skillIndexPrompt(skills)),
+      ...contextBlock(LEARNING_POLICY),
       ...contextBlock(capabilityInstructions(capabilities || capabilityProfile(role, {}))),
       ...contextBlock(context),
       ...protocol(role),
@@ -185,16 +188,7 @@ export function createRoleRunner({
       pointers: specDriven ? spec.memory_pointers : [],
       extra: extraMemory(toolContext)
     });
-    // The closed learning loop: a bounded window of the role's own reflections rides along.
-    if (spec && spec.reflections !== false) {
-      const entries = readReflections({ targetRoot, role, limit: spec.reflections.limit });
-      if (entries.length) {
-        memory.push({
-          title: "Your recent reflections",
-          body: reflectionsPrompt(entries, { role }).split("\n").slice(1).join("\n")
-        });
-      }
-    }
+
     const roleOptions = toolContext?.roleOptions || {};
     const capabilities = capabilityProfile(role, roleOptions);
     // Web access: prefer the engine's own web tools when it has them and can honor the role's
@@ -286,7 +280,7 @@ export function createRoleRunner({
   }
 
   // Best-effort headless turn: resolves { ok:false } on timeout or non-zero exit instead of rejecting.
-  function runRoleCapture({ root, role, prompt, label = role, timeoutMs = 120000, toolContext = {}, context = "", onStatus, log, error } = {}) {
+  function runRoleCapture({ root, role, prompt, label = role, timeoutMs = 120000, toolContext = {}, context = "", onStatus, log, error, signal } = {}) {
     const lines = [];
     const marker = tools?.toolLineMarker || "";
     const isNoise = (line) => noise.test(line) || (marker && line.trimStart().startsWith(marker));
@@ -294,7 +288,15 @@ export function createRoleRunner({
       let settled = false;
       let handle = null;
       let lastStatus = "";
-      const finish = (value) => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
+      const finish = (value) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort);
+        resolve({ ...value, runnerId: handle?.runnerId, engineId: handle?.engineId, provider: handle?.provider });
+      };
+      const abort = () => {
+        try { handle?.kill?.("SIGTERM"); } catch { /* already gone */ }
+        finish({ ok: false, reason: "Task stopped", text: lines.join("\n").trim() });
+      };
       const timer = setTimeout(() => {
         try { handle?.kill?.("SIGTERM"); } catch { /* already gone */ }
         error?.(`${label}: timed out after ${Math.round(timeoutMs / 1000)}s`);
@@ -302,6 +304,8 @@ export function createRoleRunner({
       }, timeoutMs);
       timer.unref?.();
 
+      if (signal?.aborted) { abort(); return; }
+      signal?.addEventListener("abort", abort, { once: true });
       try {
         handle = startRoleTurn({
           targetRoot: root,
@@ -319,10 +323,10 @@ export function createRoleRunner({
             }
           },
           onError: (err) => lines.push(`[runner-error] ${err?.message || err}`),
-          onClose: ({ code, stderr } = {}) => {
+          onClose: ({ code, stderr, usage, engineSessionId } = {}) => {
             const text = lines.join("\n").trim();
-            if ((code === 0 || code === undefined || code === null) && text) { finish({ ok: true, text }); return; }
-            finish({ ok: false, reason: `runner exited ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`, text });
+            if ((code === 0 || code === undefined || code === null) && text) { finish({ ok: true, text, usage, engineSessionId }); return; }
+            finish({ ok: false, reason: `runner exited ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`, text, usage, engineSessionId });
           }
         });
       } catch (err) {

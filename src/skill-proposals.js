@@ -15,6 +15,7 @@ const SCOPES = new Set(["user", "workspace", "repository"]);
 const MAX_CONTENT = 20_000;
 
 export function proposeSkill({ targetRoot, id, description, content, roles = [], workProfiles = [], scope = "repository", evidence = "", proposedBy = "agent" } = {}) {
+  if (!String(evidence || "").trim() && !["user", "operator"].includes(proposedBy)) throw new Error("A skill proposal needs user/application evidence or a measured reliability benefit.");
   const root = path.resolve(targetRoot || process.cwd());
   const proposal = {
     id: `skill-${randomUUID()}`,

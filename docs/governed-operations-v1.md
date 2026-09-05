@@ -102,11 +102,15 @@ queue resolves the target agent from the conversation and checks both contract
 sides. `fromRole` is not model input; omitting it is reserved for trusted
 host-originated ingress such as a signed webhook.
 
-Agents may propose skills, preferences, and per-agent reflections, but an
-operator approves each before it becomes durable context. Agent memory pointers,
-contracts, and schedules remain reviewed project configuration. Reflections are
-a bounded per-agent journal; hosts should expose the proposal and approval trail
-as reviewable state and should not use it as a source of unbounded global memory.
+Agents may propose user/application-specific Skills and context updates with evidence. A
+trusted operator may directly save an explicit user preference; agent-inferred updates require
+review. Reflection proposals are off by default, expire after 30 days, and must name a context
+or Skill destination. Approval promotes that update instead of appending a journal. Legacy
+journals are retained for manual migration and are not injected into prompts.
+
+Standalone runs, delivery claims, receipts and approval transitions now share transactional
+storage. The original exported file-backed approval/scheduler helpers remain available to hosts
+with one operator process. See [runtime recovery](runtime-recovery.md) for the new guarantees.
 
 ## Connectors
 

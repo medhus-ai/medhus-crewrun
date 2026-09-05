@@ -116,7 +116,7 @@ test("role .json specs drive runner, pointers, defaults, scheduled tasks, and se
 
     const spec = loadRoleSpec(root, "ops");
     assert.deepEqual(spec.memory_pointers, ["personas/soul.md", ".crew/roles/ops.md"], "default pointers prepend");
-    assert.deepEqual(spec.reflections, { limit: 10 });
+    assert.equal(spec.reflections, false);
     assert.equal(loadRoleSpec(root, "ghost").reflections, false);
     assert.equal(Object.keys(listRoleSpecs(root)).length, 2);
 

@@ -36,15 +36,16 @@ ran successfully” is not the same as “the customer received the correct upda
    three maintained templates, a sample-data trial and an immediate run with a visible result.
    Target a first accepted output within ten minutes; measure this with new users. The current
    standalone adapter removes custom-host code but still requires operator-supplied credentials.
-2. **Make unattended work recoverable.** Introduce transactional run and action storage,
-   atomic claims, a durable outbox, explicit retry states, idempotency keys where providers
-   support them, and reconciliation after ambiguous network failures. Add pause/cancel and
-   restart recovery. The current file queues are designed for one operator process; a hash
-   chain is evidence of modification, not a concurrency or delivery guarantee.
-3. **Make the result visible.** Persist artifacts and external receipts in a task/run timeline.
-   Show blocked dependencies, required approvals, failed delivery and the exact next action.
-   Attach the existing ledger in standalone mode and show cost per accepted deliverable. The
-   current standalone console does not automatically supply a budget ledger or outcome store.
+2. **Make unattended work recoverable — implemented in standalone mode.** SQLite transactions,
+   atomic leases, a durable outbox, retry deadlines, restart recovery, and pause/cancel controls
+   now back runs and outgoing actions. Ambiguous sends require reconciliation; interrupted
+   model turns require review and an explicit retry. See [runtime recovery](runtime-recovery.md)
+   for provider limits and the distinction between restart recovery and model checkpoints.
+3. **Make the result visible — implemented in standalone mode.** Tasks now persist artifacts,
+   external receipts and a timeline with approvals, blocked dependencies, unresolved deliveries
+   and the next action. The existing budget ledger is attached automatically. Operators accept
+   deliverables explicitly; Usage displays recorded monthly cost per accepted deliverable and
+   flags missing usage. Provider subscription estimates remain estimates.
 4. **Measure quality before adding autonomy.** Build a replay suite from representative,
    permissioned customer tasks. Check factual grounding, required fields, recipient accuracy,
    task completion and human correction effort. Enforce budget reservations and cancellation
@@ -57,28 +58,18 @@ A practical six-week pilot: two weeks on onboarding and the first workflow, two 
 recovery, and two on evaluation with five design partners. This is a sequencing proposal, not an
 estimate that every reliability feature can be completed in six weeks.
 
-## Do agents need reflections?
+## Skills and reflections
 
-They do not need reflections to work. They need clear instructions, appropriate tools, useful
-context and feedback on the outcome. Reflections are useful when recurring work exposes a
-specific reusable lesson; generating them after every trivial action adds noise and cost.
+Use **Skills** throughout the product. Save user/application-specific procedures that need to be
+repeatable; do not install generic instructions by default. A general Skill is justified only by
+evidence of improved reliability. Preserve both SKILL.md and flat Markdown interoperability.
 
-Keep reflections optional, scoped to an agent or task type, bounded and operator-approved.
-Capture the observed outcome, evidence, the proposed change and when it applies. Avoid storing
-long reasoning traces or treating a model's confidence as proof. Add expiry, deduplication and a
-way to measure whether a lesson improved later work. When a lesson repeatedly proves useful,
-promote it into a reviewed skill or SOP instead of growing the journal indefinitely.
-
-## Skills or SOPs?
-
-Keep **Skills** as the interoperable technical category. Use **SOPs** for the subset that defines
-a team's repeatable operating procedure. A skill can also be a capability, reference guide or
-tool convention, so renaming every skill to SOP would narrow the meaning incorrectly.
-
-For an operations audience, consider a future **Playbooks** page containing skills and SOPs.
-An SOP should name its trigger, inputs, steps, acceptance checks, approval points, owner and
-version. Preserve the existing SKILL.md and flat Markdown formats. No Skills-to-SOPs rename is
-included in this change.
+User/application facts and preferences belong in saved context. Explicit user instructions can
+be saved by a trusted operator; agent-inferred updates need review. Reflections are optional,
+off by default, and useful only as short proposals to improve a named preference or Skill.
+Pending duplicates are reused, proposals expire after 30 days, and approval promotes the update
+to its destination. Do not append journals after each action. Legacy journals remain available
+for manual migration and are no longer automatically loaded into prompts.
 
 ## Prove the advantage
 

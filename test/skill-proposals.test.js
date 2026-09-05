@@ -47,13 +47,13 @@ test("a proposed skill becomes a scoped flat skill file only after approval", as
 
 test("rejected proposals install nothing and inputs are validated", async () => {
   const repo = await mkdtemp(path.join(os.tmpdir(), "crew-skill-reject-"));
-  const proposal = proposeSkill({ targetRoot: repo, id: "noisy", description: "x", content: "body" });
+  const proposal = proposeSkill({ evidence: "The customer uses this procedure every week.", targetRoot: repo, id: "noisy", description: "x", content: "body" });
   const rejected = rejectSkill({ targetRoot: repo, proposalId: proposal.id, approvedBy: "founder" });
   assert.equal(rejected.status, "rejected");
   assert.equal(existsSync(path.join(repo, crewDir(), "skills")), false);
-  assert.throws(() => proposeSkill({ targetRoot: repo, id: "Bad Id", description: "x", content: "y" }), /lowercase slug/);
-  assert.throws(() => proposeSkill({ targetRoot: repo, id: "ok", description: "", content: "y" }), /description/);
-  assert.throws(() => proposeSkill({ targetRoot: repo, id: "ok", description: "x", content: "---\nname: sneaky\n---\n" }), /body only/);
-  assert.throws(() => proposeSkill({ targetRoot: repo, id: "ok", description: "x", content: "y", scope: "global" }), /scope/);
+  assert.throws(() => proposeSkill({ evidence: "The customer uses this procedure every week.", targetRoot: repo, id: "Bad Id", description: "x", content: "y" }), /lowercase slug/);
+  assert.throws(() => proposeSkill({ evidence: "The customer uses this procedure every week.", targetRoot: repo, id: "ok", description: "", content: "y" }), /description/);
+  assert.throws(() => proposeSkill({ evidence: "The customer uses this procedure every week.", targetRoot: repo, id: "ok", description: "x", content: "---\nname: sneaky\n---\n" }), /body only/);
+  assert.throws(() => proposeSkill({ evidence: "The customer uses this procedure every week.", targetRoot: repo, id: "ok", description: "x", content: "y", scope: "global" }), /scope/);
   assert.throws(() => rejectSkill({ targetRoot: repo, proposalId: "skill-missing" }), /not found/);
 });

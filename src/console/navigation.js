@@ -2,6 +2,7 @@
 // inline icons without bringing a browser-side icon dependency into a host.
 export const PAGES = [
   { id: "dashboard", label: "Dashboard", icon: "home", group: "primary" },
+  { id: "tasks", label: "Tasks", icon: "list", group: "primary" },
   { id: "agents", label: "Agents", icon: "cloud", group: "primary" },
   { id: "scheduled", label: "Scheduled", icon: "calendar", group: "primary" },
   { id: "approvals", label: "Approvals", icon: "shield", group: "operations" },

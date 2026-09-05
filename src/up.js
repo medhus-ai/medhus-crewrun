@@ -32,7 +32,7 @@ export function defaultRouteEvent(event, payload, settings) {
 // Accepts: default export object, default export factory, named createHost({ targetRoot, log }).
 export async function loadHostModule(spec, { targetRoot, log = () => {} } = {}) {
   if (!spec) return {};
-  const resolved = /^(\.|\/)/.test(spec) ? pathToFileURL(path.resolve(spec)).href : spec;
+  const resolved = path.isAbsolute(spec) || /^\./.test(spec) ? pathToFileURL(path.resolve(spec)).href : spec;
   const mod = await import(resolved);
   const factory = mod.createHost || mod.default?.createHost || (typeof mod.default === "function" ? mod.default : null);
   if (factory) return await factory({ targetRoot, log });

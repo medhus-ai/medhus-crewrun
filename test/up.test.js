@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 import { upsertSchedule } from "../src/schedules.js";
@@ -69,6 +70,7 @@ test("loadHostModule accepts createHost factories and plain host objects", async
 
     assert.equal((await loadHostModule(factory, { targetRoot: "/t" })).name, "f");
     assert.equal((await loadHostModule(factory, { targetRoot: "/t" })).targetRoot, "/t");
+    assert.equal((await loadHostModule(pathToFileURL(factory).href, { targetRoot: "/t" })).name, "f");
     assert.equal((await loadHostModule(object, { targetRoot: "/t" })).name, "o");
     assert.deepEqual(await loadHostModule("", {}), {});
     await assert.rejects(loadHostModule(bad, { targetRoot: "/t" }), /neither createHost/);

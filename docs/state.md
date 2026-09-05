@@ -125,6 +125,9 @@ The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
   tests ran. Connector tests use mocked provider responses; the Codex stdio MCP transport is
   exercised with a real child process. Chromium desktop and 390px viewport checks passed;
   npm package dry-run passed. No live Slack/Gmail delivery or npm publication was performed.
+  Cross-platform CI also exposed a pre-existing Windows host-module loader issue: drive-letter
+  paths were treated as URL schemes. Absolute paths now use Node's native path detection and
+  file-URL conversion; explicit file URLs and package specifiers retain their behavior.
 
 - (11) 2026-09-03 — v0.6.0: governed operations contract, strict reflection proposals, host
   approval/audit helpers, narrow Slack/Gmail connector descriptors, and the local operations

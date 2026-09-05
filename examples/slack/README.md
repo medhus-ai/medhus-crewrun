@@ -1,7 +1,9 @@
 # Slack reference host
 
+[Documentation](../../docs/README.md) / Slack event gateway example
+
 This is a small Slack Events API gateway for a crewrun project. It accepts only signed
-`app_mention` events from explicitly configured Slack user IDs, acknowledges Slack before a
+`app_mention` events from explicitly configured Slack user IDs, acknowledges Slack before an
 agent turn begins, and posts the result back into the mentioning thread with `chat.postMessage`.
 
 It is a host example, not a new runtime or an authentication layer. The agent's usual runner
@@ -15,8 +17,8 @@ local provider.
 
 ## Run it
 
-The target project must already contain its normal `.crew/agents/<role>.md` and
-`.crew/memory/ai-runners.json` files, plus a v1 agent contract that grants
+Configure an agent in `.crew/agents/<agent>.json` with a working runner
+(see [Agents](../../docs/agents.md)). Its v1 contract must grant
 `slack.replyToMention` and the relevant channel scope (for example
 `connector:slack:*`). Configure the Slack gateway with Slack IDs, not display names:
 
@@ -76,7 +78,7 @@ is acknowledged so Slack does not retry it, but no model turn or Slack reply is 
 
 ```text
 Slack → signature + replay check → configured user check → event-id dedupe
-      → immediate 200 acknowledgement → asynchronous role turn → host reply policy
+      → immediate 200 acknowledgement → asynchronous agent turn → host reply policy
       → chat.postMessage in thread
 ```
 
@@ -96,7 +98,7 @@ only when it is ready to deliver the saved reply.
 The reference `server.mjs` also loads the agent’s contract with `requireContracts: true`. Before
 each post it checks `slack.replyToMention` and the `connector:slack:<channel-id>` write scope,
 then writes a redacted local audit record. The record carries the agent, action, authority revision,
-approval, and outcome; it hashes the reply instead of retaining its text. A agent without that
+approval, and outcome; it hashes the reply instead of retaining its text. An agent without that
 contract is allowed to receive the inbound mention but cannot send a reply.
 
 ## Minimal host API
@@ -113,7 +115,7 @@ const gateway = createSlackHost({
     U012ABCDEF: { targetRoot: "/srv/project", role: "analyst" }
   },
   approveReply: ({ eventId, userId }) => ({ id: `slack-event:${eventId}`, status: "approved", approved_by: `slack-mention:${userId}` }),
-  runTurn: async ({ text, user }) => ({ text: await runYourRole(text, user) })
+  runTurn: async ({ text, user }) => ({ text: await runYourAgent(text, user) })
 });
 
 gateway.listen({ port: 3000 });
@@ -130,19 +132,20 @@ receives the agent, action id, exact reply input, Slack event id, and authorized
 `crewrun-adapter.mjs` wires that small contract into an existing agent runner:
 
 ```js
-import { createRoleRunner } from "medhus-crewrun/runner";
+import { createAgentRunner } from "medhus-crewrun/runner";
 import { createCrewrunTurnAdapter } from "./crewrun-adapter.mjs";
 
-const runner = createRoleRunner(); // or: createRoleRunner({ tools: yourMcpBridge })
+const runner = createAgentRunner(); // or: createAgentRunner({ tools: yourMcpBridge })
 const runTurn = createCrewrunTurnAdapter({ runner, targetRoot, role });
 ```
 
-The adapter calls `runner.runRoleCapture` and leaves its configured profile untouched. In
+The adapter retains the compatible `role` input and calls `runner.runRoleCapture`.
+It leaves the agent's configured profile untouched. In
 particular, do not add a Slack-specific `auth` override: a profile with `auth: "subscription"`
 or normal automatic subscription login continues to work exactly as it does outside Slack.
 
 For host tools, build the same `createToolBroker` and `createMcpBridge` that your other host
-uses, then pass the resulting bridge as `tools` to `createRoleRunner`. This keeps the Slack
+uses, then pass the resulting bridge as `tools` to `createAgentRunner`. This keeps the Slack
 gateway limited to transport and authorization; agent tool allowlists remain enforced by crewrun.
 
 ## Test

@@ -1,20 +1,15 @@
----
-type: design-contract
-audience: host authors and operators
-contract_version: 1
-status: stable
----
+# Permissions and approvals
 
-# Governed operations v1
+[Documentation](README.md) / Permissions and approvals
 
-CrewRun v0.6 treats an agent as a reviewable operating contract, rather than a
-prompt with a name. The runtime remains host-neutral: a host owns its business
-objects, identity provider, OAuth callbacks, database, and external side
-effects.
+An agent contract defines its job, allowed tools, data scopes, handoffs, and approval requirements.
+Standalone Crewrun enforces these rules for its tools and integrations. Applications embedding
+Crewrun can use the same contract with their own identity, storage, and provider adapters.
+This guide describes contract version 1; see the [Host API reference](host-api-v1.md) for interfaces.
 
 ## Agent contract
 
-Place a `contract` object in `.crew/agents/<role>.json`:
+Place a `contract` object in `.crew/agents/<agent>.json`:
 
 ```json
 {
@@ -81,14 +76,12 @@ append-only, hash-chained audit record containing at least:
 - redacted input summary and outcome;
 - actor who approved it.
 
-The local operations console can render this as a safe Audit page: actor, agent,
-runner/model, authority decision and revision, data scopes, budget, action, and
-outcome. It deliberately does not render raw requests, responses, errors,
-credentials, or hashes.
+The **Audit** page shows the actor, agent, runner/model, authority decision, data scopes,
+budget, action, and outcome. It excludes raw payloads and credentials. The private **Approvals**
+page shows the exact outgoing message for review, and the task timeline retains results and receipts.
 
-Read actions can be auto-approved only when the agent contract explicitly
-permits them. Never place OAuth access tokens, raw API keys, or user data in an
-approval summary or an audit record.
+Read actions can proceed only when the agent contract permits them. Keep credentials out of
+model context and review records; retain exact review payloads only in private operator storage.
 
 ## Handoffs and durable learning
 
@@ -108,15 +101,16 @@ review. Reflection proposals are off by default, expire after 30 days, and must 
 or Skill destination. Approval promotes that update instead of appending a journal. Legacy
 journals are retained for manual migration and are not injected into prompts.
 
-Standalone runs, delivery claims, receipts and approval transitions now share transactional
+Standalone runs, delivery claims, receipts and approval transitions share transactional
 storage. The original exported file-backed approval/scheduler helpers remain available to hosts
-with one operator process. See [runtime recovery](runtime-recovery.md) for the new guarantees.
+with one operator process. See [Tasks and recovery](runtime-recovery.md) for guarantees and limits,
+and [Skills and context](learning.md) for learning workflows.
 
 ## Connectors
 
 The core includes action descriptors for Slack and Gmail. Standalone Crewrun also includes a
 local adapter with operator credential setup, Gmail refresh, review payloads and provider calls
-(see [the README](../README.md#slack-and-gmail-with-or-without-a-host)). A custom host can
+(see [Slack and Gmail](integrations.md)). A custom host can
 replace that adapter with its own account system. In that case the host:
 
 1. starts OAuth with the smallest requested scopes;
@@ -125,16 +119,11 @@ replace that adapter with its own account system. In that case the host:
 4. maps the connection to narrowly named actions;
 5. invokes the action only after authority and approval checks.
 
-For the first release, enable Slack replies/posts and Gmail send-draft flows.
-Gmail read access is intentionally opt-in because it requires broader, more
-sensitive permissions. Financial connectors are out of scope for this contract
-until a host has the appropriate consent, privacy, and compliance controls.
+Built-in actions support Slack replies/posts and Gmail existing-draft sends.
+Gmail read access is opt-in and requires additional consent and agent permissions.
 
 ## Operations console
 
-`crewrun console` is a local control surface, not a chat client. It presents
-agents as operational cards and supports normal edits for agent identity, runner,
-memory pointers, scheduled tasks, connector status, approvals, provider readiness,
-audit, and usage. It never displays raw secret values or accepts OAuth tokens from a
-model. Hosts can add their own connector/usage snapshots through the stable
-host API.
+`crewrun console` lets an operator edit agents and schedules, run tasks, review results and
+approvals, connect accounts, and inspect provider readiness, audit, and usage. Hosts can supply
+their own snapshots and actions through the [console operations API](host-api-v1.md#console-operations-surface).

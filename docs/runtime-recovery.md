@@ -1,4 +1,6 @@
-# Standalone task recovery
+# Tasks and recovery
+
+[Documentation](README.md) / Tasks and recovery
 
 `crewrun up <project> --console` runs the durable worker, schedule/heartbeat trigger loop and
 console. `crewrun console <project>` runs manual tasks and pending deliveries without triggering
@@ -25,10 +27,7 @@ timeout. State lives at `CREW_HOME/runtime/<project-hash>/state.sqlite` (default
 an owner-only directory and database file on Unix. Windows uses the operator account's filesystem
 permissions. Credentials and exact review payloads are private operator state, outside the repo;
 the database is not encrypted. SQLite's native module is a required runtime dependency.
-If no prebuilt binary is available, installation needs a C++ toolchain and Python. For Node 20
-with Visual Studio 2026, use npm 11.6.3 or a compatible newer npm so its node-gyp can detect that
-compiler; the bundled npm 10 cannot. Windows CI uses npm 11.6.3 and Python 3.12 and runs the native
-database tests. [node-gyp Visual Studio support](https://github.com/nodejs/node-gyp/blob/main/CHANGELOG.md).
+See [Security and storage](security.md) for installation requirements and credential handling.
 
 Runs, attempts, actions, trigger cursors, artifacts, receipts and events commit transactionally.
 Claims have unique lease tokens and deadlines. Workers renew their leases; stale workers cannot
@@ -89,7 +88,7 @@ errors and HTTP 429 rejections receive scheduled retries; ambiguous send errors 
 `checkDelivery` and `reconcileAction`. `createRuntimeStore` is also available independently.
 Close stores when an embedding application is finished with them.
 
-The capture helper now accepts an AbortSignal and returns runner/engine/provider information,
+The capture helper accepts an AbortSignal and returns runner/engine/provider information,
 usage and engine session ID alongside `ok`, `text` and `reason`. Completion, text artifacts and
 one ledger row commit together. Agents granted `task.saveArtifact | internal-write` can save
 intermediate text results through the standalone bridge before a turn finishes. Saved artifacts
@@ -101,6 +100,5 @@ historical cost to each deliverable. Missing usage is flagged, and subscription 
 invoices. Acceptance is blocked until the model turn completes and all requested deliveries have
 succeeded. Budget reservations and hard provider spending limits remain future work.
 
-SQLite tests exercise competing processes, lease expiry, stale completion, transactional rollback,
-dependency acceptance, pause/cancel, shared triggers, rate-limit retries and positive reconciliation.
-Provider tests use mocked responses; they do not send live Slack messages or Gmail mail.
+For code examples, see [Library integration](library.md). Test coverage and live-test setup are
+described in [Development](development.md).

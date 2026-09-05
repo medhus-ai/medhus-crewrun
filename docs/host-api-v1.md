@@ -1,14 +1,10 @@
----
-type: api-contract
-contract_version: 1
-applies_to: medhus-crewrun 0.6.x
-status: stable
----
+# Host API reference
 
-# Host API and schema contract v1
+[Documentation](README.md) / Host API reference
 
 This is the supported embedding boundary for a host application. `targetRoot` means the
-absolute path to one project; `role` means a lowercase slug (`[a-z][a-z0-9-]{0,79}`).
+absolute path to one project; `agent` and the compatible `role` fields identify an agent by its
+lowercase slug (`[a-z][a-z0-9-]{0,79}`). Start with [Library integration](library.md) for examples.
 
 ## Compatibility
 
@@ -17,22 +13,23 @@ absolute path to one project; `role` means a lowercase slug (`[a-z][a-z0-9-]{0,7
 - A breaking host-surface or file-schema change requires a new contract version and migration
   notes. The npm package is still pre-1.0, so hosts should pin and test a package version.
 - Exports not named here are useful implementation utilities, but are not part of this stable
-  host contract yet. In v0.6, the named governance, approval, connector, console-operations,
+  host contract yet. The named governance, approval, connector, console-operations,
   runner, scheduler, and MCP surfaces below are the supported boundary.
 
 ## Turn runner
 
-`createRoleRunner(options)` from `medhus-crewrun/runner` is the primary runtime boundary. Its
+`createAgentRunner(options)` from `medhus-crewrun/runner` is the primary runtime boundary. Its
 `tools` option is a bridge returned by `createMcpBridge`; all other hooks are optional host
 presentation, prompt, memory, capability, worktree, and container customizations.
-It returns `startRoleTurn`, `runRoleCapture`, `generateConversationTitle`, `runnerIdForRole`, and
-the prompt/memory helper methods documented by that module.
+It returns `startAgentTurn`, `runAgentCapture`, `generateConversationTitle`, and the existing
+role-named prompt/memory helpers. `createRoleRunner`, `startRoleTurn`, and `runRoleCapture`
+remain available for compatibility and use a `role` input instead of `agent`.
 
 ```js
-const turn = runner.startRoleTurn({
+const turn = runner.startAgentTurn({
   targetRoot,                         // string, required
-  role,                               // role slug, required
-  messages: [{ author, content }],    // required array of strings
+  agent,                              // agent slug, required
+  messages: [{ author, content }],    // array of objects with string fields
   resumeSessionId,                    // optional vendor session id
   worktree: { dir, branch },          // optional prior execute worktree
   readOnlyWorktree: { dir, branch },  // optional review worktree
@@ -52,9 +49,10 @@ turn starts.
 `usage` is `{ inputTokens, outputTokens, costUsd }`, with unavailable values represented by
 `null`. `onLine`, `onPartialText`, and `onStatus` receive a string; `onError` receives an error.
 
-For a headless one-shot, `runRoleCapture({ root, role, prompt, ... })` resolves to
+For a headless one-shot, `runAgentCapture({ root, agent, prompt, signal, ... })` resolves to
 `{ ok: true, text }` or `{ ok: false, reason, text }`; it does not reject for a runner timeout
-or non-zero runner exit.
+or non-zero runner exit. It accepts an optional AbortSignal and also returns `usage`, `runnerId`,
+`engineId`, `provider`, and `engineSessionId` when available.
 
 ## Host tool bridge
 
@@ -81,7 +79,7 @@ MCP error result instead of escaping the tool call.
 Optional registry hooks are `label`, `toolLineMarker`, `instructions`, `enabled(toolContext)`,
 `validate(toolName, input)` returning `{ ok, input? | error? }`, `alwaysLoad(toolName)`,
 `toolInstructions(role, toolContext, toolNames)`, and `serializeContext(toolContext)`. A governed
-registry may also supply `governance` from `createRoleGovernance` and
+registry may also supply `governance` from `createAgentGovernance` and
 `actionPolicy(toolName, { role, ...toolContext })`, which returns the tool's real
 `{ impact, data }` classification before it is exposed.
 
@@ -94,7 +92,7 @@ from `medhus-crewrun/tool-broker` when the host needs enforcement as well as fil
 `callTool({ role, toolName, input, context, registry, roleOptions, approval?, data?, impact? })`
 checks the agent allowlist and, when configured, its contract again before it invokes
 `registry[toolName](input, { role, context })`. The bridge applies the same contract filter to
-CrewRun's built-in tools, so a model cannot recover a denied capability through MCP registration.
+Crewrun's built-in tools, so a model cannot recover a denied capability through MCP registration.
 
 For Claude, the bridge is an in-process MCP server. For Codex, `codexMcpConfig` starts the
 host's `stdioServerEntry` as a child MCP server. That entry reconstructs plain-data context with
@@ -139,25 +137,26 @@ and scopes merge additively, while approval requirements and budgets only become
 Use the v1 facade to evaluate authority at every boundary:
 
 ```js
-import { createRoleGovernance } from "medhus-crewrun/role-contract";
-import { loadRoleSpec } from "medhus-crewrun/role-spec";
+import { createAgentGovernance } from "medhus-crewrun/agent-contract";
+import { loadAgentSpec } from "medhus-crewrun/agent-spec";
 
-const governance = createRoleGovernance({
+const governance = createAgentGovernance({
   targetRoot,
   requireContracts: true,
-  getContract: (role) => loadRoleSpec(targetRoot, role)?.contract
+  getContract: (role) => loadAgentSpec(targetRoot, role)?.contract
 });
 ```
 
-It exposes `contractFor(role)`, `summaryForRole(role)`, `authorizeAction({ agent, toolName,
-impact, data, approval })`, `authorizeHandoff({ agent: actorRole, peerRole, direction })`, and
+It exposes `contractFor(role)`, `summaryForRole(role)`, `authorizeAction({ role, toolName,
+impact, data, approval })`, `authorizeHandoff({ role: actorRole, peerRole, direction })`, and
 `recordAction(record)`. For a send, `peerRole` is the recipient; for a receive, it is the sender
 (`recipientRole` / `senderRole` aliases are also accepted). `authorizeAction` returns a stable
 decision with `allowed`, `decision` (`allowed`, `approval-required`, `denied`, or legacy),
 authority version/revision/fingerprint, effective impact, and safe data scopes. With
 `requireContracts: true`, an agent without a contract is denied. The broker invokes it for tools;
 a host must use `authorizeHandoff` at each durable-handoff boundary, or pass governance to the
-queue below for its enqueue-side check.
+queue below for its enqueue-side check. These methods retain the `role` property name even
+when constructed through the `createAgentGovernance` alias.
 
 ### Durable governed handoffs
 
@@ -179,7 +178,7 @@ queue.enqueueHandoff({
 ```
 
 Omit `fromRole` only for trusted host-originated ingress such as a signed webhook. That preserves
-the pre-v0.6 API and deliberately does not represent an agent-to-agent handoff. A agent-originated
+the existing API and does not represent an agent-to-agent handoff. An agent-originated
 retry cannot reuse an idempotency key belonging to another agent or conversation.
 
 When created with `targetRoot`, the facade creates a local append-only, hash-chained audit log.
@@ -190,16 +189,17 @@ payloads, outputs, OAuth tokens, or API keys. Multiple writers need host-level s
 ## High-impact action approvals
 
 `createActionApprovalPolicy({ targetRoot })` from `medhus-crewrun/action-approvals` is the
-recommended small, local policy for a single host process. Wire it into governance:
+file-based policy for a single host process. Standalone execution uses a transactional outbox
+instead; see [Tasks and recovery](runtime-recovery.md). To use the file-based host policy:
 
 ```js
 import { createActionApprovalPolicy } from "medhus-crewrun/action-approvals";
 
 const approvalPolicy = createActionApprovalPolicy({ targetRoot });
-const governance = createRoleGovernance({
+const governance = createAgentGovernance({
   targetRoot,
   requireContracts: true,
-  getContract: (role) => loadRoleSpec(targetRoot, role)?.contract,
+  getContract: (role) => loadAgentSpec(targetRoot, role)?.contract,
   requestApproval: approvalPolicy.requestApproval
 });
 ```
@@ -209,7 +209,7 @@ provider action. An operator approves or rejects it through the console or
 `approvalPolicy.approve` / `.reject`. On a later retry of the exact same agent, action,
 connection, input, and contract revision, the policy claims the approved record once and lets the
 broker invoke the provider. A record cannot be replayed for different input or reused after the
-claim. Hosts should render a clear retry path; CrewRun never retries a side effect by itself.
+claim. This helper does not deliver or retry actions; the host owns that lifecycle.
 
 The queue persists only a safe summary, agent, action, connection id, authorization summary, and
 input digest. It never persists raw action input, OAuth tokens, or API keys. A multi-process or
@@ -237,7 +237,8 @@ PKCE/code exchange, encrypted token storage and refresh, consent display, revoca
 of a connection to a user or workspace when using this low-level helper. Standalone Crewrun
 also ships `createStandaloneRuntime({ targetRoot })`: its `operations` surface accepts local
 operator credentials, refreshes Gmail tokens, reviews exact messages and invokes the providers.
-It does not implement a browser OAuth consent callback. See the README for setup and storage.
+It does not implement a browser OAuth consent callback. See [Slack and Gmail](integrations.md)
+for setup and [Security and storage](security.md) for credential handling.
 
 ## Console operations surface
 
@@ -245,7 +246,8 @@ It does not implement a browser OAuth consent callback. See the README for setup
 The `crewrun up --host ./host.mjs --console` and `crewrun console --host ./host.mjs` commands use
 `host.operations` when present (otherwise the host object itself). The console keeps ordinary
 agent and schedule editing local even when no operations object is provided. With no operations
-object, the console uses the standalone adapter for Slack/Gmail connections and approvals.
+object, the console uses the standalone runtime for tasks, delivery processing, the usage ledger,
+Slack/Gmail connections, and approvals.
 
 ```js
 export function createHost() {
@@ -281,8 +283,9 @@ export function createHost() {
 `providers` expose only safe status/detail; `connectors` expose safe connection state and
 capabilities; `approvals` expose safe review fields; `audit` exposes only actor, agent,
 runner/model, authority decision/revision, data scopes, budget, action, and outcome; and
-`contracts` may add host summaries keyed by agent. Never put raw inputs, outputs, errors,
-credentials, OAuth tokens, or audit digests in the console snapshot. `connect` / `disconnect` may
+`contracts` may add host summaries keyed by agent. Keep credentials and raw audit payloads out
+of snapshots. Exact message review fields and task results belong in the private approval and
+task views. `connect` / `disconnect` may
 return `{ redirect }`, `{ url }`, or a URL string; the console permits only `http(s)` or local
 paths as redirects. `decideApproval` receives only the record id and `approve` / `reject` action.
 
@@ -293,18 +296,18 @@ the result of `createHost({ targetRoot, log })`. Every callback is optional:
 
 | Callback | Stable responsibility |
 |---|---|
-| `runTurn(role, prompt, meta)` | Run an ordinary turn; return `{ ok, text?, reason? }`. The kernel runner is the fallback. |
+| `runTurn(role, prompt, meta)` | Run an ordinary turn; return `{ ok, text?, reason? }`. The standalone runtime is the fallback. |
 | `runSchedule(schedule)` | Fully own a scheduled delivery; otherwise the loop calls `runTurn`. |
-| `enqueue({ role, body, externalId })` | Receive debounced hook work. Hooks are disabled, with one notice, when absent. |
+| `enqueue({ role, body, externalId })` | Receive debounced hook work. Standalone mode enqueues tasks; a custom `runTurn` host must supply this hook to receive events. |
 | `routeEvent(event, payload, settings)` / `renderEvent(...)` | Select subscribed agents and render their hook prompt. |
 | `spentToday(role)` | Return a USD number for heartbeat budget caps. |
 | `tick({ emit })`, `start({ emit })`, `stop()` | Host housekeeping and lifecycle. |
 | `operations` | The console surface described above. |
 
-`createUp` owns its in-process scheduler loop, but it is not a leader election system. Run one
-owner per project or have the host transactionally claim scheduled work before `runSchedule` /
-`runTurn`; see [Scheduling ownership](#scheduling-ownership). The loop's normal scheduler state
-is deliberately not a cross-process lock.
+Without `host.runTurn` or `host.runSchedule`, `createUp` uses the standalone transactional
+scheduler. Processes sharing the same local database share trigger cursors and atomic claims.
+Supplying either callback selects the file-based schedule/heartbeat helpers; use one owner per
+project or provide host coordination. See [Scheduling ownership](#scheduling-ownership).
 
 ## Project files
 
@@ -313,7 +316,7 @@ All paths below use the configured crew directory (`.crew` by default).
 ### Agent file
 
 `<targetRoot>/.crew/agents/<role>.json` is the primary agent specification. It may contain
-`title`, `runner`, `memory_pointers`, `reflections`, `hooks`, `heartbeat`, `web`, `scheduled`, and
+`title`, `instructions`, `runner`, `memory_pointers`, `reflections`, `hooks`, `heartbeat`, `web`, `scheduled`, and
 the governed `contract` above. `<targetRoot>/.crew/agents/_defaults.json` supplies a shared
 defaults floor; agent memory pointers append to that floor, while contract approvals and budgets
 cannot be weakened. The older `schedules` agent key remains readable for compatibility; new
@@ -401,7 +404,7 @@ credential, and it is not an API-key substitute. For a direct provider profile,
 vendor runtime's normal credential resolution in place; a routed `base_url` profile uses its
 own API-key route rather than subscription authentication.
 
-Use subscription mode only for the operator running CrewRun locally. A host acting for other
+Use subscription mode only for the operator running Crewrun locally. A host acting for other
 users must use its own API-key or supported cloud-provider integration, and should review the
 current [Anthropic policy](https://code.claude.com/docs/en/legal-and-compliance) and
 [OpenAI guidance for using Codex with a ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) before deployment.
@@ -420,13 +423,15 @@ valid; host tool registries continue receiving the same `role` property.
 Agent specs may include `instructions`, a plain string injected in each new turn. The console
 edits this field directly. Reflections remain optional and inherit `false` from shared defaults.
 
-## Standalone recovery and learning update
+## Standalone runtime
 
-`runtime-store` and `runtime-scheduler` add optional SQLite-backed standalone execution without
-changing the file-backed host helper contracts. See [runtime recovery](runtime-recovery.md) for
-claims, delivery states, operations methods and deployment limits. `runRoleCapture` /
-`runAgentCapture` additionally accept `signal` and return `usage`, `runnerId`, `engineId`,
-`provider` and `engineSessionId` when available. Existing `ok`, `text`, and `reason` remain.
+`createStandaloneRuntime` exposes `store`, `operations`, `tick`, `start`, `stop`, `close`, and
+`runTurn(agent, prompt, meta)`. Its `runtime-store` and `runtime-scheduler` modules use SQLite;
+the native dependency is required. File-based host helpers retain their separate contracts.
+See [Tasks and recovery](runtime-recovery.md) for claims, delivery states, operations methods,
+and deployment limits, and [Library integration](library.md) for lifecycle examples.
+
+## Skills and context proposals
 
 Reflections are off by default. `reflections: true` (or an existing options object) enables
 optional proposals; the old `limit` field remains readable for compatibility but no journal is
@@ -434,6 +439,6 @@ automatically injected. `memory.reflect` requires `target`, `key`, `text`, and `
 `description` for Skills. Approval promotes an update into a preference or Skill. Pending
 proposals expire after 30 days. Existing journals and legacy pending proposals remain available
 for manual review; the console asks for a destination before approving a legacy proposal.
-`skill.propose` now requires evidence of user/application relevance or improved reliability.
+`skill.propose` requires evidence of user/application relevance or improved reliability.
 Trusted operators may use `saveUserPreference` for an explicit user instruction; agents only
-receive the proposal API. Skills retain their existing name and on-disk formats.
+receive the proposal API. See [Skills and context](learning.md) for formats and review workflows.

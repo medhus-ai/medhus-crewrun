@@ -1,202 +1,38 @@
----
-type: implementation-state
-audience: maintainer + ai-agent
-updated: 2026-09-05
-status: active
----
+# Capabilities and limits
 
-# crewrun State
+[Documentation](README.md) / Capabilities and limits
 
-## Direction
+This page describes the code on this branch. Published package versions may differ;
+use the documentation at your installed version's Git tag.
 
-An open-source, host-neutral agent runtime (Apache-2.0, npm `medhus-crewrun`), extracted on
-2026-08-31 from its first production hosts so any application can share it. The kernel holds only
-host-neutral code; product identity is injected (see README → Host contract). Hosts pin a tag.
+## Available
 
-## Current implementation: recoverable standalone work
+| Area | Support |
+|---|---|
+| Agents | JSON specs, instructions, shared defaults, permissions, and a local management console |
+| Runners | Claude Agent SDK, Codex SDK, and configured CLI/API routes |
+| Tasks | Manual requests, accepted dependencies, saved artifacts, receipts, and timelines |
+| Recovery | Transactional local storage, atomic claims, delivery retries, pause/cancel, and restart recovery |
+| Scheduling | Cron tasks, periodic check-ins, and application-supplied hooks |
+| Integrations | Approved Slack posts/replies and Gmail existing-draft sends; optional Gmail reads |
+| Learning | Scoped Skills, reviewed preferences, and optional reflection proposals |
+| Usage | Run ledger, reported and estimated spend, and cost per accepted deliverable |
+| Embedding | Host APIs for tools, governance, storage, events, and console data |
 
-- Standalone run/action state, credentials, trigger cursors, durable outbox, event timeline,
-  artifacts and the existing budget ledger now share a private SQLite database. Atomic leases
-  fence concurrent workers. Expired sends become uncertain; expired model turns require review
-  and explicit retry. Pause/cancel prevent future claims and interrupt active model capture.
-- Tasks provides immediate requests, dependencies, saved results/downloads, approval and delivery
-  status, reconciliation, pause/resume/cancel, and explicit deliverable acceptance. Usage reports
-  recorded cost per accepted output and flags unknown usage. Native SQLite is a runtime dependency.
-- Skills remain **Skills**. Save user/application-specific context and repeatable procedures;
-  generic instructions need evidence of improved reliability. Reflections are off by default,
-  expire after 30 days, and promote into preferences or Skills after review. Existing journals
-  are retained but no longer automatically injected; no routine after-action journal is created.
-- See [runtime recovery](runtime-recovery.md) for the implementation boundaries and migration.
-  Earlier completion notes below describe their original releases; this section supersedes any
-  older claim that reflections auto-inject or standalone queues/usage require a custom host.
+## Current limits
 
-## Boundaries (what stays out)
+- Restart recovery resumes queued work. Interrupted model turns need review and an explicit retry;
+  pause/resume does not restore an exact model checkpoint.
+- An external action already in flight can finish after pause/cancel. Uncertain delivery needs
+  reconciliation before resending. A provider receipt is not proof of recipient delivery or reading.
+- Standalone storage supports processes sharing a local database, not a distributed worker cluster.
+  Exported file-based host helpers still require one operator process or host-provided coordination.
+- Standalone Gmail sends existing drafts. Incoming Slack subscriptions, Gmail draft creation,
+  and browser OAuth callbacks require additional integration work.
+- Usage may be incomplete when a provider does not report it. Subscription costs are estimates;
+  budget reservations and hard provider spending limits are not implemented.
+- Reflections are off by default. Reviewed proposals update preferences or Skills;
+  legacy journals are retained but are not automatically loaded.
 
-Anything with a product opinion belongs in a host, never in the kernel:
-
-- Product-specific workflow/pipeline state, dispatchers, verification contracts, forge integrations (GitHub,
-  Azure DevOps), PR sync, and merge policy.
-- Product-branded UI shells, application control APIs and account-specific OAuth callbacks. Standalone Slack/Gmail
-  provider calls and private operator connection storage are bundled in `standalone.js`. The local operations console is intentionally in the kernel; hosts feed
-  it data and actions through the stable `operations` surface.
-- Agent catalogs and domain-specific file tooling.
-- Memory file content (doctrine, conventions) — each host's own; the runtime reads only explicit
-  agent or host pointers and ships no doctrine by default.
-
-## Done since extraction
-
-- 2026-09-05 consolidation: remote `main` and `feat/v0.6-governed-operations` were fast-forwarded
-  into main; their complete histories and features are retained. Product naming is now Agents,
-  with canonical UI/CLI paths, agent API aliases and agents/ files. Legacy role APIs/files remain
-  supported, including mixed layouts without duplicate scheduling.
-- Agent management keeps the existing console style and adds search, job instructions, activity,
-  web/reflection controls and data-scope editing. Shared defaults correctly disable reflections.
-- Standalone Slack/Gmail setup no longer requires a custom host module. Credentials and exact
-  pending payloads are private local files (0600), Gmail refresh tokens support unattended runs,
-  writes are single-use approved actions, and Gmail sends the reviewed draft MIME. The adapter
-  supports Claude in-process tools and Codex stdio. Incoming events and draft creation remain
-  separate work; the Slack event host example is preserved.
-- README leads with the CLI. [Product direction](product-direction.md) records the recommendations
-  on reflections, Skills, reliability, customer outcomes and competitive validation.
-
-
-- Governed agents and external actions (v0.6.0): agent specs now carry contract v1 — revision,
-  mandate, tool/data/handoff authority, approval requirements, and budget caps. A host composes
-  `createRoleGovernance`, `createToolBroker`, and the MCP bridge to filter and recheck authority;
-  `requireContracts` makes legacy agents fail closed. The bundled approval policy provides a
-  single-use request/claim path, while governance can append a redacted, hash-chained audit
-  record. Handoff recipients are evaluated explicitly; the durable handoff queue remains the
-  cross-agent work bus rather than agent chat.
-
-- Reference operations surface (v0.6.0): the local console now has practical agent/model/memory
-  controls, cron CRUD, authority summaries, approvals, a safe audit view, provider readiness,
-  connector state, and usage cards. The stable host `operations` snapshot/actions keep it host-neutral. Slack
-  post/reply and Gmail send-draft descriptors remain reusable host actions. Standalone Crewrun
-  now supplies local setup, Gmail refresh, exact-message approvals and provider calls as well.
-  Custom OAuth callbacks stay with hosts. Gmail reads are explicit opt-in.
-
-- Scheduling ownership is explicit: `createScheduler` is a one-owner helper, not a distributed
-  claim system. A multi-process host elects that owner or makes an atomic schedule claim in its
-  own database/queue before running a turn.
-
-- Governed durable learning (v0.6.0): `memory.reflect` now creates a reviewable per-agent
-  proposal; only an operator approval appends it to the bounded journal injected into later
-  turns. The console, CLI proposal commands, and startup notice include those proposals beside
-  skills and preferences.
-
-- Web access (v0.5.0–0.5.1): agents opt in with `"web": true | { allow, search, max_chars }` in their
-  spec. The engine's native web tools are preferred — Claude's WebSearch/WebFetch (allowlist
-  enforced via a PreToolUse hook), Codex's web search (open access only) — and the kernel's
-  built-in `web.fetch` (read-only GET, redirect hops re-checked, private addresses refused,
-  HTML→text, capped) + `web.search` (DuckDuckGo HTML, no key) cover cli/container engines and
-  allowlisted Codex agents. Off by default — nothing web-shaped is advertised to agents without
-  `web`. `roles check` warns on open access; the console shows the setting per agent.
-
-- Console (v0.4.0): `crewrun console <root>` / `crewrun up --console` — a local operator UI
-  (127.0.0.1, node:http, zero deps; shell/pages/navigation structure) over one project's
-  .crew/: dashboard + validation, agent spec editing and add-agent, schedule toggles and
-  run-now (when attached to a loop), the skill index, and proposal approve/reject. An
-  operations surface by design — no chat, no assistant UX. The kernel's built-in tools
-  (crew-tools.js) are now merged into every bridge automatically (host names win;
-  `crewTools: false` opts out) and the default runner carries them.
-
-- Agent specs (v0.3.0): `.crew/agents/<role>.json` (+ `_defaults.json`) holds runner, pointers,
-  reflections knob, hooks, heartbeat, and that agent's scheduled tasks; agent `.md` is optional prose
-  read via pointers; reflections auto-inject (bounded) closing the learning loop; skills go
-  flat (`skills/<id>.md`) with a generated `_index.md`; `crewrun proposals list|approve|reject`
-  gives the operator a native approval surface, and hostless `crewrun up` attaches the kernel's
-  own learning-loop tools bridge. All legacy forms still resolve.
-
-- `crewrun up` (v0.2.0): the crew loop as a library (`src/up.js`, createUp + loadHostModule) and
-  a first CLI (`bin/crewrun.js`: up, agents check). Hosts inject runTurn/enqueue/routing/tick;
-  without a host module, schedules and heartbeats run on a tool-less kernel runner.
-
-- Conversations/messages store (`src/conversations.js`) and tasks-as-files work items (`src/work-items.js`).
-- Delivery/outcome report on the ledger (`deliveryReport`): cost per delivered item, touches per item.
-- Handoff queue (`handoffs`) and cron schedules for agents (`schedules`).
-- Learning layers: skill and reflection proposals (`skill-proposals`, `reflection-proposals`),
-  episodic recall (`recall` + `conversations.searchMessages`), and bounded per-agent reflections
-  (`reflections`).
-
-## Candidates for a later move
-
-
-## Review findings closed in v0.1.6
-
-The 2026-08-31 review recorded five gaps; all are fixed and covered by tests:
-
-- Agent names are validated as slugs at every filesystem boundary (`removeRole`, `startRoleTurn`), so
-  an agent identifier can never build a path outside the agents directory.
-- A schedule whose process died after `lastStartedAt` is released after `staleAfterMs` (default
-  one hour, configurable) instead of staying "running" forever. Run state is still a JSON file
-  without a cross-process claim: run one scheduler per project.
-- Singleton-conversation unique indexes include `role`, so two singleton agents can each hold a
-  thread on the same reference.
-- `enqueueHandoff` verifies the conversation exists and belongs to `targetRoot`.
-- Secret and auth files are chmod'ed to 0600 on every write, not only on creation.
-
-## Last Check
-
-- (12) 2026-09-05 — consolidated main, Agents naming and management, standalone integrations:
-  Node 20 suite: 180 passed, 0 failed, 4 opt-in live-provider/Docker checks skipped. SQLite-backed
-  tests ran. Connector tests use mocked provider responses; the Codex stdio MCP transport is
-  exercised with a real child process. Chromium desktop and 390px viewport checks passed;
-  npm package dry-run passed. No live Slack/Gmail delivery or npm publication was performed.
-  Cross-platform CI also exposed a pre-existing Windows host-module loader issue: drive-letter
-  paths were treated as URL schemes. Absolute paths now use Node's native path detection and
-  file-URL conversion; explicit file URLs and package specifiers retain their behavior.
-
-- (11) 2026-09-03 — v0.6.0: governed operations contract, strict reflection proposals, host
-  approval/audit helpers, narrow Slack/Gmail connector descriptors, and the local operations
-  console landed on the v0.6 branch. Subscription mode remains local-operator sign-in only;
-  live Claude, Codex, OpenRouter, and Docker checks stay opt-in.
-
-- (10) 2026-09-01 — v0.1.6: closes the five review findings above (agent-name validation at
-  filesystem boundaries, stale-run release for schedules, per-agent singleton indexes, handoff
-  root check, continuous 0600 on sensitive files).
-
-- (8) 2026-09-01 — v0.1.5: Codex SDK `^0.152.0` (GPT-5.6 model ids); no code change.
-
-- (9) 2026-08-31 — Code and documentation review. The non-SQLite suite passes under Node 20;
-  SQLite-backed tests were skipped because the installed native `better-sqlite3` binding requires
-  GLIBC 2.38 while the available Node 20 image provides an older GLIBC. Corrected the public
-  handoff signature, cron feature description, and secret-file mode wording; recorded the
-  scheduler-recovery, singleton-index, handoff-root, path-validation, and file-mode gaps above.
-
-- (7) 2026-08-31 — v0.1.4: `handoffs` (the leased input queue that wakes an agent's singleton
-  thread; table name is host-configurable so an existing table is reused as-is) and `schedules`
-  (five-field cron parser, project-versioned definitions, crew-home run state, a scheduler that
-  fires once per due schedule and records outcomes).
-
-- (6) 2026-08-31 — v0.1.3: governed learning. `skill-proposals` (agent proposes a SKILL.md,
-  human approves into a scope; reuses the preference proposal/audit helpers), `recall`
-  (episodes = ask + outcome, by agent / reference / mention; LIKE with escaped wildcards), and
-  `reflections` (per-agent append-only journal, bounded read, prompt section). Hosts expose these
-  as tools and decide where to inject; the kernel ships no skill or memory content.
-
-- (5) 2026-08-31 — v0.1.2: `deliveryReport` on the ledger; no host is named anywhere in the repo;
-  the `cli` engine publishes prompt-file env under `CREW_*` plus the configured legacy prefix;
-  `EXTRA_PATH` reads through `crewEnv`; catalog cache keys on size + mtime.
-
-- (4) 2026-08-31 — v0.1.1: native-Windows runtime fixes ported from a production host (`resolveExecutable`
-  prefers PATHEXT launchers and the claude/codex `.exe` behind npm's `.cmd` shims, restores real
-  file case; the `cli` engine resolves its command the same way). v0.1.0 stays as pushed.
-
-- (3) 2026-08-31 — Renamed `crewrun` (repo and npm package `medhus-crewrun`; the runtime calls itself crewrun), Apache-2.0 + NOTICE,
-  publishable manifest. Neutral defaults: `configureCrew()` replaces the first host's directory/env
-  hardcoding (`crewDir()`, `sessionCookieName()`); the engineering-doctrine template returned to
-  its host and the runner's universal memory defaults to none. Added `conversations` (schema +
-  CRUD + singleton get-or-create) and `work-items` (tasks as markdown
-  files), plus `examples/brief.mjs` and an open-source README.
-
-- (2) 2026-08-31 — Renamed to `crewrun` / `crewrun` (was medhus-crewcore). Added:
-  the shared token/cost budget ledger (`src/budget.js`, host-injected SQLite handle so each host's
-  rows stay in its own database); OpenRouter as a provider (secret `OPENROUTER_API_KEY`, preset
-  `openrouter-auto`, discovery filtered to tool-calling models, Anthropic-protocol route at
-  `https://openrouter.ai/api` per OpenRouter's Claude Code guide); per-runner `auth:
-  "subscription" | "api-key"` forcing on both agent engines; and routed profiles now blank
-  `ANTHROPIC_API_KEY` so the Bearer token wins (latent GLM/Kimi bug, required by OpenRouter).
-  better-sqlite3 added as a devDependency for ledger tests only.
-
-- (1) 2026-08-31 — Initial extraction: 27 modules, 21 test files; the first host consumes it via
-  thin binding modules and its full suite stays green.
+See [Tasks and recovery](runtime-recovery.md) for operational details and the
+[Roadmap](product-direction.md) for planned improvements.

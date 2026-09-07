@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { agentFile } from "../agent-paths.js";
 import { cronFromRecurrence, listSchedules, normalizeSchedule, removeSchedule, upsertSchedule } from "../schedules.js";
-import { approveSkill, rejectSkill } from "../skill-proposals.js";
+import { approveSkill, proposeSkill, rejectSkill } from "../skill-proposals.js";
 import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
 import { approveAction, getActionApproval, listActionApprovals, rejectAction } from "../action-approvals.js";
@@ -15,7 +15,8 @@ import { parseInterval, validateRoleSettings, loadRoleSettings } from "../pulse.
 import { createStandaloneRuntime } from "../standalone.js";
 import { renderPage } from "./shell.js";
 import { pageFromUrl } from "./navigation.js";
-import { collectModels, renderPartial } from "./pages.js";
+import { collectModels, renderHelperDrawer, renderPartial } from "./pages.js";
+import { HELPER_ROLE } from "../console-chat.js";
 
 // The crewrun console is a local operator surface over one project's .crew/.
 // `operations` is optional host integration:
@@ -114,6 +115,11 @@ function redirectTarget(value, fallback) {
   return /^(?:https?:\/\/|\/(?!\/))/.test(target) ? target : fallback;
 }
 
+function localRedirect(value, fallback) {
+  const target = String(value || "").trim();
+  return /^\/(?!\/)/.test(target) && !/[\r\n]/.test(target) ? target : fallback;
+}
+
 export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {} } = {}) {
   if (!targetRoot) throw new Error("createConsole requires targetRoot");
   const root = path.resolve(targetRoot);
@@ -153,6 +159,18 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (!fn) throw new Error(`${names[0]} needs a console host integration`);
     const result = await fn({ targetRoot: root, ...payload });
     return redirectTarget(result?.redirect || result?.url || result, fallback);
+  }
+
+  async function syncCalendarTask(task, previousTask = null) {
+    const sync = operation(["syncCalendarTask", "syncScheduledTask"]);
+    if (!sync) return;
+    try {
+      // Calendar delivery is a projection of the locally governed task. It must
+      // never prevent an operator from saving the task itself.
+      await sync({ targetRoot: root, task, previousTask });
+    } catch (error) {
+      log(`[console] calendar mirror failed after local save: ${error.message}`);
+    }
   }
 
   async function handleAction(pathname, form) {
@@ -313,10 +331,14 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         prompt: String(form.prompt || "").trim(),
         enabled: form.enabled === "1"
       });
+      const previousTask = previousId
+        ? listSchedules({ targetRoot: root }).find((entry) => entry.id === previousId && (!previousRole || entry.role === previousRole)) || null
+        : listSchedules({ targetRoot: root }).find((entry) => entry.id === id && entry.role === role) || null;
       if (previousId && (previousRole !== role || previousId !== id)) {
         removeSchedule({ targetRoot: root, role: previousRole, id: previousId });
       }
       upsertSchedule({ targetRoot: root, schedule: task });
+      await syncCalendarTask(task, previousTask);
       return `/scheduled?role=${encodeURIComponent(role)}&task=${encodeURIComponent(id)}`;
     }
     if (pathname === "/scheduled/toggle") {
@@ -324,12 +346,18 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const id = String(form.id || "").trim();
       const task = listSchedules({ targetRoot: root }).find((entry) => entry.id === id && (!role || entry.role === role));
       if (!task) throw new Error(`task ${id} was not found`);
-      upsertSchedule({ targetRoot: root, schedule: { ...task, enabled: form.enabled === "1" } });
+      const next = { ...task, enabled: form.enabled === "1" };
+      upsertSchedule({ targetRoot: root, schedule: next });
+      await syncCalendarTask(next, task);
       return "/scheduled";
     }
     if (pathname === "/scheduled/delete") {
-      const removed = removeSchedule({ targetRoot: root, role: String(form.role || ""), id: String(form.id || "") });
+      const role = String(form.role || "");
+      const id = String(form.id || "");
+      const previousTask = listSchedules({ targetRoot: root }).find((entry) => entry.id === id && (!role || entry.role === role)) || null;
+      const removed = removeSchedule({ targetRoot: root, role, id });
       if (!removed) throw new Error("task was not found");
+      await syncCalendarTask(null, previousTask);
       return "/scheduled";
     }
     if (pathname === "/scheduled/run") {
@@ -350,6 +378,19 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator", target: form.target, key: form.key, description: form.description, env });
       return "/approvals";
     }
+    if (pathname === "/skills/propose") {
+      proposeSkill({
+        targetRoot: root,
+        id: String(form.skill_id || ""),
+        description: String(form.description || ""),
+        content: String(form.content || ""),
+        roles: lines(form.roles),
+        scope: String(form.scope || "repository"),
+        evidence: String(form.evidence || ""),
+        proposedBy: "operator"
+      });
+      return "/approvals";
+    }
     if (pathname === "/approvals/decide") {
       const approvalId = String(form.id || "");
       const action = String(form.action || "").trim().toLowerCase();
@@ -368,6 +409,13 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/connectors/disconnect") {
       return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/connectors");
+    }
+    if (pathname === "/chats/send") {
+      const role = String(form.role || "").trim();
+      const send = operation(["sendChat"]);
+      if (!send) throw new Error("chat needs a console host integration");
+      await send({ targetRoot: root, role, message: String(form.message || "") });
+      return localRedirect(form.return_to, `/chats?agent=${encodeURIComponent(role)}`);
     }
     if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
     if (pathname === "/tasks/control") return callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || "") }, "/tasks");
@@ -409,6 +457,21 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (page === "agents" && !roles) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const hostOperations = await snapshot();
       const models = collectModels(root, { knownEvents, operations: hostOperations });
+      const getChat = operation(["getChat"]);
+      const canChat = Boolean(getChat && operation(["sendChat"]));
+      const selectedChatRole = page === "chats" ? String(url.searchParams.get("agent") || url.searchParams.get("role") || "") : "";
+      const selectedChat = page === "chats" && models.specs[selectedChatRole] && getChat
+        ? await getChat({ targetRoot: root, role: selectedChatRole })
+        : null;
+      const helperOpen = url.searchParams.get("helper") === "1";
+      const helperChat = helperOpen && getChat
+        ? await getChat({ targetRoot: root, role: HELPER_ROLE })
+        : null;
+      const helperUrl = new URL(url);
+      helperUrl.searchParams.set("helper", "1");
+      const closeHelperUrl = new URL(url);
+      closeHelperUrl.searchParams.delete("helper");
+      const localUrl = (value) => `${value.pathname}${value.search}`;
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
         selectedRun: String(url.searchParams.get("run") || ""),
@@ -420,6 +483,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         agentSearch: String(url.searchParams.get("q") || ""),
         selectedTask: String(url.searchParams.get("task") || url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
         showTaskEditor: url.searchParams.get("new") === "1",
+        showSkillForm: url.searchParams.get("new") === "1",
+        selectedChat,
+        selectedChatRole,
+        canChat,
         canConnect: Boolean(operation(["connect", "connectConnector"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))
@@ -428,7 +495,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         targetRoot: root,
         version: VERSION,
         backHref: roleSubpage ? "/agents" : page === "dashboard" ? "" : "/",
-        backLabel: roleSubpage ? "Back to agents" : "Back to dashboard"
+        backLabel: roleSubpage ? "Back to agents" : "Back to dashboard",
+        recentChats: models.operations.chats,
+        helperContent: renderHelperDrawer(models, {
+          helperOpen,
+          helperChat,
+          canChat,
+          openHref: localUrl(helperUrl),
+          closeHref: localUrl(closeHelperUrl)
+        })
       });
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
     } catch (error) {

@@ -65,6 +65,11 @@ export function ensureConversationSchema(db, { singletonRoles = [], uniqueIndexe
         WHERE work_item_id IS NOT NULL AND purpose IS NOT NULL AND TRIM(purpose) <> '';
       CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_purpose_issue ON conversations (target_root, role, issue_id, purpose)
         WHERE work_item_id IS NULL AND issue_id IS NOT NULL AND purpose IS NOT NULL AND TRIM(purpose) <> '';
+      -- General unreferenced conversations intentionally stay non-singleton.
+      -- Only console-owned purposes need a durable one-thread-per-agent rule.
+      DROP INDEX IF EXISTS idx_conv_purpose_global;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_console_global ON conversations (target_root, role, purpose)
+        WHERE work_item_id IS NULL AND issue_id IS NULL AND purpose IN ('console-chat', 'console-helper');
     `);
   }
 }
@@ -105,6 +110,25 @@ export function createConversationStore({ getDb, singletonRoles = [], uniqueInde
     if (scoped) return getOrCreateSingleton({ root, role, title, issue, workItem, purpose: scoped, byRole: false });
     const existing = listConversations({ targetRoot: root, role, issueId, workItemId, limit: 50 }).find((row) => !row.purpose);
     return existing ? Number(existing.id) : createConversation({ targetRoot: root, role, title, issueId, workItemId });
+  }
+
+  // Console chats intentionally have exactly one thread per project + agent. Keep this
+  // separate from the general conversation helper, whose unreferenced calls create a new
+  // discussion by design.
+  function getOrCreateConsoleConversation({ targetRoot, role, title, purpose = "console-chat" }) {
+    const root = normalizeRoot(targetRoot);
+    const scoped = normalizePurpose(purpose);
+    if (!scoped) throw new Error("console conversation needs a purpose");
+    const select = "SELECT id FROM conversations WHERE target_root = ? AND role = ? AND work_item_id IS NULL AND issue_id IS NULL AND purpose = ? ORDER BY id ASC LIMIT 1";
+    const existing = db().prepare(select).get(root, role, scoped);
+    if (existing) return Number(existing.id);
+    const now = new Date().toISOString();
+    db().prepare(
+      "INSERT OR IGNORE INTO conversations (target_root, role, title, issue_id, work_item_id, purpose, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)"
+    ).run(root, role, title || null, scoped, now, now);
+    const winner = db().prepare(select).get(root, role, scoped);
+    if (!winner) throw new Error(`could not create ${role} console conversation`);
+    return Number(winner.id);
   }
 
   // INSERT OR IGNORE plus a re-select returns the row that won a concurrent creation attempt.
@@ -217,6 +241,7 @@ export function createConversationStore({ getDb, singletonRoles = [], uniqueInde
   return {
     createConversation,
     getOrCreateConversation,
+    getOrCreateConsoleConversation,
     listConversations,
     countConversations,
     getConversation,

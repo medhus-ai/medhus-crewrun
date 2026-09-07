@@ -5,11 +5,13 @@ export const PAGES = [
   { id: "tasks", label: "Tasks", icon: "list", group: "primary" },
   { id: "agents", label: "Agents", icon: "cloud", group: "primary" },
   { id: "scheduled", label: "Scheduled", icon: "calendar", group: "primary" },
+  { id: "calendar", label: "Calendar", icon: "calendar", group: "primary" },
   { id: "approvals", label: "Approvals", icon: "shield", group: "operations" },
   { id: "audit", label: "Audit", icon: "list", group: "operations" },
   { id: "connectors", label: "Integrations", icon: "network", group: "operations" },
   { id: "skills", label: "Skills", icon: "blocks", group: "operations" },
   { id: "providers", label: "Providers", icon: "key", group: "account" },
+  { id: "chats", label: "Chats", icon: "chat", group: "account" },
   { id: "usage", label: "Usage", icon: "chart", group: "account" }
 ];
 

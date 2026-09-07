@@ -1,4 +1,4 @@
-# Slack and Gmail
+# Integrations
 
 [Documentation](README.md) / Integrations
 
@@ -50,3 +50,24 @@ Standalone credentials and reviewed payloads live in the project's private SQLit
 `CREW_HOME/runtime/`, outside the repository by default. Disconnect removes local credentials;
 it preserves task history and receipts. Revoke the grant at the provider to revoke its access.
 See [Security and storage](security.md) for locations and protection.
+
+## Calendar and messaging gateways
+
+Crewrun's scheduled tasks can be shown in a calendar, but the task remains the source of truth:
+Crewrun runs it from its local schedule and a connected calendar is only a one-way mirror. The
+standalone adapter does not currently connect Google Calendar, Outlook/Microsoft 365, Teams, or
+WhatsApp. A product host may add those connections through the supported host operations API.
+
+For Google Calendar or Microsoft 365/Outlook, the host should mirror only Crewrun-created task
+entries into a selected calendar. It should use a private stable mapping for updates and deletes,
+show an explicit timezone, and never import or execute a calendar event as a Crewrun task. Do not
+copy an agent's full task prompt, project path, tokens, or other private metadata into the event.
+
+Teams and WhatsApp require a host gateway rather than a local connector form: the host owns the
+provider app, OAuth or business-account setup, HTTPS webhook verification, replay/deduplication,
+and subscription renewal. It must acknowledge inbound events before model work, route only
+authorized events into a durable queue, and make each outbound post a narrow governed external
+write. The [Slack event gateway example](../examples/slack/README.md) is the reference shape.
+
+See [Calendar mirrors and gateway-backed integrations](host-api-v1.md#calendar-mirror-operation)
+for the `syncCalendarTask` input schema and host responsibilities.

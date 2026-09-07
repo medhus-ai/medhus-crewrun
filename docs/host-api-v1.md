@@ -289,6 +289,84 @@ task views. `connect` / `disconnect` may
 return `{ redirect }`, `{ url }`, or a URL string; the console permits only `http(s)` or local
 paths as redirects. `decideApproval` receives only the record id and `approve` / `reject` action.
 
+### Calendar mirror operation
+
+Crewrun scheduled tasks remain the canonical schedule and execution source. A calendar is a
+one-way, best-effort visibility mirror; it must never become a second scheduler. In particular,
+calendar edits, event deletion, provider notifications, and provider webhooks must not change or
+enqueue a Crewrun task through this operation.
+
+A host that has connected a calendar may provide this optional console operation:
+
+```js
+operations: {
+  async syncCalendarTask({ targetRoot, task, previousTask }) {
+    // Project the local scheduled task into the host's selected calendar.
+  }
+}
+```
+
+The console calls it only after it has committed the local change. `task` is the normalized
+scheduled-task object, or `null` for a deletion:
+
+```js
+{
+  id: "weekday-brief",
+  role: "operations",
+  title: "Weekday brief",
+  cron: "30 8 * * 1-5",
+  prompt: "Prepare today's project brief.",
+  enabled: true
+}
+```
+
+`previousTask` is the normalized task before an update, rename, or deletion, and is `null` for a
+new task when there is no prior declaration. A callback must handle these cases idempotently:
+
+| Local change | `task` | `previousTask` |
+|---|---|---|
+| Create | current task | `null` |
+| Update, enable, or disable | current task | previous task when available |
+| Rename role or id | current task | old task |
+| Delete | `null` | deleted task |
+
+Use a private stable mapping for the project plus `role:id` to find the provider event; never put
+the absolute `targetRoot`, credentials, or the raw `prompt` into provider metadata. A mirror
+should publish only the title and a deliberately safe description. `cron` has no timezone field:
+Crewrun evaluates it in the scheduler process's local time. A host should use an explicit IANA
+timezone for the calendar event, or decline to mirror when it cannot determine one safely.
+
+The callback may return a safe status such as `{ status: "synced", provider, eventId }`,
+`{ status: "skipped", detail }`, or `{ status: "disconnected" }`. An error is a mirror failure
+after the local change, not a reason to roll back the Crewrun task. Hosts should surface and retry
+that failure through their own connection/reconciliation workflow.
+
+### Gateway-backed integrations
+
+Calendar and messaging providers are host integrations, not generic MCP clients or standalone
+credentials. The built-in standalone adapter currently supports Slack and Gmail only. A host can
+advertise additional safe connector state through `getSnapshot`, then own consent, token storage,
+provider calls, and recovery for the following narrow boundaries:
+
+| Provider surface | Host-owned boundary | Required guardrails |
+|---|---|---|
+| Google Calendar | `syncCalendarTask` one-way task mirror | Calendar consent, encrypted refreshable credentials, explicit calendar selection, idempotent event mapping |
+| Microsoft 365 / Outlook calendar | `syncCalendarTask` one-way task mirror | Tenant/user binding, Microsoft Graph consent, explicit calendar selection, idempotent event mapping |
+| Microsoft Teams | A narrow inbound/outbound message gateway | Public HTTPS endpoint, provider validation and subscription renewal, deduplication, agent authority and approval for posts |
+| WhatsApp | A narrow Business/Cloud API message gateway | Business account and phone binding, verified public webhook, deduplication, agent authority and approval for sends |
+
+The host owns OAuth redirects, CSRF/PKCE validation, credential encryption and refresh, connection
+revocation, and mapping a connection to an operator or workspace. It must verify an inbound
+provider request before it reaches an agent queue, acknowledge within the provider's deadline,
+and perform model work asynchronously. Outbound posts and replies remain narrow governed actions:
+expose only the action an agent needs through `createConnectorRegistry` or a host tool broker,
+classify it as an external write, and apply the host's approval policy. Do not expose a generic
+calendar, Teams, or WhatsApp API tool to agents.
+
+The [Slack event gateway example](../examples/slack/README.md) demonstrates this transport,
+authentication, deduplication, and approval split. Calendar hosts use the same separation, but
+only project Crewrun-owned tasks outward; they do not import provider events as schedules.
+
 ## Crew loop host module
 
 `createUp({ targetRoot, host })` from `medhus-crewrun/up` accepts either the plain host object or

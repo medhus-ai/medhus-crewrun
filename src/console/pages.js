@@ -15,7 +15,7 @@ import { knownSecretStatus, isUnlocked, secretsFileExists } from "../secret-stor
 import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
 import { renderTasks } from "./tasks.js";
-import { esc } from "./shell.js";
+import { esc, icon } from "./shell.js";
 
 const DEFAULT_CONNECTORS = [
   {
@@ -33,6 +33,33 @@ const DEFAULT_CONNECTORS = [
     description: "Review and send existing Gmail drafts. Enable inbox access only when you need it.",
     capabilities: ["Send existing draft"],
     state: "not connected"
+  },
+  {
+    id: "google-calendar",
+    label: "Google Calendar",
+    initials: "GC",
+    description: "Mirror CrewRun scheduled tasks one way into a dedicated calendar. CrewRun remains the source of truth.",
+    capabilities: ["Scheduled task mirror"],
+    state: "host gateway required",
+    hostSetup: true
+  },
+  {
+    id: "microsoft-365",
+    label: "Microsoft 365",
+    initials: "M",
+    description: "Use one Microsoft connection for Outlook Calendar mirroring and governed Teams updates or mentions.",
+    capabilities: ["Outlook Calendar mirror", "Teams gateway"],
+    state: "host gateway required",
+    hostSetup: true
+  },
+  {
+    id: "whatsapp",
+    label: "WhatsApp Business",
+    initials: "W",
+    description: "Send approved updates and receive verified webhook events through a host gateway.",
+    capabilities: ["Approved message", "Verified webhook"],
+    state: "host gateway required",
+    hostSetup: true
   }
 ];
 
@@ -77,7 +104,9 @@ export function renderPartial(page, models, options = {}) {
     case "roles":
     case "agents": return renderRoles(models, options);
     case "scheduled": return renderScheduledTasks(models, options);
-    case "skills": return renderSkills(models);
+    case "calendar": return renderCalendar(models);
+    case "skills": return renderSkills(models, options);
+    case "chats": return renderChats(models, options);
     case "approvals":
     case "proposals": return renderApprovals(models, options);
     case "audit": return renderAudit(models);
@@ -206,7 +235,7 @@ function renderRoleCard(spec, models) {
     <div>Learning ${spec.reflections === false ? "off" : "reviewed reflections"}</div>
     <div>Last check-in ${models.heartbeatState.roles?.[spec.role]?.lastRunAt ? when(models.heartbeatState.roles[spec.role].lastRunAt) : "Not run yet"}</div>
   </div>
-  <div class="card-footer"><span class="faint">${spec.web ? "Web enabled" : "Web off"} · ${spec.contract?.authority?.tools?.length || 0} tool${spec.contract?.authority?.tools?.length === 1 ? "" : "s"}</span><a class="button secondary tiny" href="/agents/${encodeURIComponent(spec.role)}">Manage agent</a></div>
+  <div class="card-footer"><span class="faint">${spec.web ? "Web enabled" : "Web off"} · ${spec.contract?.authority?.tools?.length || 0} tool${spec.contract?.authority?.tools?.length === 1 ? "" : "s"}</span><span class="button-row"><a class="icon-button" href="/chats?agent=${encodeURIComponent(spec.role)}" aria-label="Chat with ${esc(spec.role)}" title="Chat with ${esc(spec.role)}">${icon("chat", "utility-icon")}</a><a class="button secondary tiny" href="/agents/${encodeURIComponent(spec.role)}">Manage agent</a></span></div>
 </article>`;
 }
 
@@ -430,16 +459,109 @@ function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = 
   return table(headers, renderedRows, "No scheduled tasks yet.");
 }
 
-function renderSkills(models) {
+function renderCalendar(models) {
+  const upcoming = models.schedules
+    .filter((task) => task.enabled && Number.isFinite(Date.parse(task.nextRunAt || "")))
+    .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt));
+  const days = new Map();
+  for (const task of upcoming) {
+    const date = new Date(task.nextRunAt);
+    const key = [date.getFullYear(), date.getMonth(), date.getDate()].join("-");
+    if (!days.has(key)) days.set(key, { date, tasks: [] });
+    days.get(key).tasks.push(task);
+  }
+  const google = models.operations.connectors.find((connector) => connector.id === "google-calendar");
+  const calendarState = google?.connected
+    ? "Google Calendar is connected. Changes to a CrewRun task are projected one way by your host."
+    : "CrewRun scheduled tasks are the source of truth. Connect a calendar gateway when you want a one-way mirror.";
+  const calendar = [...days.values()].map(({ date, tasks }) => {
+    const heading = date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const events = tasks.map((task) => `<a class="calendar-event" href="/scheduled?role=${encodeURIComponent(task.role)}&task=${encodeURIComponent(task.id)}#task-editor"><strong>${esc(task.title || task.id)}</strong><span>${esc(task.role)} · ${esc(dateTime(task.nextRunAt))}</span></a>`).join("");
+    return `<section class="calendar-day"><div class="calendar-date">${esc(heading)}</div><div class="calendar-events">${events}</div></section>`;
+  }).join("");
+  return `
+<section class="hero">
+  <div><p class="eyebrow">Calendar</p><h1>Calendar</h1><p class="sub">See the next run for each enabled CrewRun task in your computer’s local time.</p></div>
+  <div class="actions"><a class="button secondary" href="/scheduled">Manage scheduled tasks</a><a class="button" href="/connectors">Integrations</a></div>
+</section>
+<section class="notice">${esc(calendarState)}</section>
+<section class="section-heading"><h2>Upcoming task calendar</h2><span class="muted">${upcoming.length} next run${upcoming.length === 1 ? "" : "s"}</span></section>
+${days.size ? `<div class="calendar-list">${calendar}</div>` : empty("No enabled scheduled tasks have an upcoming run yet.", "Create task", "/scheduled?new=1#task-editor")}
+<section class="section-heading"><h2>Calendar sync</h2><span class="muted">one-way only</span></section>
+<div class="card flat"><p class="muted">Google Calendar, Outlook Calendar, and Teams are host integrations. Calendar events never create or change CrewRun tasks, so a calendar edit cannot bypass role authority or task review.</p></div>`;
+}
+
+function renderSkills(models, { showSkillForm = false } = {}) {
   const rows = models.skills.map((skill) => [
     `<code>${esc(skill.id)}</code>`, esc(skill.description),
     skill.roles.length ? skill.roles.map((role) => `<code>${esc(role)}</code>`).join(" ") : "all",
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand; proposals land in the approval queue.</p></div><a class="button" href="/approvals">Review proposals</a></section>
+<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand; proposals land in the approval queue.</p></div><div class="actions"><a class="button secondary" href="/approvals">Review proposals</a><a class="button" href="/skills?new=1#skill-form">Add skill</a></div></section>
+${showSkillForm ? renderSkillForm(models) : ""}
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
 ${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.")}`;
+}
+
+function renderSkillForm(models) {
+  const agentNames = Object.values(models.specs).map((spec) => spec.role).join("\n");
+  return `
+<section id="skill-form" class="card" style="margin-top:16px">
+  <div class="section-heading" style="margin-top:0"><div><h2>Propose a skill</h2><span class="muted">Skills stay reviewable: this creates a proposal for Approvals.</span></div></div>
+  <form method="post" action="/skills/propose">
+    <div class="form-grid three">
+      <div class="field"><label for="skill-id">Skill ID</label><input id="skill-id" name="skill_id" placeholder="weekly-review" pattern="[a-z][a-z0-9-]*" required><span class="help">lowercase letters, digits, hyphens</span></div>
+      <div class="field wide"><label for="skill-description">What reusable outcome does it provide?</label><input id="skill-description" name="description" maxlength="200" placeholder="Prepare a concise, evidence-backed weekly operating review." required></div>
+      <div class="field"><label for="skill-scope">Scope</label><select id="skill-scope" name="scope"><option value="repository" selected>Repository</option><option value="workspace">Workspace</option><option value="user">User</option></select></div>
+      <div class="field wide"><label for="skill-roles">Applicable agents</label><textarea id="skill-roles" name="roles" placeholder="ops&#10;analyst"></textarea><span class="help">One agent slug per line; leave blank when the skill is useful to every agent. Current agents: ${esc(agentNames || "none")}.</span></div>
+      <div class="field wide"><label for="skill-content">Workflow body</label><textarea id="skill-content" name="content" placeholder="## Steps&#10;1. Gather…&#10;2. Check…&#10;3. Return…" required></textarea><span class="help">Write the reusable steps only. Approval adds the skill metadata.</span></div>
+      <div class="field wide"><label for="skill-evidence">Why is this reusable?</label><input id="skill-evidence" name="evidence" maxlength="4000" placeholder="Used for the weekly leadership review; the same inputs and checks recur." required></div>
+    </div>
+    <div class="button-row" style="margin-top:13px"><button>Propose skill</button><a class="button secondary" href="/skills">Cancel</a></div>
+  </form>
+</section>`;
+}
+
+function renderChats(models, { selectedChat = null, selectedChatRole = "", canChat = false } = {}) {
+  const agents = Object.values(models.specs);
+  const selectedRole = selectedChat?.role || selectedChatRole;
+  const selected = agents.find((spec) => spec.role === selectedRole) || null;
+  const recent = models.operations.chats.filter((chat) => chat.purpose !== "console-helper");
+  const agentLinks = agents.map((agent) => {
+    const thread = recent.find((entry) => entry.role === agent.role);
+    const active = agent.role === selectedRole;
+    return `<a class="chat-thread${active ? " active" : ""}" href="/chats?agent=${encodeURIComponent(agent.role)}"${active ? ' aria-current="page"' : ""}><span class="chat-thread-name">${esc(agent.title || agent.role)}</span><span class="chat-thread-meta">${thread ? esc(thread.title || "Resumed thread") : "Start chat"}</span></a>`;
+  }).join("");
+  const compose = selected && canChat ? `<form class="chat-composer" method="post" action="/chats/send"><input type="hidden" name="role" value="${esc(selected.role)}"><input type="hidden" name="return_to" value="/chats?agent=${encodeURIComponent(selected.role)}"><textarea name="message" maxlength="20000" placeholder="Message ${esc(selected.title || selected.role)}" required></textarea><div class="button-row"><span class="help">The agent receives this thread and resumes its configured provider session when available.</span><button>Send</button></div></form>` : "";
+  const workspace = selected
+    ? `<div class="chat-header"><div><h2>${esc(selected.title || selected.role)}</h2><p class="muted"><code>${esc(selected.role)}</code> · one resumed thread</p></div><a class="button secondary tiny" href="/agents/${encodeURIComponent(selected.role)}">Manage agent</a></div>${renderChatMessages(selectedChat, selected.title || selected.role)}${compose}`
+    : empty("Choose an agent to open its durable chat.", agents.length ? "Open first agent" : "Add agent", agents.length ? `/chats?agent=${encodeURIComponent(agents[0].role)}` : "/agents/new");
+  return `
+<section class="hero"><div><p class="eyebrow">Chats</p><h1>Agent chats</h1><p class="sub">Each agent keeps one resumed, durable conversation for this workspace.</p></div></section>
+${canChat ? "" : notice("Chat needs a running CrewRun host with an agent runner. You can still review agent settings and scheduled tasks.", "warn")}
+<section class="chat-layout" aria-label="Agent chats">
+  <nav class="chat-threads" aria-label="Agents"><div class="chat-threads-heading"><strong>Agents</strong><span class="muted">${agents.length}</span></div>${agents.length ? agentLinks : `<p class="help">Add an agent to begin a chat.</p>`}</nav>
+  <div class="chat-workspace">${workspace}</div>
+</section>`;
+}
+
+export function renderHelperDrawer(models, { helperOpen = false, helperChat = null, canChat = false, openHref = "/?helper=1", closeHref = "/" } = {}) {
+  return `
+<a class="helper-launcher" href="${esc(openHref)}" aria-label="Open Crew helper" title="Open Crew helper">${icon("chat", "utility-icon")}<span>Crew helper</span></a>
+<aside class="helper-drawer${helperOpen ? " open" : ""}" aria-label="Crew helper" aria-hidden="${helperOpen ? "false" : "true"}"${helperOpen ? "" : " inert"}>
+  <div class="helper-drawer-head"><div><strong>Crew helper</strong><p>Guided, governed setup</p></div><a class="icon-button" href="${esc(closeHref)}" aria-label="Close Crew helper" title="Close">×</a></div>
+  <div class="helper-choices"><a href="/agents/new">Add agent</a><a href="/agents">Manage agent</a><a href="/skills?new=1#skill-form">Add skill</a><a href="/scheduled?new=1">Schedule task</a></div>
+  <p class="helper-note">The helper can inspect agents, skills, and tasks through its read-only internal tool. It drafts changes for the normal reviewed forms; it never writes configuration itself.</p>
+  <div class="helper-messages">${renderChatMessages(helperChat, "Crew helper")}</div>
+  ${canChat ? `<form class="chat-composer helper-composer" method="post" action="/chats/send"><input type="hidden" name="role" value="crew-helper"><input type="hidden" name="return_to" value="${esc(openHref)}"><textarea name="message" maxlength="20000" placeholder="What would you like to set up?" required></textarea><button>Ask helper</button></form>` : `<p class="help">Start the local CrewRun host and configure a runner to chat with the helper.</p>`}
+</aside>`;
+}
+
+function renderChatMessages(chat, label) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  if (!messages.length) return '<div class="chat-empty">Start the conversation. This thread will be reused for the next message.</div>';
+  return `<div class="chat-messages">${messages.map((message) => `<article class="chat-message${message.author === "user" ? " user" : ""}"><span class="chat-author">${esc(message.author === "user" ? "You" : label)}</span><div class="chat-copy">${esc(message.content)}</div></article>`).join("")}</div>`;
 }
 
 function renderApprovals(models, { canDecideApprovals = false } = {}) {
@@ -600,6 +722,8 @@ function renderConnectorCard(connector, { canConnect, canDisconnect }) {
       ? renderConnectorSetup(connector)
     : connector.connectUrl && safeHref(connector.connectUrl)
       ? `<a class="button" href="${esc(safeHref(connector.connectUrl))}">Continue connection</a>`
+      : connector.hostSetup
+        ? '<span class="muted">Set up in your CrewRun host gateway.</span>'
       : canConnect
         ? `<form method="post" action="/connectors/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>Connect ${esc(connector.label)}</button></form>`
         : `<span class="muted">Connection setup is unavailable in this integration.</span>`;
@@ -746,6 +870,13 @@ function when(value) {
   return value ? esc(String(value).slice(0, 16).replace("T", " ")) : "—";
 }
 
+function dateTime(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : "time unavailable";
+}
+
 function toneFor(value) {
   const text = String(value || "").toLowerCase();
   if (/not connected|not configured|not found|unavailable/.test(text)) return "";
@@ -811,6 +942,7 @@ function normalizeOperations(value) {
     usage: source.usage || source.budget || source.ledger || null,
     providers: asArray(source.providers).map(normalizeProvider),
     connectors,
+    chats: asArray(source.chats).map(normalizeChat),
     approvals: asArray(source.approvals).map(normalizeApproval),
     audit: asArray(source.audit ?? source.actions).map(normalizeAudit),
     contracts: source.contracts && typeof source.contracts === "object" ? source.contracts : {},
@@ -838,7 +970,19 @@ function normalizeConnector(value = {}) {
     account: String(account.label || account.id || value.accountLabel || value.accountId || value.workspace || "").trim(),
     state,
     connected: value.connected === true || state === "connected",
-    connectUrl: String(value.connectUrl || value.connect_url || "").trim()
+    connectUrl: String(value.connectUrl || value.connect_url || "").trim(),
+    hostSetup: value.hostSetup === true || value.host_setup === true
+  };
+}
+
+function normalizeChat(value = {}) {
+  const role = String(value.role || "").trim();
+  return {
+    id: Number(value.id) || 0,
+    role,
+    title: String(value.title || `${role} chat`).trim(),
+    updatedAt: String(value.updatedAt || value.updated_at || "").trim(),
+    purpose: String(value.purpose || "").trim()
   };
 }
 

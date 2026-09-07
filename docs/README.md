@@ -10,7 +10,7 @@ Start with [Getting started](getting-started.md).
 | [Getting started](getting-started.md) | Install, choose a runner, and complete your first task |
 | [Agents](agents.md) | Jobs, instructions, permissions, web access, and project files |
 | [Providers](providers.md) | Runner profiles, local sign-ins, and API keys |
-| [Slack and Gmail](integrations.md) | Connect accounts, grant actions, and review outgoing messages |
+| [Integrations](integrations.md) | Connect accounts, grant actions, review outgoing messages, and add host gateways |
 | [Tasks and recovery](runtime-recovery.md) | Results, receipts, pause/cancel, retries, and usage |
 | [Scheduling](scheduling.md) | Recurring tasks, check-ins, hooks, and handoffs |
 | [Skills and context](learning.md) | Save useful procedures and preferences; review optional reflections |

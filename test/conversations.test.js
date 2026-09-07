@@ -62,6 +62,17 @@ sqlite("singleton roles and purpose-scoped threads get exactly one conversation 
   assert.deepEqual(store.listConversations({ targetRoot: "/repo", role: "planner", workItemId: 7, purpose: "setup" }).map((r) => r.id), [setup]);
 });
 
+sqlite("console conversations keep one resumed thread per agent", () => {
+  const { store } = memoryStore();
+  const first = store.getOrCreateConsoleConversation({ targetRoot: "/repo", role: "ops", title: "Operations chat" });
+  store.appendMessage({ conversationId: first, author: "user", content: "First question" });
+  const resumed = store.getOrCreateConsoleConversation({ targetRoot: "/repo", role: "ops", title: "Another title" });
+  const other = store.getOrCreateConsoleConversation({ targetRoot: "/repo", role: "ceo" });
+  assert.equal(resumed, first);
+  assert.notEqual(other, first);
+  assert.equal(store.listMessages(resumed).length, 1);
+});
+
 sqlite("schema upgrades a legacy table in place and unique indexes are optional", () => {
   const db = new Database(":memory:");
   db.exec("CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, target_root TEXT NOT NULL, role TEXT NOT NULL, title TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");

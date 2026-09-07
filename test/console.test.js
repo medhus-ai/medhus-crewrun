@@ -61,6 +61,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(dashboard, /crewrun\.console\.sidebar-width/, "the chosen sidebar width is kept locally");
     assert.match(dashboard, /padding: 41px 28px 64px/, "page content keeps a gutter from the sidebar edge");
     assert.match(dashboard, /--sidebar: #f3f3f3/, "the reference light shell is rendered with the page");
+    assert.match(dashboard, /Crew helper/, "the governed setup helper is available from every console page");
     assert.doesNotMatch(dashboard, /Back to Crew/, "the top rail no longer repeats a back-to-crew control");
     assert.doesNotMatch(dashboard, /Manage agents/, "the dashboard does not duplicate the role directory");
     assert.doesNotMatch(dashboard, /Scheduled work/, "the dashboard does not duplicate the schedules page");
@@ -68,6 +69,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     const roles = await (await fetch(base + "/agents")).text();
     assert.match(roles, /ops — Operations/);
     assert.match(roles, /href="\/agents\/new"/);
+    assert.match(roles, /href="\/chats\?agent=ops"/, "each agent card has a direct durable-chat entry point");
     assert.doesNotMatch(roles, /Agent memory pointers/, "the role directory does not embed an editor");
     assert.doesNotMatch(roles, /Initialize v1 contract/, "governance controls live in the role subpage");
     assert.doesNotMatch(roles, /Shared defaults/, "shared defaults live inside a role management page");
@@ -208,11 +210,43 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(scheduled, /Run task/);
     assert.doesNotMatch(scheduled, /Task ID/, "the task editor opens only when needed");
 
+    const calendar = await (await fetch(base + "/calendar")).text();
+    assert.match(calendar, /<h1>Calendar<\/h1>/);
+    assert.match(calendar, /CrewRun scheduled tasks are the source of truth/);
+    assert.match(calendar, /href="\/scheduled"/);
+
+    const chats = await (await fetch(base + "/chats?agent=ops")).text();
+    assert.match(chats, /one resumed thread/);
+    assert.match(chats, /action="\/chats\/send"/);
+    const helper = await (await fetch(base + "/?helper=1")).text();
+    assert.match(helper, /class="helper-drawer open"/);
+    assert.match(helper, /read-only internal tool/);
+
     const newTask = await (await fetch(base + "/scheduled?new=1")).text();
     assert.match(newTask, /Runs in your computer’s local time/);
     assert.match(newTask, /Task ID/);
     assert.match(newTask, /action="\/scheduled\/save"/);
     assert.doesNotMatch(newTask, /name="cron"/, "task timing is expressed through friendly controls");
+
+    const newSkill = await (await fetch(base + "/skills?new=1")).text();
+    assert.match(newSkill, /<h2>Propose a skill<\/h2>/);
+    assert.match(newSkill, /action="\/skills\/propose"/);
+    const proposedSkill = await fetch(base + "/skills/propose", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        skill_id: "incident-summary",
+        description: "Prepare a concise incident summary",
+        content: "1. Gather verified facts.\n2. Identify open decisions.",
+        roles: "ops",
+        scope: "repository",
+        evidence: "The incident review uses this same workflow every time."
+      })
+    });
+    assert.equal(proposedSkill.status, 303);
+    assert.equal(proposedSkill.headers.get("location"), "/approvals");
+    assert.match(await (await fetch(base + "/approvals")).text(), /incident-summary/);
 
     const legacyScheduled = await (await fetch(base + "/schedules")).text();
     assert.match(legacyScheduled, /Scheduled tasks/, "old schedule URLs remain usable");
@@ -310,6 +344,7 @@ test("console accepts an optional host operations snapshot without exposing secr
           { id: "slack", label: "Team Slack", connected: true, account: "acme", capabilities: ["Post message", "Reply in thread"] },
           { id: "gmail", label: "Work Gmail", state: "not connected", capabilities: ["Send email"] }
         ],
+        chats: [{ id: 4, role: "ops", title: "Incident handoff", updatedAt: "2026-09-03T14:00:00.000Z", purpose: "console-chat" }],
         approvals: [{ id: "approval-42", kind: "external write", title: "Post launch note", requestedBy: "ops", risk: "external-write", status: "pending" }],
         audit: [{
           at: "2026-09-03T13:45:00.000Z",
@@ -336,7 +371,10 @@ test("console accepts an optional host operations snapshot without exposing secr
       }),
       connect: ({ connectorId }) => { calls.push(`connect:${connectorId}`); return { redirect: "/connectors?connected=1" }; },
       disconnect: ({ connectorId }) => { calls.push(`disconnect:${connectorId}`); return { redirect: "/connectors" }; },
-      decideApproval: ({ id, action }) => { calls.push(`approval:${id}:${action}`); return { redirect: "/approvals" }; }
+      decideApproval: ({ id, action }) => { calls.push(`approval:${id}:${action}`); return { redirect: "/approvals" }; },
+      getChat: ({ role }) => ({ role, title: "Incident handoff", messages: [{ author: "user", content: "What changed?" }, { author: role, content: "I am checking." }] }),
+      sendChat: ({ role, message }) => { calls.push(`chat:${role}:${message}`); return { role, messages: [] }; },
+      syncCalendarTask: ({ task, previousTask }) => { calls.push(`calendar:${task?.id || "deleted"}:${previousTask?.id || "none"}`); }
     }
   });
   const port = await console_.listen();
@@ -356,6 +394,31 @@ test("console accepts an optional host operations snapshot without exposing secr
     assert.match(connectors, /Disconnect/);
     assert.match(connectors, /Work Gmail/);
     assert.match(connectors, /<span class="pill">not connected<\/span>/, "a disconnected integration is neutral, not a success state");
+    assert.match(connectors, /Google Calendar/);
+    assert.match(connectors, /Microsoft 365/);
+    assert.match(connectors, /WhatsApp Business/);
+
+    const calendar = await (await fetch(base + "/calendar")).text();
+    assert.match(calendar, /one-way only/);
+    const chats = await (await fetch(base + "/chats?agent=ops")).text();
+    assert.match(chats, /Incident handoff/);
+    assert.match(chats, /Recent chats/);
+    const sentChat = await fetch(base + "/chats/send", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ role: "ops", message: "Please summarize", return_to: "/chats?agent=ops" })
+    });
+    assert.equal(sentChat.status, 303);
+    assert.equal(sentChat.headers.get("location"), "/chats?agent=ops");
+
+    const calendarToggle = await fetch(base + "/scheduled/toggle", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "role=ops&id=tick&enabled=1"
+    });
+    assert.equal(calendarToggle.status, 303);
 
     const approvals = await (await fetch(base + "/approvals")).text();
     assert.match(approvals, /Post launch note/);
@@ -394,7 +457,7 @@ test("console accepts an optional host operations snapshot without exposing secr
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: "id=approval-42&action=approve"
     });
-    assert.deepEqual(calls, ["connect:gmail", "disconnect:slack", "approval:approval-42:approve"]);
+    assert.deepEqual(calls, ["chat:ops:Please summarize", "calendar:tick:tick", "connect:gmail", "disconnect:slack", "approval:approval-42:approve"]);
   } finally {
     await console_.close();
     await rm(parent, { recursive: true, force: true });

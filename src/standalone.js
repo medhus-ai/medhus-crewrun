@@ -10,6 +10,7 @@ import { createRoleGovernance } from "./role-contract.js";
 import { listRoleSpecs, loadRoleSpec } from "./role-spec.js";
 import { createMcpBridge } from "./mcp.js";
 import { createAgentRunner } from "./runner.js";
+import { createConsoleChatService, createConsoleHelperBridge } from "./console-chat.js";
 
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.";
 const PROVIDERS = ["slack", "gmail"];
@@ -33,7 +34,7 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
   const executions = new Set();
   const deliveries = new Set();
   let stopping = false;
-  let runner, timer, activeWork;
+  let runner, chatRunner, helperRunner, timer, activeWork;
   const readState = () => ({ connections: Object.fromEntries(PROVIDERS.map((id) => [id, store.meta(`connection:${id}`)]).filter(([, value]) => value)) });
   // Credentials are updated per connection, preventing concurrent account edits from
   // overwriting each other. Payloads and receipts stay in the same private database.
@@ -205,6 +206,17 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
     }
   });
 
+  // Console conversations are separate from queued work: each agent gets one
+  // durable, resumable operator thread, while normal runtime jobs stay isolated.
+  // The helper uses a deliberately read-only bridge and cannot mutate crew files.
+  const chats = createConsoleChatService({
+    targetRoot: root,
+    getDb: () => store.db,
+    createRunner: () => chatRunner ||= createAgentRunner({ tools }),
+    createHelperRunner: () => helperRunner ||= createAgentRunner({ tools: createConsoleHelperBridge({ targetRoot: root }) }),
+    log
+  });
+
   const operations = {
     async getSnapshot() {
       const state = readState();
@@ -219,7 +231,8 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
         })),
         ...snapshot, supersededApprovalIds: store.meta("legacy-approval-ids") || [], delivery: deliveryReport(snapshot.usage.current, snapshot.outcomes),
         approvals: snapshot.runs.flatMap((run) => run.actions.filter((a) => a.status === "awaiting_approval").map((a) => ({ id: a.id, source: "runtime", status: "pending", role: run.agent, action: a.action, summary: `${a.action}\n${a.summary}`, createdAt: new Date(a.created_at).toISOString(), runId: run.id }))),
-        audit: governance.audit.list()
+        audit: governance.audit.list(),
+        chats: chats.listChats()
       };
     },
     async connect({ connectorId, credentials = {} }) {
@@ -249,6 +262,8 @@ export function createStandaloneRuntime({ targetRoot, env = process.env, fetchIm
       store.setMeta(`connection:${connectorId}`, null);
       return "/connectors";
     },
+    getChat({ role }) { return chats.getChat({ role }); },
+    sendChat({ role, message }) { return chats.sendChat({ role, message }); },
     async decideApproval({ id, action }) { store.decideAction(id, action); return "/approvals"; },
     async afterApproval({ id, action }) { if (store.getAction(id)?.status === "awaiting_approval") store.decideAction(id, action); return deliver(id); },
     enqueueTask({ agent, prompt, dependencies = [] }) {

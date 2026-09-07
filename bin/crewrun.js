@@ -35,7 +35,7 @@ if (command === "--version" || command === "-v") {
   const up = createUp({ targetRoot, host, log });
   await up.start();
   if (rest.includes("--console")) {
-    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, log }).listen();
+    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, host: argValue(rest, "--console-host") || "127.0.0.1", log }).listen();
   }
   const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
@@ -43,9 +43,9 @@ if (command === "--version" || command === "-v") {
   setInterval(() => {}, 1 << 30); // keep the process alive; the loop's own timers are unref'd
 } else if (command === "console") {
   const targetRoot = rest.find((arg) => !arg.startsWith("-"));
-  if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--host <module>]");
+  if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--console-host <address>] [--host <module>]");
   const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, log });
+  const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, host: argValue(rest, "--console-host") || "127.0.0.1", log });
   await consoleApp.listen();
   const shutdown = () => { void consoleApp.close().finally(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
@@ -100,8 +100,8 @@ if (command === "--version" || command === "-v") {
 } else {
   console.log(`crewrun — run a crew of AI agents on the runtimes you already pay for
 
-  crewrun up <targetRoot> [--host <module>] [--console]   run the crew loop on a project (+ local console)
-  crewrun console <targetRoot> [--port N]             the local operator UI without the loop
+  crewrun up <targetRoot> [--host <module>] [--console] [--console-host <address>]   run the crew loop on a project (+ console)
+  crewrun console <targetRoot> [--port N] [--console-host <address>]                  the operator UI without the loop
   crewrun agents check <targetRoot> [--host <module>]  validate agent heartbeat/hook settings
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory

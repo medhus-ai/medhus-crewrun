@@ -108,6 +108,13 @@ test("transactional triggers coalesce missed windows across scheduler instances"
   assert.equal(f.store.snapshot().runs.length, 2);
 });
 
+test("runtime scheduler ignores roles without a heartbeat", (t) => {
+  const f = fixture(t);
+  writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ title: "Operations" }));
+  const scheduler = createRuntimeScheduler({ ...f.options, runtime: { store: f.store }, now: () => new Date(f.options.now()) });
+  assert.deepEqual(scheduler.tick(), []);
+});
+
 test("standalone sends retain retry deadlines and reconcile ambiguous responses without a duplicate", async (t) => {
   const f = fixture(t);
   writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ contract: { version: 1, authority: { tools: [{ name: "slack.postMessage", impact: "external-write" }], data: { write: ["connector:slack:slack"] } } } }));

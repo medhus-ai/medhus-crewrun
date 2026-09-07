@@ -47,6 +47,10 @@ crewrun skills index ./my-project --write  # rebuild the Skills index
 ```
 
 Use `--console-port 4500` with `up`, or `--port 4500` with `console`, to change the port.
+The console binds to loopback by default. To make it available only to your Tailnet, pass the
+machine's Tailscale IP or MagicDNS hostname explicitly, for example
+`--console-host machine.tailnet.ts.net`; do not bind it to `0.0.0.0` unless you have separately
+secured the operator UI.
 When running from a checkout, replace `crewrun` with `node bin/crewrun.js`.
 
 Read [Tasks and recovery](runtime-recovery.md) before relying on unattended work.

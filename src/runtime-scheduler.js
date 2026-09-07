@@ -22,18 +22,20 @@ export function createRuntimeScheduler({ targetRoot, runtime, env, now = () => n
       }
       const oldHeartbeats = readHeartbeatState(targetRoot, env);
       for (const setting of Object.values(loadRoleSettings(targetRoot))) {
-        const interval = setting.heartbeat.intervalSeconds;
+        const heartbeat = setting.heartbeat;
+        if (!heartbeat) continue;
+        const interval = heartbeat.intervalSeconds;
         if (!Number.isFinite(interval) || interval <= 0) continue;
         const key = `heartbeat:${setting.role}`;
         const previous = last(key) ?? Date.parse(oldHeartbeats.roles?.[setting.role]?.lastRunAt || "");
         if (Number.isFinite(previous) && at - previous < interval * 1000 || active(setting.role, key)) continue;
-        const cap = setting.heartbeat.budgetUsdPerDay;
+        const cap = heartbeat.budgetUsdPerDay;
         if (cap != null) {
           const today = new Date(at).toISOString().slice(0, 10);
           const spent = store.ledger.readRuns().filter((r) => r.actor === setting.role && r.timestamp.startsWith(today)).reduce((n, r) => n + (r.cost_usd ?? store.ledger.estimateCostUsd(r.runner_id, r.input_tokens, r.output_tokens) ?? 0), 0);
           if (spent >= cap) continue;
         }
-        queued.push(store.schedule(key, at, { agent: setting.role, prompt: setting.heartbeat.prompt || "Check for useful work. If nothing needs attention, say so briefly.", workflow: key }));
+        queued.push(store.schedule(key, at, { agent: setting.role, prompt: heartbeat.prompt || "Check for useful work. If nothing needs attention, say so briefly.", workflow: key }));
       }
       return queued.filter(Boolean);
     });

@@ -3,14 +3,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
+import { crewEnv, crewHome } from "./crew-dirs.js";
 import { resolveExecutable, toolEnv } from "./platform.js";
 import { ENGINE_IDS, getEngine } from "./engines/index.js";
 import { loadModelCatalog } from "./model-catalog.js";
 
 const toolRequire = createRequire(import.meta.url);
 
-const runnersRel = () => `${crewDir()}/memory/ai-runners.json`;
 const RUNNER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const RUNNER_MODES = new Set(["propose", "execute"]);
 // Vendor-documented Anthropic-protocol endpoints (Claude Code integration).
@@ -19,11 +18,6 @@ const KIMI_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic";
 const OPENROUTER_ANTHROPIC_URL = "https://openrouter.ai/api";
 
 export const BUILT_IN_RUNNER_PROFILES = [
-  // Subscription CLIs — concrete profile ids used by generated projects.
-  claudeCliProfile("claude-sonnet-high", "Claude Sonnet 4.6 · High", "sonnet", "high"),
-  claudeCliProfile("claude-sonnet-max", "Claude Sonnet 4.6 · Max", "sonnet", "max"),
-  codexCliProfile("codex-5.5-medium", "Codex CLI 5.5 · Medium", "gpt-5.5", "medium"),
-  codexCliProfile("codex-5.5-high", "Codex CLI 5.5 · High", "gpt-5.5", "high"),
   // Claude profiles — Sonnet 4.6
   claudeAgentProfile("claude-agent-sonnet-high", "Claude Sonnet 4.6 · High", "sonnet", "high"),
   claudeAgentProfile("claude-agent-sonnet-medium", "Claude Sonnet 4.6 · Medium", "sonnet", "medium"),
@@ -237,41 +231,6 @@ export function resolveRunnerProfile(runnerId) {
   return profile ? cloneRunner(profile.runner) : null;
 }
 
-export function roleRunnerId(roleId, defaultRoleRunners = {}) {
-  const role = String(roleId || "").trim();
-  return String(defaultRoleRunners?.[role] || "").trim();
-}
-
-export function loadRunnerConfig(targetRoot) {
-  const project = loadProjectRunnerConfig(targetRoot);
-  const global = loadGlobalRunnerConfig();
-  const globalRunners = Array.isArray(global.runners) ? global.runners : [];
-  const defaultRoleRunners = project.default_role_runners || {};
-  const referencedRunnerIds = Object.values(defaultRoleRunners).map((runner) => String(runner || "").trim());
-
-  return {
-    ...project,
-    setup_note: global.setup_note || project.setup_note || "Configure runner profiles from Cockpit Settings → Runners.",
-    runner_source: "global",
-    global_file: globalRunnerConfigPath(),
-    runners: withReferencedBuiltIns(globalRunners, referencedRunnerIds),
-    default_role_runners: defaultRoleRunners
-  };
-}
-
-export function loadProjectRunnerConfig(targetRoot) {
-  const file = path.join(targetRoot || "", runnersRel());
-  if (!existsSync(file)) {
-    return {
-      version: 1,
-      setup_note: "Project role runner mappings. Concrete runner profiles are global in Cockpit.",
-      default_role_runners: {},
-      runners: []
-    };
-  }
-  return JSON.parse(readFileSync(file, "utf8"));
-}
-
 export function globalRunnerConfigPath() {
   const override = crewEnv("RUNNERS_FILE");
   return override ? path.resolve(override) : path.join(crewHome(), "ai-runners.json");
@@ -311,30 +270,6 @@ export function saveGlobalRunnerConfig(config) {
   return global;
 }
 
-export function saveRunnerConfig(targetRoot, config) {
-  const validated = validateRunnerConfig(config);
-  const file = path.join(targetRoot, runnersRel());
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
-  return validated;
-}
-
-export function saveProjectRunnerConfig(targetRoot, config = {}) {
-  const file = path.join(targetRoot, runnersRel());
-  const projectConfig = {
-    ...config,
-    version: config.version || 1,
-    setup_note: config.setup_note || "Project role runner mappings. Concrete runner profiles are global in Cockpit.",
-    default_role_runners: config.default_role_runners && typeof config.default_role_runners === "object"
-      ? { ...config.default_role_runners }
-      : {},
-    runners: Array.isArray(config.runners) ? config.runners.map(normalizeRunner) : []
-  };
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(projectConfig, null, 2)}\n`, "utf8");
-  return projectConfig;
-}
-
 export function addGlobalRunnerProfile(profileId) {
   const profile = agentRunnerProfiles().find((item) => item.id === profileId);
   if (!profile) throw new Error(`unknown runner profile: ${profileId}`);
@@ -372,50 +307,12 @@ export function addLocalRunner({ id, display_name, base_url, model }) {
   return saveGlobalRunnerConfig({ ...config, runners: [...runners, runner] });
 }
 
-export function assignRoleRunner(targetRoot, roleId, runnerId, knownRoles = []) {
-  const role = String(roleId || "").trim();
-  const runner = String(runnerId || "").trim();
-  if (!role) throw new Error("role is required");
-  if (knownRoles.length && !knownRoles.includes(role)) {
-    throw new Error(`unknown role: ${role}`);
-  }
-
-  const config = loadRunnerConfig(targetRoot);
-  const runnerIds = new Set((config.runners || []).map((item) => item.id));
-  if (!runnerIds.has(runner)) {
-    // The picker can hand us a built-in or discovered profile not yet saved globally — provision it on demand.
-    if (agentRunnerProfiles().some((profile) => profile.id === runner)) {
-      try { addGlobalRunnerProfile(runner); } catch { /* already present, or a harmless race */ }
-    } else {
-      throw new Error(`unknown runner: ${runner}`);
-    }
-  }
-
-  const projectConfig = loadProjectRunnerConfig(targetRoot);
-  return saveProjectRunnerConfig(targetRoot, {
-    ...projectConfig,
-    default_role_runners: {
-      ...(projectConfig.default_role_runners || {}),
-      [role]: runner
-    }
-  });
-}
-
-export async function checkRunner(targetRoot, runnerId) {
-  const id = String(runnerId || "").trim();
-  const config = loadRunnerConfig(targetRoot);
-  const runner = (config.runners || []).find((item) => item.id === id);
-  if (!runner) throw new Error(`unknown runner: ${id}`);
-  // Each engine owns its healthcheck; no generated auth-check.sh (init no longer ships one).
-  return recordRunnerCheck(id, await getEngine(runner.engine || "cli").healthcheck(runner, { targetRoot }));
-}
-
 export async function checkGlobalRunner(runnerId) {
   const id = String(runnerId || "").trim();
   const config = loadGlobalRunnerConfig();
   const runner = (config.runners || []).find((item) => item.id === id) || resolveRunnerProfile(id);
   if (!runner) throw new Error(`unknown runner: ${id}`);
-  return recordRunnerCheck(id, await getEngine(runner.engine || "cli").healthcheck(runner));
+  return recordRunnerCheck(id, await getEngine(runner.engine).healthcheck(runner));
 }
 
 // Best effort — a failed write never fails the check result.
@@ -461,18 +358,6 @@ export function validateRunnerConfig(config) {
     default_role_runners: defaults,
     runners
   };
-}
-
-export function runnerStatus(runner, tools = detectRunnerTools()) {
-  if (!runner) return { tone: "danger", label: "missing" };
-  if ((runner.engine || "cli") !== "cli") {
-    // Native profiles own their runtime; auth is verified by the profile check.
-    return { tone: "success", label: "ready" };
-  }
-  if (isPlaceholder(runner.command)) return { tone: "warning", label: "placeholder" };
-  if (runner.provider === "openai" && !tools.codex.available) return { tone: "warning", label: "codex missing" };
-  if (runner.provider === "anthropic" && !tools.claude.available) return { tone: "warning", label: "claude missing" };
-  return { tone: "success", label: "configured" };
 }
 
 function isBuiltInAgentRunner(runner) {
@@ -557,64 +442,6 @@ function runnerEffortSlug(runner) {
   return effort === "xhigh" ? "very-high" : effort;
 }
 
-export function isPlaceholder(command) {
-  return typeof command === "string" && command.startsWith("replace-");
-}
-
-function claudeCliProfile(id, displayName, model, effort) {
-  return {
-    id,
-    provider: "anthropic",
-    displayName,
-    runner: {
-      id,
-      display_name: displayName,
-      engine: "cli",
-      mode: "propose",
-      kind: "cli",
-      provider: "anthropic",
-      model,
-      reasoning_effort: effort,
-      source_profile: id,
-      command: "claude",
-      args: ["--print", "--model", model, "--effort", effort, "{prompt}"],
-      uses_doppler: false,
-      healthcheck: {
-        command: "claude",
-        args: ["--print", "--model", model, "--effort", effort, "respond with the word OK and nothing else"],
-        expect_stdout: "OK"
-      }
-    }
-  };
-}
-
-function codexCliProfile(id, displayName, model, effort) {
-  return {
-    id,
-    provider: "openai",
-    displayName,
-    runner: {
-      id,
-      display_name: displayName,
-      engine: "cli",
-      mode: "propose",
-      kind: "cli",
-      provider: "openai",
-      model,
-      reasoning_effort: effort,
-      source_profile: id,
-      command: "codex",
-      args: ["exec", "--sandbox", "read-only", "--ask-for-approval", "never", "-c", `model_reasoning_effort="${effort}"`, "{prompt}"],
-      uses_doppler: false,
-      healthcheck: {
-        command: "codex",
-        args: ["exec", "--sandbox", "read-only", "--ask-for-approval", "never", "--skip-git-repo-check", "--ephemeral", "-c", `model_reasoning_effort="${effort}"`, "respond with the word OK and nothing else"],
-        expect_stdout: "OK"
-      }
-    }
-  };
-}
-
 function claudeAgentProfile(id, displayName, model, effort) {
   return {
     id,
@@ -678,7 +505,7 @@ function normalizeRunner(value) {
   if (!RUNNER_ID_PATTERN.test(runner.id)) {
     throw new Error(`invalid runner id: ${runner.id || "<empty>"}`);
   }
-  runner.engine = String(runner.engine || "cli").trim();
+  runner.engine = String(runner.engine || "").trim();
   if (!ENGINE_IDS.includes(runner.engine)) {
     throw new Error(`runner ${runner.id} has unknown engine: ${runner.engine}`);
   }
@@ -688,7 +515,7 @@ function normalizeRunner(value) {
   const auth = String(runner.auth || "").trim().toLowerCase();
   if (auth === "subscription" || auth === "api-key") runner.auth = auth;
   else delete runner.auth;
-  runner.kind = String(runner.kind || (runner.engine === "cli" ? "cli" : "agent-sdk")).trim();
+  runner.kind = "agent-sdk";
   runner.provider = String(runner.provider || "custom").trim();
   runner.model = String(runner.model || "").trim();
   runner.base_url = String(runner.base_url || "").trim();
@@ -696,15 +523,8 @@ function normalizeRunner(value) {
     throw new Error(`runner ${runner.id} base_url must start with http(s)://`);
   }
   if (!runner.base_url) delete runner.base_url;
-  runner.command = String(runner.command || "").trim();
-  if (!runner.command && runner.engine === "cli") {
-    throw new Error(`runner ${runner.id} is missing command`);
-  }
-  if (!runner.command) delete runner.command;
-  runner.args = Array.isArray(runner.args) ? runner.args.map(String) : [];
-  // Execute-mode shell access is an explicit opt-in (see engines/claude-agent.js).
-  if (runner.allow_shell === true) runner.allow_shell = true;
-  else delete runner.allow_shell;
+  if (runner.allow_shell) throw new Error("Use the agent Allow shell owner control, not runner.allow_shell.");
+  for (const key of ["command", "args", "healthcheck", "allow_shell"]) delete runner[key];
 
   for (const key of ["display_name", "reasoning_effort", "source_profile", "secret_ref"]) {
     if (runner[key] !== undefined) runner[key] = String(runner[key] || "").trim();
@@ -725,20 +545,6 @@ function normalizeRunner(value) {
   }
   if (!runner.healthcheck) delete runner.healthcheck;
   return runner;
-}
-
-function withReferencedBuiltIns(runners, runnerIds) {
-  const out = [...runners];
-  const seen = new Set(out.map((runner) => runner.id));
-  const profiles = agentRunnerProfiles();
-  for (const id of runnerIds || []) {
-    if (seen.has(id)) continue;
-    const profile = profiles.find((item) => item.id === id);
-    if (!profile) continue;
-    out.push(cloneRunner(profile.runner));
-    seen.add(id);
-  }
-  return out;
 }
 
 

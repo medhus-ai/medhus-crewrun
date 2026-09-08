@@ -1,4 +1,3 @@
-import { createCliEngine } from "./cli.js";
 import { createClaudeAgentEngine } from "./claude-agent.js";
 import { createCodexAgentEngine } from "./codex-agent.js";
 
@@ -6,14 +5,14 @@ import { createCodexAgentEngine } from "./codex-agent.js";
 
 const ENGINES = new Map();
 
-export const ENGINE_IDS = ["cli", "claude-agent", "codex-agent"];
+export const ENGINE_IDS = ["claude-agent", "codex-agent"];
 
 export function getEngine(engineId) {
-  const id = ENGINE_IDS.includes(engineId) ? engineId : "cli";
+  if (!ENGINE_IDS.includes(engineId)) throw new Error(`Unsupported v6 engine: ${engineId || "<unset>"}. Use claude-agent or codex-agent.`);
+  const id = engineId;
   if (!ENGINES.has(id)) {
     if (id === "claude-agent") ENGINES.set(id, createClaudeAgentEngine());
     else if (id === "codex-agent") ENGINES.set(id, createCodexAgentEngine());
-    else ENGINES.set(id, createCliEngine());
   }
   return ENGINES.get(id);
 }

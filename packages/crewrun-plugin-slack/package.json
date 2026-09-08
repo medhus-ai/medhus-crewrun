@@ -1,0 +1,32 @@
+{
+  "name": "@medhus-ai/crewrun-plugin-slack",
+  "version": "0.6.0",
+  "description": "Governed Slack integration plugin for CrewRun",
+  "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",
+  "bugs": {
+    "url": "https://github.com/medhus-ai/medhus-crewrun/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medhus-ai/medhus-crewrun.git",
+    "directory": "packages/crewrun-plugin-slack"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@medhus-ai/crewrun-plugin-sdk": "^0.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

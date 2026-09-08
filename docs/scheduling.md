@@ -23,11 +23,11 @@ Create recurring work under **Scheduled**, or add entries to an agent's `schedul
 }
 ```
 
-Cron uses five numeric fields in the process's local time: minute, hour, day of month, month,
+Cron uses five numeric fields in the workspace manifest's timezone: minute, hour, day of month, month,
 and day of week. Wildcards, lists, ranges, and steps are supported. Missed windows coalesce into
 one task. Open its result from **Tasks** or the status link in **Scheduled**.
 
-Standalone schedules persist their trigger cursor and queued task together. Processes sharing
+Durable schedules persist their trigger cursor and queued task together. Processes sharing
 the same local database share claims. Interrupted or paused work for a trigger needs attention
 before that trigger queues more work. See [recovery rules](runtime-recovery.md).
 
@@ -51,19 +51,12 @@ or impose a hard provider spending limit.
 
 ## Hooks and handoffs
 
-An agent's `hooks` list subscribes it to event names supplied by an application:
+An agent's `hooks` list permits named events; it does not enable a route by itself.
+Enable provider rules in **Integrations**, or lifecycle rules in the reviewed
+workspace manifest. Verified events and transactional lifecycle rows carry stable
+IDs and use the durable queue.
 
-```json
-{ "hooks": ["task.assigned"] }
-```
-
-Applications emit events through `createUp().emit(event, payload)`. Standalone mode enqueues
-matching tasks with a debounced external ID; custom hosts can supply routing and enqueue behavior.
-Hooks do not automatically subscribe to external webhooks.
-
-For durable work between agents, use `createHandoffQueue({ getDb, governance })`. The host
-supplies the authenticated sender, and the queue checks both agents' authority before enqueueing.
-See [governed handoffs](host-api-v1.md#durable-governed-handoffs).
-
-The exported file-based `createScheduler` and `createPulse` helpers are for one host operator
-process. They do not provide the standalone store's cross-process claims.
+Use `task.delegate` for linked child work. Both agents' handoff and data
+permissions are checked. Questions and outcomes remain on the original task chain.
+There is no `createUp().emit`, file-based scheduler, or in-memory heartbeat worker.
+See [workspace event and task contracts](workspaces.md).

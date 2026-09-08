@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { agentFile } from "../agent-paths.js";
 import { listRoleSpecs, readRoleDefaults, readAgentSpecForEditing } from "../agent-spec.js";
-import { loadRoleSettings, validateRoleSettings, readHeartbeatState } from "../pulse.js";
+import { loadRoleSettings, validateRoleSettings } from "../pulse.js";
 import { describeScheduleRecurrence, recurrenceFromCron, SCHEDULE_WEEKDAYS, scheduleOverview } from "../schedules.js";
 import { listSkills } from "../skills.js";
 import { listSkillProposals } from "../skill-proposals.js";
@@ -16,52 +16,11 @@ import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
 import { renderTasks } from "./tasks.js";
 import { esc, icon } from "./shell.js";
+import { renderWorkspaceReviews } from "./workspace.js";
+import { readWorkspace } from "../workspace-manifest.js";
+import { WORK_TOOLS } from "../workspace-tools.js";
+import { tabs, readyForReview, reviewableResult, pendingReviewCount, paginate, pageOptions, pageNumber, upcomingOccurrences } from "./views.js";
 
-const DEFAULT_CONNECTORS = [
-  {
-    id: "slack",
-    label: "Slack",
-    initials: "S",
-    description: "Let your agents prepare Slack updates. Review the exact message before it is sent.",
-    capabilities: ["Post message", "Reply to mention"],
-    state: "not connected"
-  },
-  {
-    id: "gmail",
-    label: "Gmail",
-    initials: "G",
-    description: "Review and send existing Gmail drafts. Enable inbox access only when you need it.",
-    capabilities: ["Send existing draft"],
-    state: "not connected"
-  },
-  {
-    id: "google-calendar",
-    label: "Google Calendar",
-    initials: "GC",
-    description: "Mirror CrewRun scheduled tasks one way into a dedicated calendar. CrewRun remains the source of truth.",
-    capabilities: ["Scheduled task mirror"],
-    state: "host gateway required",
-    hostSetup: true
-  },
-  {
-    id: "microsoft-365",
-    label: "Microsoft 365",
-    initials: "M",
-    description: "Use one Microsoft connection for Outlook Calendar mirroring and governed Teams updates or mentions.",
-    capabilities: ["Outlook Calendar mirror", "Teams gateway"],
-    state: "host gateway required",
-    hostSetup: true
-  },
-  {
-    id: "whatsapp",
-    label: "WhatsApp Business",
-    initials: "W",
-    description: "Send approved updates and receive verified webhook events through a host gateway.",
-    capabilities: ["Approved message", "Verified webhook"],
-    state: "host gateway required",
-    hostSetup: true
-  }
-];
 
 // `operations` is an optional host snapshot. Keeping it data-only makes this
 // little console useful on its own and lets a product host add connectors,
@@ -73,6 +32,7 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
   const normalizedOperations = normalizeOperations(operations);
   return {
     targetRoot,
+    workspace: readWorkspace(targetRoot),
     specs,
     defaults: readRoleDefaults(targetRoot),
     settings,
@@ -81,7 +41,7 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
       const run = normalizedOperations.runs.find((r) => r.workflow === `schedule:${schedule.role}:${schedule.id}`);
       return run ? { ...schedule, lastStatus: run.desired !== "active" ? run.desired : run.status, lastRunAt: new Date(run.updated_at).toISOString(), runId: run.id } : schedule;
     }),
-    heartbeatState: { roles: { ...readHeartbeatState(targetRoot).roles, ...Object.fromEntries(Object.keys(specs).flatMap((agent) => {
+    heartbeatState: { roles: { ...Object.fromEntries(Object.keys(specs).flatMap((agent) => {
       const run = normalizedOperations.runs.find((r) => r.workflow === `heartbeat:${agent}`);
       return run ? [[agent, { lastRunAt: new Date(run.updated_at).toISOString() }]] : [];
     })) } },
@@ -89,6 +49,11 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
     skillProposals: listSkillProposals({ targetRoot }),
     prefProposals: listPreferenceProposals({ targetRoot }),
     reflectionProposals: listReflectionProposals({ targetRoot }),
+    proposalHistory: [
+      ...listSkillProposals({ targetRoot, status: "" }).map((entry) => ({ ...entry, kind: "skill" })),
+      ...listPreferenceProposals({ targetRoot, status: "" }).map((entry) => ({ ...entry, kind: "memory" })),
+      ...listReflectionProposals({ targetRoot, status: "" }).map((entry) => ({ ...entry, kind: "reflection" }))
+    ].filter((entry) => entry.status !== "pending"),
     preferences: listPreferences({ targetRoot }).effective,
     runnerOptions,
     providerRuntime: safeRuntimeStatus(),
@@ -101,18 +66,15 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
 export function renderPartial(page, models, options = {}) {
   switch (page) {
     case "tasks": return renderTasks(models, options);
-    case "roles":
     case "agents": return renderRoles(models, options);
-    case "scheduled": return renderScheduledTasks(models, options);
-    case "calendar": return renderCalendar(models);
+    case "scheduled": return options.tab === "list" || options.showTaskEditor || options.selectedTask ? renderScheduledTasks(models, options) : renderCalendar(models, options);
     case "skills": return renderSkills(models, options);
     case "chats": return renderChats(models, options);
-    case "approvals":
-    case "proposals": return renderApprovals(models, options);
-    case "audit": return renderAudit(models);
-    case "usage": return renderUsage(models);
-    case "providers": return renderProviders(models);
-    case "connectors": return renderConnectors(models, options);
+    case "reviews": return renderApprovals(models, options);
+    case "activity": return renderActivity(models, options);
+    case "usage": return renderUsage(models, options);
+    case "settings": return renderSettings(models, options);
+    case "integrations": return renderConnectors(models, options);
     default: return renderDashboard(models);
   }
 }
@@ -120,8 +82,7 @@ export function renderPartial(page, models, options = {}) {
 function renderDashboard(models) {
   const { problems, warnings } = models.validation;
   const roles = Object.values(models.specs);
-  const enabledTasks = models.schedules.filter((task) => task.enabled).length;
-  const pending = models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length + models.operations.approvals.filter((entry) => entry.status === "pending").length;
+  const pending = pendingReviewCount(models);
   const usage = currentUsage(models.operations.usage) || (models.operations.usage?.months ? { month: "Current month", totals: {} } : null);
   const spend = usage ? spendFor(usage.totals) : null;
   const connected = models.operations.connectors.filter((connector) => connector.connected).length;
@@ -134,39 +95,35 @@ function renderDashboard(models) {
     <p class="sub">Run and govern your agents from one local control plane.</p>
   </div>
   <div class="actions">
-    <a class="button secondary" href="/agents/new">Add agent</a>
-    <a class="button" href="/approvals">Review approvals${pending ? ` (${pending})` : ""}</a>
+    <a class="button" href="/reviews">Open reviews${pending ? ` (${pending})` : ""}</a>
   </div>
 </section>
 <section class="summary-grid" aria-label="Crew summary">
-  ${metric("Agents", roles.length, `${roles.length} agents`, "reviewable contracts")}
-  ${metric("Scheduled tasks", enabledTasks, `${enabledTasks} task${enabledTasks === 1 ? "" : "s"} enabled`, `${models.schedules.length} total`) }
-  ${metric("Approvals", pending, `${pending} proposal${pending === 1 ? "" : "s"} pending`, pending ? "operator attention needed" : "queue clear", pending ? "warn" : "success")}
+  <a href="/tasks?tab=active">${metric("Running", models.operations.runs.filter((run) => run.status === "running").length, "agent executions", "Open active tasks")}</a>
+  <a href="/reviews">${metric("Reviews", pending, `${pending} pending`, "Your decisions", pending ? "warn" : "success")}</a>
+  <a href="/tasks?tab=attention">${metric("Failures", models.operations.runs.filter((run) => run.desired !== "cancelled" && (["failed", "interrupted"].includes(run.status) || (run.actions || []).some((action) => ["failed", "uncertain"].includes(action.status)))).length, "tasks to check", "Open work needing attention")}</a>
   ${metric("This month", spend === null ? "—" : formatCurrency(spend), "usage and subscription estimate", usage ? `${usage.totals?.runs || 0} recorded runs` : "no ledger attached", usage ? "info" : "")}
 </section>
 <section>
-    <div class="section-heading"><h2>Governance</h2><a class="button secondary tiny" href="/approvals">Open queue</a></div>
+    <div class="section-heading"><h2>Workspace health</h2><a class="button secondary tiny" href="/settings?tab=host">Host details</a></div>
     <div class="card flat">
       <div class="list">
         ${listRow("Agent configuration", health, problems.length ? "danger" : warnings.length ? "warn" : "success")}
-        ${listRow("Approved preferences", `${models.preferences.length} active`, "info")}
-        ${listRow("Connector connections", `${connected} connected`, connected ? "success" : "")}
-        ${listRow("Audited actions", `${models.operations.audit.length} safe record${models.operations.audit.length === 1 ? "" : "s"}`, models.operations.audit.length ? "info" : "")}
-        ${listRow("Skills", `${models.skills.length} installed`, "")}
+        ${listRow("Agents", `${roles.length} agents`, "info")}
+        <a href="/integrations">${listRow("Integrations", `${connected} connected`, connected ? "success" : "")}</a>
       </div>
     </div>
 </section>
 ${problems.length || warnings.length ? `<section><div class="section-heading"><h2>Configuration review</h2></div>${[...problems.map((entry) => notice(entry, "warn")), ...warnings.map((entry) => notice(entry, "warn"))].join("")}</section>` : ""}
-<section>
-  <div class="section-heading"><h2>Built-in agent tools</h2></div>
-  <div class="notice">Ordinary bridges include the governed-learning tools ${LEARNING_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")}; a strict agent contract must list each one it may use. An agent receives ${WEB_TOOL_NAMES.map((name) => `<code>${esc(name)}</code>`).join(" · ")} only when its reviewed spec enables web access. Tools follow the permissions you grant each agent.</div>
-</section>`;
+`;
 }
 
-function renderRoles(models, { selectedRole = "", roleView = "list", roleTab = "manage", agentSearch = "" } = {}) {
+function renderRoles(models, options = {}) {
+  const { selectedRole = "", roleView = "list", roleTab = "manage", agentSearch = "" } = options;
   const all = Object.values(models.specs);
   const roles = all.filter((spec) => `${spec.role} ${spec.title} ${spec.contract?.mandate || ""}`.toLowerCase().includes(agentSearch.toLowerCase()));
   const selected = roles.find((spec) => spec.role === selectedRole) || null;
+  const paging = paginate(roles, pageOptions("/agents", options, { q: agentSearch }));
   const detail = roleView === "detail";
   const title = roleView === "create" ? "Add agent" : detail ? "Manage agent" : "Agents";
   const subtitle = roleView === "create"
@@ -184,7 +141,7 @@ function renderRoles(models, { selectedRole = "", roleView = "list", roleTab = "
 ${roleView === "list" ? `
 <form method="get" action="/agents" class="button-row"><label class="muted" for="agent-search">Find an agent</label><input style="max-width:320px" id="agent-search" name="q" type="search" value="${esc(agentSearch)}" placeholder="Search by name or responsibility"><button class="subtle">Search</button>${agentSearch ? '<a href="/agents">Clear</a>' : ""}</form>
 <section class="section-heading"><h2>Agent directory</h2><span class="muted">${roles.length} installed</span></section>
-${roles.length ? `<div class="agent-grid">${roles.map((spec) => renderRoleCard(spec, models)).join("")}</div>` : empty(all.length ? "No agents match your search." : "Start with one useful job: a daily brief, a weekly review, or an operations check.", all.length ? "Clear search" : "Create your first agent", all.length ? "/agents" : "/agents/new")}
+${roles.length ? `<div class="agent-grid">${paging.items.map((spec) => renderRoleCard(spec, models)).join("")}</div>${paging.html}` : empty(all.length ? "No agents match your search." : "Start with one useful job: a daily brief, a weekly review, or an operations check.", all.length ? "Clear search" : "Create your first agent", all.length ? "/agents" : "/agents/new")}
 ` : ""}
 ${roleView === "create" ? `
 <section id="create-role" class="card" style="margin-top:16px">
@@ -219,13 +176,12 @@ function renderRoleCard(spec, models) {
   const heartbeat = settings?.heartbeat
     ? `every ${formatDuration(settings.heartbeat.intervalSeconds)}${settings.heartbeat.budgetUsdPerDay != null ? ` · $${settings.heartbeat.budgetUsdPerDay}/day` : ""}`
     : "off";
-  const contract = contractFor(models, spec);
   const title = spec.title || "Untitled agent";
   return `
 <article class="agent-card">
   <div class="card-head">
     <div><div class="agent-name" aria-label="${esc(`${spec.role} — ${title}`)}">${esc(spec.role)}</div><div class="agent-title">${esc(title)}</div></div>
-    ${contract?.status ? pill(contract.status, toneFor(contract.status)) : pill("agent", "info")}
+    ${models.workspace?.shellAgent === spec.role ? pill("Shell access", "danger") : ""}
   </div>
   <div class="agent-meta">
     <div>Model <code>${esc(runner)}</code></div>
@@ -257,6 +213,7 @@ function renderRoleEditor(spec, models) {
     <div class="button-row" style="margin-top:13px"><button>Save agent</button><a class="button secondary" href="/agents/${encodeURIComponent(spec.role)}">Discard changes</a></div>
   </form>
   ${renderAgentBehavior(spec, own)}
+  ${renderShellSetting(spec, models)}
   ${renderContractSummary(spec)}
   ${renderContractEditor(spec, own)}
   <details>
@@ -269,6 +226,19 @@ function renderRoleEditor(spec, models) {
     </form>
   </details>
 </section>`;
+}
+
+function renderShellSetting(spec, models) {
+  if (!models.workspace) return "";
+  const owner = models.workspace.shellAgent;
+  if (owner && owner !== spec.role) return `<p class="help">System work belongs to <a href="/agents/${encodeURIComponent(owner)}">${esc(owner)}</a>. Request it through an authorized task handoff; this agent has no shell access.</p>`;
+  return `<section class="card flat shell-access"><h3>Allow shell</h3>
+    <p class="help">Privileged access with the CrewRun service user's OS permissions, not root access. Shell commands can reach files and networks outside ordinary agent boundaries. Native auto-review can make mistakes; it is not filesystem isolation.</p>
+    <p class="help">One agent per workspace. Currently requires direct Claude with native auto mode available; Codex and routed providers cannot enable shell. Flagged actions appear in Reviews. Other agents must delegate through authorized handoffs.</p>
+    <form method="post" action="/agents/shell"><input type="hidden" name="role" value="${esc(spec.role)}"><input type="hidden" name="enabled" value="${owner ? "" : "1"}">
+      ${owner ? "" : '<label class="help"><input type="checkbox" name="confirmed" value="1" required> I understand this grants privileged system access.</label>'}
+      <div class="button-row"><button class="state-toggle" role="switch" aria-checked="${Boolean(owner)}" aria-label="Allow shell for ${esc(spec.role)}"></button><span>${owner ? "Enabled — native auto-review" : "Disabled"}</span></div>
+    </form></section>`;
 }
 
 function renderAgentBehavior(spec, own) {
@@ -295,7 +265,7 @@ function renderContractEditor(spec, own) {
   const contract = own.contract && typeof own.contract === "object" ? own.contract : null;
   if (!contract) {
     return `<section class="notice warn" style="margin-top:12px">
-      <div class="card-head"><div><h3>Start a governed contract</h3><p class="help" style="margin-top:3px">This is a deliberate migration step; it does not silently rewrite a legacy agent.</p></div>
+      <div class="card-head"><div><h3>Add an authority contract</h3><p class="help" style="margin-top:3px">An agent without a contract cannot run. Review its authority before enabling work.</p></div>
       <form class="inline" method="post" action="/agents/initialize-contract"><input type="hidden" name="role" value="${esc(spec.role)}"><button class="tiny">Initialize v1 contract</button></form></div>
     </section>`;
   }
@@ -309,7 +279,7 @@ function renderContractEditor(spec, own) {
         <div class="field wide"><label for="contract-mandate">Mandate</label><textarea id="contract-mandate" name="mandate" maxlength="1000" placeholder="What this agent is accountable for.">${esc(contract.mandate || "")}</textarea></div>
         <div class="field wide"><label for="contract-tools">Authorized tools</label><textarea id="contract-tools" name="contract_tools" placeholder="slack.replyToMention | external-write&#10;knowledge.search | read">${esc(toolLines)}</textarea><span class="help">One tool per line: <code>tool.name | read</code>, <code>internal-write</code>, <code>external-write</code>, <code>destructive</code>, or <code>financial</code>. Grant data access below for connected services. Handoffs, approval floors, and budgets stay in advanced JSON.</span></div>
         <div class="field"><label for="contract-read">Data this agent may read</label><textarea id="contract-read" name="data_read" placeholder="connector:gmail:gmail">${esc((contract.authority?.data?.read || []).join("\n"))}</textarea></div>
-        <div class="field"><label for="contract-write">Data this agent may change</label><textarea id="contract-write" name="data_write" placeholder="connector:slack:slack&#10;connector:gmail:gmail">${esc((contract.authority?.data?.write || []).join("\n"))}</textarea><span class="help">For standalone Slack use connector:slack:slack. For Gmail use connector:gmail:gmail. Outgoing messages still require approval.</span></div>
+        <div class="field"><label for="contract-write">Data this agent may change</label><textarea id="contract-write" name="data_write" placeholder="connector:slack:slack&#10;connector:gmail:gmail">${esc((contract.authority?.data?.write || []).join("\n"))}</textarea><span class="help">For a hosted integration, copy its exact <code>connector:provider:connection-id</code> scope from Integrations. Standalone Slack/Gmail use <code>connector:slack:slack</code> and <code>connector:gmail:gmail</code>. Outgoing messages still require approval.</span></div>
       </div>
       <div class="button-row" style="margin-top:12px"><button class="subtle">Save contract revision</button></div>
     </form>
@@ -330,11 +300,11 @@ function renderContractSummary(spec) {
     budget.max_tokens_per_run != null ? `${formatInt(budget.max_tokens_per_run)} tokens/run` : "",
     budget.max_runs_per_day != null ? `${formatInt(budget.max_runs_per_day)} runs/day` : ""
   ].filter(Boolean);
-  const detail = summary.status === "legacy"
-    ? "This agent has no governed contract yet. Initialize a reviewed v1 contract before requiring contract enforcement."
+  const detail = summary.status === "unconfigured"
+    ? "Add an authority contract before this agent can run."
     : `${summary.mandate || "No mandate recorded."} ${tools.length ? `${tools.length} authorized tool${tools.length === 1 ? "" : "s"}.` : "No tools are authorized."}`;
   return `<section class="notice${summary.status === "governed" ? "" : " warn"}" style="margin-top:16px">
-    <div class="card-head"><div><h3>Authority contract</h3><p class="help" style="margin-top:3px">${esc(detail)}</p></div>${pill(summary.status || "legacy", toneFor(summary.status))}</div>
+    <div class="card-head"><div><h3>Authority contract</h3><p class="help" style="margin-top:3px">${esc(detail)}</p></div></div>
     ${summary.version ? `<p class="help" style="margin-top:8px">v${esc(summary.version)} · revision ${esc(summary.revision)}${summary.fingerprint ? ` · ${esc(String(summary.fingerprint).slice(0, 12))}` : ""}</p>` : ""}
     ${tools.length ? `<p class="help" style="margin-top:8px">Tools: ${tools.map((tool) => `<code>${esc(tool.name || tool)}</code>`).join(" · ")}</p>` : ""}
     ${approvals.length ? `<p class="help" style="margin-top:5px">Approval required: ${approvals.map((impact) => `<code>${esc(impact)}</code>`).join(" · ")}</p>` : ""}
@@ -379,7 +349,9 @@ function defaultsJson(targetRoot, defaults) {
   }
 }
 
-function renderScheduledTasks(models, { canRunNow = false, selectedRole = "", selectedTask = "", showTaskEditor = false } = {}) {
+function renderScheduledTasks(models, options = {}) {
+  const { canRunNow = false, selectedRole = "", selectedTask = "", showTaskEditor = false } = options;
+  const paging = paginate(models.schedules, pageOptions("/scheduled", options, { tab: "list" }));
   const selected = models.schedules.find((task) => task.role === selectedRole && task.id === selectedTask) || null;
   const task = selected || {
     role: selectedRole && models.specs[selectedRole] ? selectedRole : Object.keys(models.specs)[0] || "",
@@ -387,7 +359,7 @@ function renderScheduledTasks(models, { canRunNow = false, selectedRole = "", se
     title: "",
     cron: "0 9 * * 1-5",
     prompt: "",
-    enabled: true
+    enabled: false
   };
   const recurrence = recurrenceFromCron(task.cron);
   const enabledTasks = models.schedules.filter((entry) => entry.enabled).length;
@@ -396,9 +368,10 @@ function renderScheduledTasks(models, { canRunNow = false, selectedRole = "", se
   <div><p class="eyebrow">Scheduled</p><h1>Scheduled tasks</h1><p class="sub">Run tasks on a schedule or whenever you need them.</p></div>
   <a class="button" href="/scheduled?new=1#task-editor">New task</a>
 </section>
+${tabs("/scheduled", [["calendar", "Calendar"], ["list", "List"]], "list")}
 <section class="section-heading"><h2>Tasks</h2><span class="muted">${enabledTasks} enabled · ${models.schedules.length} total</span></section>
-${renderTaskTable(models.schedules, { canRunNow, actions: true })}
-${canRunNow ? notice("Run task now starts this task immediately. It does not enable a disabled task.") : notice("Run task now is available when crewrun up is running. Saved timing uses your computer’s local time.", "warn")}
+${renderTaskTable(paging.items, { canRunNow, actions: true, returnTo: `/scheduled?tab=list&page=${paging.page}` })}${paging.html}
+${canRunNow ? "" : notice("Run now is available when crewrun up is running. Saved timing uses your computer’s local time.", "warn")}
 ${selected || showTaskEditor ? renderTaskForm(models, { task, selected, recurrence }) : ""}`;
 }
 
@@ -437,18 +410,16 @@ function renderTaskForm(models, { task, selected, recurrence }) {
 </section>`;
 }
 
-function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = false } = {}) {
+function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = false, returnTo = "/scheduled?tab=list" } = {}) {
   const rows = tasks.map((task) => {
-    const manage = actions ? `<a class="button secondary tiny" href="/scheduled?role=${encodeURIComponent(task.role)}&task=${encodeURIComponent(task.id)}#task-editor">Edit task</a>
-      <form class="inline" method="post" action="/scheduled/toggle"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><input type="hidden" name="enabled" value="${task.enabled ? "" : "1"}"><button class="subtle tiny">${task.enabled ? "Disable task" : "Enable task"}</button></form>
-      <form class="inline" method="post" action="/scheduled/delete"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="danger tiny">Delete task</button></form>
+    const manage = actions ? `<div class="button-row"><a class="button secondary tiny" href="/scheduled?tab=list&role=${encodeURIComponent(task.role)}&task=${encodeURIComponent(task.id)}#task-editor">Edit</a>
       ${canRunNow
-        ? `<form class="inline" method="post" action="/scheduled/run"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><button class="tiny">Run task</button></form>`
-        : `<span class="button secondary tiny disabled" title="Start crewrun up to run this task now">Run task</span>`}` : "";
+        ? `<form class="inline" method="post" action="/scheduled/run"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><input type="hidden" name="return_to" value="${esc(returnTo)}"><button class="tiny">Run now</button></form>`
+        : `<span class="button secondary tiny disabled" title="Start crewrun up to run this task now">Run now</span>`}</div>` : "";
     return [
       `<strong>${esc(task.title || task.id)}</strong><div class="faint"><code>${esc(task.role)}:${esc(task.id)}</code></div>`,
       `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">local time</div>`,
-      pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
+      actions ? `<form class="inline" method="post" action="/scheduled/toggle"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><input type="hidden" name="enabled" value="${task.enabled ? "" : "1"}"><input type="hidden" name="return_to" value="${esc(returnTo)}"><button class="state-toggle" role="switch" aria-checked="${task.enabled}" aria-label="Enable ${esc(task.title || task.id)}" title="${task.enabled ? "Enabled" : "Disabled"}"></button></form>` : pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
       compact ? when(task.nextRunAt) : `${task.runId ? `<a href="/tasks?run=${esc(task.runId)}">${esc(task.lastStatus)}</a>` : esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
       compact ? "" : when(task.nextRunAt),
       manage
@@ -459,21 +430,20 @@ function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = 
   return table(headers, renderedRows, "No scheduled tasks yet.");
 }
 
-function renderCalendar(models) {
-  const upcoming = models.schedules
-    .filter((task) => task.enabled && Number.isFinite(Date.parse(task.nextRunAt || "")))
-    .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt));
+function renderCalendar(models, options = {}) {
+  const count = [3, 5, 10, 25].includes(Number(options.calendarCount)) ? Number(options.calendarCount) : 3;
+  const page = Math.min(pageNumber(options.page), 100);
+  const parsedFrom = new Date(options.calendarFrom || Date.now());
+  const from = Number.isFinite(parsedFrom.getTime()) ? parsedFrom : new Date();
+  const upcoming = upcomingOccurrences(models.schedules, { from, limit: page * count + (page < 100 ? 1 : 0) });
+  const paging = paginate(upcoming, { page, size: count, base: "/scheduled", params: { tab: "calendar", count, from: from.toISOString() }, openEnded: true });
   const days = new Map();
-  for (const task of upcoming) {
+  for (const task of paging.items) {
     const date = new Date(task.nextRunAt);
     const key = [date.getFullYear(), date.getMonth(), date.getDate()].join("-");
     if (!days.has(key)) days.set(key, { date, tasks: [] });
     days.get(key).tasks.push(task);
   }
-  const google = models.operations.connectors.find((connector) => connector.id === "google-calendar");
-  const calendarState = google?.connected
-    ? "Google Calendar is connected. Changes to a CrewRun task are projected one way by your host."
-    : "CrewRun scheduled tasks are the source of truth. Connect a calendar gateway when you want a one-way mirror.";
   const calendar = [...days.values()].map(({ date, tasks }) => {
     const heading = date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
     const events = tasks.map((task) => `<a class="calendar-event" href="/scheduled?role=${encodeURIComponent(task.role)}&task=${encodeURIComponent(task.id)}#task-editor"><strong>${esc(task.title || task.id)}</strong><span>${esc(task.role)} · ${esc(dateTime(task.nextRunAt))}</span></a>`).join("");
@@ -481,27 +451,26 @@ function renderCalendar(models) {
   }).join("");
   return `
 <section class="hero">
-  <div><p class="eyebrow">Calendar</p><h1>Calendar</h1><p class="sub">See the next run for each enabled CrewRun task in your computer’s local time.</p></div>
-  <div class="actions"><a class="button secondary" href="/scheduled">Manage scheduled tasks</a><a class="button" href="/connectors">Integrations</a></div>
+  <div><h1>Scheduled tasks</h1><p class="sub">Upcoming runs in your computer’s local time.</p></div>
+  <a class="button" href="/scheduled?new=1#task-editor">New task</a>
 </section>
-<section class="notice">${esc(calendarState)}</section>
-<section class="section-heading"><h2>Upcoming task calendar</h2><span class="muted">${upcoming.length} next run${upcoming.length === 1 ? "" : "s"}</span></section>
-${days.size ? `<div class="calendar-list">${calendar}</div>` : empty("No enabled scheduled tasks have an upcoming run yet.", "Create task", "/scheduled?new=1#task-editor")}
-<section class="section-heading"><h2>Calendar sync</h2><span class="muted">one-way only</span></section>
-<div class="card flat"><p class="muted">Google Calendar, Outlook Calendar, and Teams are host integrations. Calendar events never create or change CrewRun tasks, so a calendar edit cannot bypass role authority or task review.</p></div>`;
+${tabs("/scheduled", [["calendar", "Calendar"], ["list", "List"]], "calendar")}
+<section class="section-heading"><h2>Upcoming runs</h2><form method="get" action="/scheduled" class="button-row"><input type="hidden" name="tab" value="calendar"><label for="calendar-count" class="muted">Show next</label><select class="compact-select" id="calendar-count" name="count" onchange="this.form.requestSubmit()">${[3, 5, 10, 25].map((value) => `<option value="${value}"${value === count ? " selected" : ""}>${value}</option>`).join("")}</select><noscript><button>Show</button></noscript></form></section>
+${days.size ? `<div class="calendar-list">${calendar}</div>${paging.html}` : empty("No enabled scheduled tasks have an upcoming run yet.", "Create task", "/scheduled?new=1#task-editor")}`;
 }
 
-function renderSkills(models, { showSkillForm = false } = {}) {
+function renderSkills(models, options = {}) {
+  const { showSkillForm = false } = options;
   const rows = models.skills.map((skill) => [
     `<code>${esc(skill.id)}</code>`, esc(skill.description),
     skill.roles.length ? skill.roles.map((role) => `<code>${esc(role)}</code>`).join(" ") : "all",
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand; proposals land in the approval queue.</p></div><div class="actions"><a class="button secondary" href="/approvals">Review proposals</a><a class="button" href="/skills?new=1#skill-form">Add skill</a></div></section>
+<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand. Review proposed changes under Reviews.</p></div><div class="actions"><a class="button secondary" href="/reviews?tab=learning">Review proposals</a><a class="button" href="/skills?new=1#skill-form">Add skill</a></div></section>
 ${showSkillForm ? renderSkillForm(models) : ""}
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
-${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.")}`;
+${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.", pageOptions("/skills", options))}`;
 }
 
 function renderSkillForm(models) {
@@ -523,12 +492,14 @@ function renderSkillForm(models) {
 </section>`;
 }
 
-function renderChats(models, { selectedChat = null, selectedChatRole = "", canChat = false } = {}) {
+function renderChats(models, options = {}) {
+  const { selectedChat = null, selectedChatRole = "", canChat = false } = options;
   const agents = Object.values(models.specs);
   const selectedRole = selectedChat?.role || selectedChatRole;
   const selected = agents.find((spec) => spec.role === selectedRole) || null;
   const recent = models.operations.chats.filter((chat) => chat.purpose !== "console-helper");
-  const agentLinks = agents.map((agent) => {
+  const paging = paginate(agents, pageOptions("/chats", options, selectedRole ? { agent: selectedRole } : {}));
+  const agentLinks = paging.items.map((agent) => {
     const thread = recent.find((entry) => entry.role === agent.role);
     const active = agent.role === selectedRole;
     return `<a class="chat-thread${active ? " active" : ""}" href="/chats?agent=${encodeURIComponent(agent.role)}"${active ? ' aria-current="page"' : ""}><span class="chat-thread-name">${esc(agent.title || agent.role)}</span><span class="chat-thread-meta">${thread ? esc(thread.title || "Resumed thread") : "Start chat"}</span></a>`;
@@ -541,7 +512,7 @@ function renderChats(models, { selectedChat = null, selectedChatRole = "", canCh
 <section class="hero"><div><p class="eyebrow">Chats</p><h1>Agent chats</h1><p class="sub">Each agent keeps one resumed, durable conversation for this workspace.</p></div></section>
 ${canChat ? "" : notice("Chat needs a running CrewRun host with an agent runner. You can still review agent settings and scheduled tasks.", "warn")}
 <section class="chat-layout" aria-label="Agent chats">
-  <nav class="chat-threads" aria-label="Agents"><div class="chat-threads-heading"><strong>Agents</strong><span class="muted">${agents.length}</span></div>${agents.length ? agentLinks : `<p class="help">Add an agent to begin a chat.</p>`}</nav>
+  <nav class="chat-threads" aria-label="Agents"><div class="chat-threads-heading"><strong>Agents</strong><span class="muted">${agents.length}</span></div>${agents.length ? agentLinks + paging.html : `<p class="help">Add an agent to begin a chat.</p>`}</nav>
   <div class="chat-workspace">${workspace}</div>
 </section>`;
 }
@@ -550,7 +521,7 @@ export function renderHelperDrawer(models, { helperOpen = false, helperChat = nu
   return `
 <a class="helper-launcher" href="${esc(openHref)}" aria-label="Open Crew helper" title="Open Crew helper">${icon("chat", "utility-icon")}<span>Crew helper</span></a>
 <aside class="helper-drawer${helperOpen ? " open" : ""}" aria-label="Crew helper" aria-hidden="${helperOpen ? "false" : "true"}"${helperOpen ? "" : " inert"}>
-  <div class="helper-drawer-head"><div><strong>Crew helper</strong><p>Guided, governed setup</p></div><a class="icon-button" href="${esc(closeHref)}" aria-label="Close Crew helper" title="Close">×</a></div>
+  <div class="helper-drawer-head"><div><strong>Crew helper</strong><p>Guided setup</p></div><a class="icon-button" href="${esc(closeHref)}" aria-label="Close Crew helper" title="Close">×</a></div>
   <div class="helper-choices"><a href="/agents/new">Add agent</a><a href="/agents">Manage agent</a><a href="/skills?new=1#skill-form">Add skill</a><a href="/scheduled?new=1">Schedule task</a></div>
   <p class="helper-note">The helper can inspect agents, skills, and tasks through its read-only internal tool. It drafts changes for the normal reviewed forms; it never writes configuration itself.</p>
   <div class="helper-messages">${renderChatMessages(helperChat, "Crew helper")}</div>
@@ -564,13 +535,23 @@ function renderChatMessages(chat, label) {
   return `<div class="chat-messages">${messages.map((message) => `<article class="chat-message${message.author === "user" ? " user" : ""}"><span class="chat-author">${esc(message.author === "user" ? "You" : label)}</span><div class="chat-copy">${esc(message.content)}</div></article>`).join("")}</div>`;
 }
 
-function renderApprovals(models, { canDecideApprovals = false } = {}) {
-  const hostRows = models.operations.approvals.filter((entry) => entry.status === "pending").map((entry) => [
+function renderApprovals(models, options = {}) {
+  const { canDecideApprovals = false, selectedReview = "" } = options;
+  const tab = ["actions", "results", "learning", "workspace", "history"].includes(options.tab) ? options.tab : "actions";
+  const pending = models.operations.approvals.filter((entry) => entry.status === "pending");
+  const header = `<section class="hero"><div><h1>Reviews</h1><p class="sub">Decide what can be sent, accept finished work, and review proposed learning.</p></div></section>${tabs("/reviews", [
+    ["actions", `Actions (${pending.length})`], ["results", `Results (${models.operations.runs.filter(reviewableResult).length})`],
+    ["learning", `Memory & skills (${models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length})`], ["workspace", `Workspace (${(models.operations.workspaceProposals || []).filter((p) => ["pending", "applying"].includes(p.status)).length})`], ["history", "History"]
+  ], tab)}`;
+  if (tab === "results") return header + renderTasks(models, { ...options, reviewMode: true });
+  if (tab === "workspace") return header + renderWorkspaceReviews(models, options);
+  if (tab === "history") return header + renderReviewHistory(models, options);
+  const hostRows = pending.filter((entry) => !selectedReview || entry.id === selectedReview).map((entry) => [
     pill(entry.kind || "host", toneFor(entry.risk || entry.status)),
-    `<code>${esc(entry.id)}</code>`,
-    `${esc(entry.title || entry.description || "Approval requested")}${entry.description && entry.title ? `<div class="faint approval-preview">${esc(entry.description)}</div>` : ""}`,
+    `<a href="/reviews?tab=actions&review=${encodeURIComponent(entry.id)}">Open review</a>${entry.runId ? `<div><a href="/tasks?run=${encodeURIComponent(entry.runId)}">Open task</a></div>` : ""}`,
+    `${esc(entry.title || "Approval requested")}${selectedReview && entry.description ? `<div class="approval-preview">${esc(entry.description)}</div>` : ""}`,
     esc(entry.requestedBy || entry.role || "host"),
-    (entry.source === "crewrun" || canDecideApprovals) ? approvalButtons(entry.id) : '<span class="muted">Review in the connected application</span>'
+    selectedReview && (entry.source === "crewrun" || canDecideApprovals) ? approvalButtons(entry.id) : '<span class="muted">Open the review to inspect the proposed action.</span>'
   ]);
   const proposalRows = [
     ...models.skillProposals.map((proposal) => ["skill", proposal]),
@@ -581,32 +562,68 @@ function renderApprovals(models, { canDecideApprovals = false } = {}) {
     `<code>${esc(proposal.id)}</code>`,
     esc(kind === "skill" ? `${proposal.skillId} — ${proposal.description}` : kind === "reflection" ? `${proposal.role} → ${proposal.target || "choose destination"} ${proposal.key || ""} — ${proposal.text}` : `${proposal.key} — ${proposal.statement}`),
     esc(proposal.proposedBy || ""),
-    `<form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="approve">${kind === "reflection" && !proposal.target ? `<label>Save as<select name="target"><option value="preference">Context / preference</option><option value="skill">Skill</option></select></label><label>Stable key<input name="key" required></label><label>Skill description (if needed)<input name="description"></label>` : ""}<button class="tiny">Approve</button></form>
-     <form class="inline" method="post" action="/proposals/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
+    `<form class="inline" method="post" action="/reviews/learning/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="approve">${kind === "reflection" && !proposal.target ? `<label>Save as<select name="target"><option value="preference">Context / preference</option><option value="skill">Skill</option></select></label><label>Stable key<input name="key" required></label><label>Skill description (if needed)<input name="description"></label>` : ""}<button class="tiny">Approve</button></form>
+     <form class="inline" method="post" action="/reviews/learning/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
   ]);
-  return `
-<section class="hero"><div><p class="eyebrow">Approvals</p><h1>Approvals</h1><p class="sub">This queue combines outgoing actions with crewrun skill and memory proposals.</p></div></section>
-<section class="section-heading"><h2>Outgoing actions</h2><span class="muted">${hostRows.length} pending</span></section>
-${table(["kind", "id", "request", "requested by", "decision"], hostRows, "No external actions are awaiting approval. Slack and Gmail messages appear here when an agent requests delivery.")}
+  return header + (tab === "actions" ? `
+<section class="section-heading"><h2>Actions requiring review</h2><span class="muted">${hostRows.length} pending</span></section>
+${selectedReview ? '<p><a href="/reviews?tab=actions">Back to pending actions</a> · Approval permits this action; it does not accept the task result.</p>' : ""}
+${table(["kind", "links", "request", "requested by", "decision"], hostRows, selectedReview ? "This action is no longer pending. Check review history or the task for its outcome." : "No external actions are awaiting approval.", pageOptions("/reviews", options, { tab }))}` : `
 <section class="section-heading"><h2>Memory and skill proposals</h2><span class="muted">${proposalRows.length} pending</span></section>
-${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.")}`;
+${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.", pageOptions("/reviews", options, { tab }))}`);
 }
 
-function renderAudit(models) {
+function renderReviewHistory(models, options) {
+  const decisions = models.operations.runs.flatMap((run) => (run.timeline || [])
+    .filter((entry) => ["action.approve", "action.reject", "run.accept"].includes(entry.type))
+    .map((entry) => ({ at: entry.created_at, kind: entry.type === "run.accept" ? "result" : "action", title: run.prompt.slice(0, 160),
+      status: { "action.approve": "approved", "action.reject": "rejected", "run.accept": "accepted" }[entry.type], runId: run.id })));
+  decisions.push(...models.operations.approvals.filter((entry) => entry.status !== "pending" && entry.source !== "runtime").map((entry) => ({ ...entry, at: entry.decidedAt, kind: "action" })));
+  decisions.push(...(models.proposalHistory || []).map((entry) => ({ ...entry, at: entry.decidedAt, title: entry.description || entry.statement || entry.text || entry.skillId || entry.key })));
+  decisions.push(...(models.operations.workspaceProposals || []).filter((p) => !["pending", "applying"].includes(p.status)).map((p) => ({ ...p, kind: "workspace", at: p.decided_at, runId: p.run_id })));
+  decisions.sort((a, b) => (new Date(b.at).getTime() || 0) - (new Date(a.at).getTime() || 0));
+  return `<section class="section-heading"><h2>Decision history</h2></section>${table(["time", "kind", "review", "decision", "task"], decisions.map((entry) => [
+    when(entry.at), esc(entry.kind), esc(entry.title), pill(entry.status, toneFor(entry.status)), entry.runId ? `<a href="/tasks?run=${encodeURIComponent(entry.runId)}">Open task</a>` : "—"
+  ]), "No retained decisions yet.", pageOptions("/reviews", options, { tab: "history" }))}`;
+}
+
+function renderActivity(models, options = {}) {
+  const tab = options.tab === "events" ? "events" : "actions";
+  const search = String(options.search || "").trim().toLowerCase();
+  // Search only the same safe projection used for display, never raw provider payloads.
+  const filtered = { ...models, operations: { ...models.operations,
+    audit: models.operations.audit.filter((entry) => !search || JSON.stringify(entry).toLowerCase().includes(search)),
+    events: models.operations.events.filter((entry) => !search || JSON.stringify(entry).toLowerCase().includes(search))
+  } };
+  return `<section class="hero"><div><h1>Activity</h1><p class="sub">Trace agent actions and incoming integration events.</p></div></section>
+${tabs("/activity", [["actions", "Agent actions"], ["events", "Integration events"]], tab)}
+<form method="get" action="/activity" class="button-row" style="margin-top:16px"><input type="hidden" name="tab" value="${tab}"><input name="q" aria-label="Search activity" placeholder="Search agent, service, action, or outcome" value="${esc(options.search || "")}"><button class="subtle">Search</button></form>
+${tab === "events" ? renderEvents(filtered, options) : renderAudit(filtered, options)}`;
+}
+
+function renderAudit(models, options) {
   const rows = models.operations.audit.map((entry) => [
     when(entry.at),
-    `${entry.actor ? esc(entry.actor) : "—"}<div class="faint"><code>${esc(entry.role || "host")}</code></div>`,
+    `${entry.actor ? esc(entry.actor) : "—"}<div class="faint">${models.specs[entry.role] ? `<a href="/agents/${encodeURIComponent(entry.role)}">${esc(entry.role)}</a>` : esc(entry.role || "host")}</div>`,
     `${entry.model ? `<code>${esc(entry.model)}</code>` : "—"}${entry.runner ? `<div class="faint">${esc(entry.runner)}</div>` : ""}`,
     `<code>${esc(entry.toolName || entry.action || "action")}</code>${entry.toolName && entry.action && entry.toolName !== entry.action ? `<div class="faint">${esc(entry.action)}</div>` : ""}`,
     renderAuditAuthority(entry.authority),
     renderAuditData(entry.data),
     renderAuditBudget(entry.budget),
-    pill(entry.outcome || "recorded", toneFor(entry.outcome))
+    pill(entry.outcome || "recorded", toneFor(entry.outcome)),
+    renderAuditLinks(entry, models)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Audit</p><h1>Audit</h1><p class="sub">Review safe metadata for each governed action. Inputs, outputs, credentials, and error text are never rendered here.</p></div></section>
+<p class="help" style="margin-top:16px">Recorded authority, data scopes, and outcomes. Inputs, outputs, and credentials are omitted.</p>
 <section class="section-heading"><h2>Action history</h2><span class="muted">${rows.length} safe record${rows.length === 1 ? "" : "s"}</span></section>
-${table(["time", "actor / agent", "model", "action", "authority", "data", "budget", "outcome"], rows, "No actions recorded yet. Connected-service activity will appear here.")}`;
+${table(["time", "actor / agent", "model", "action", "authority", "data", "budget", "outcome", "related work"], rows, "No actions recorded yet. Connected-service activity will appear here.", pageOptions("/activity", options, { tab: "actions", q: options.search || "" }))}`;
+}
+
+function renderAuditLinks(entry, models) {
+  const run = models.operations.runs.find((candidate) => entry.approvalId && (candidate.actions || []).some((action) => action.id === entry.approvalId));
+  if (!run) return "—";
+  const pending = models.operations.approvals.some((approval) => approval.id === entry.approvalId && approval.status === "pending");
+  return `<a href="/tasks?run=${encodeURIComponent(run.id)}">Task</a><br><a href="${pending ? `/reviews?tab=actions&review=${encodeURIComponent(entry.approvalId)}` : "/reviews?tab=history"}">${pending ? "Review" : "Decision history"}</a>`;
 }
 
 function renderAuditAuthority(authority = {}) {
@@ -636,7 +653,7 @@ function renderAuditBudget(budget = {}) {
   return parts.length ? parts.map((part) => esc(part)).join("<br>") : "—";
 }
 
-function renderUsage(models) {
+function renderUsage(models, options) {
   const usage = currentUsage(models.operations.usage) || (models.operations.usage?.months ? { month: "Current month", totals: {} } : null);
   if (!usage) {
     return `
@@ -667,12 +684,24 @@ ${empty("No usage ledger is attached to this console. The UI stays read-only and
 </section>
 ${models.operations.outcomes?.unknownUsageAttempts ? `<p class="help">${models.operations.outcomes.unknownUsageAttempts} attempts have unknown usage. Reported costs may be incomplete.</p>` : ""}
 <section class="section-heading"><h2>By runner</h2><span class="muted">${runnerRows.length} runners</span></section>
-${table(["runner", "runs", "tokens", "reported", "estimate", "failed"], runnerRows, "No runs recorded for this period.")}
+${table(["runner", "runs", "tokens", "reported", "estimate", "failed"], runnerRows, "No runs recorded for this period.", pageOptions("/usage", options, {}, "runners_page"))}
 <section class="section-heading"><h2>By engine</h2></section>
-${table(["engine", "runs", "spend", "failed"], engineRows, "No engine totals available.")}`;
+${table(["engine", "runs", "spend", "failed"], engineRows, "No engine totals available.", pageOptions("/usage", options, {}, "engines_page"))}`;
 }
 
-function renderProviders(models) {
+function renderSettings(models, options = {}) {
+  const tab = options.tab === "host" ? "host" : "providers";
+  const header = `<section class="hero"><div><h1>Settings</h1><p class="sub">Model providers, credential availability, and host configuration.</p></div></section>${tabs("/settings", [["providers", "Providers & credentials"], ["host", "Host"]], tab)}`;
+  const boundary = models.workspace ? notice("Governed workspace: Claude-compatible runners and the verified Codex SDK on Linux use the internal tool bridge. Native tools are disabled or denied by default. The owner may opt one direct-Claude agent into privileged native shell auto mode from agent settings; this exception is not filesystem isolation. Generic CLI runners fail closed. Daily run limits are supported; hard per-run USD is Claude-only, and hard token/monthly-dollar limits require a reservation-capable host.", "info") : "";
+  if (tab === "providers") return header + boundary + renderProviders(models, options);
+  const lifecycle = models.workspace ? `<section class="section-heading"><h2>Lifecycle follow-ups</h2></section><p class="help">The helper can propose rules for review. Enable them here only after the agent's hook and authority are configured.</p>${table(["rule", "event", "agent", "enabled"], models.workspace.rules.map((rule) => [esc(rule.id), esc(rule.event), esc(rule.agent), `<form method="post" action="/workspace/lifecycle"><input type="hidden" name="id" value="${esc(rule.id)}"><input type="hidden" name="enabled" value="${rule.enabled ? "" : "1"}"><button class="state-toggle" role="switch" aria-checked="${rule.enabled}" aria-label="Enable ${esc(rule.id)}"></button></form>`]), "No lifecycle follow-ups are configured.", pageOptions("/settings", options, { tab: "host" }))}` : "";
+  return header + `<section class="section-heading"><h2>Host configuration</h2></section>
+<div class="card flat"><div class="list">${listRow("Workspace", models.targetRoot, "")}${listRow("Calendar mirroring", options.calendarSyncAvailable ? "available" : "not installed", "")}</div><p class="help">Host configuration is managed by the running service. <a href="/integrations">Manage service connections</a>.</p></div>
+${boundary}${lifecycle}<section class="section-heading"><h2>Built-in agent tools</h2></section><div class="notice">${[...Object.keys(WORK_TOOLS), ...LEARNING_TOOL_NAMES, ...WEB_TOOL_NAMES].map((name) => `<code>${esc(name)}</code>`).join(" · ")}<p>Each agent's reviewed contract controls which tools it may use.</p></div>
+${[...models.validation.problems, ...models.validation.warnings].map((entry) => notice(entry, "warn")).join("")}`;
+}
+
+function renderProviders(models, options) {
   const secretsLocked = secretsFileExists() && !isUnlocked();
   const keyRows = knownSecretStatus().map((entry) => {
     const ambient = Boolean(process.env[entry.env]);
@@ -690,7 +719,7 @@ function renderProviders(models) {
   ]);
   const tools = models.providerRuntime;
   return `
-<section class="hero"><div><p class="eyebrow">Providers</p><h1>Providers</h1><p class="sub">Models and credentials stay operator-owned. The console never renders API keys or tokens.</p></div></section>
+<section class="section-heading"><h2>Providers & credentials</h2></section>
 <section class="split">
   <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Installed runtimes</h2></div><div class="list">
     ${listRow("Claude runtime", tools.claude.available ? "available" : "not found", tools.claude.available ? "success" : "warn")}
@@ -700,61 +729,107 @@ function renderProviders(models) {
   <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Encrypted secret store</h2></div><p class="usage-amount">${secretsFileExists() ? isUnlocked() ? "Unlocked" : "Locked" : "Not created"}</p><p class="muted" style="margin-top:8px">${secretsLocked ? "Unlock it in the operator process to inspect configured key names." : "Keys are kept out of agent prompts and this dashboard."}</p></div>
 </section>
 <section class="section-heading"><h2>Credential availability</h2><span class="muted">names and state only</span></section>
-${table(["provider", "environment name", "state"], keyRows, "No known provider credentials.")}
+${table(["provider", "environment name", "state"], keyRows, "No known provider credentials.", pageOptions("/settings", options, { tab: "providers" }, "credentials_page"))}
 <section class="section-heading"><h2>Assignable model profiles</h2><span class="muted">${models.runnerOptions.length} available</span></section>
-${table(["provider", "profiles", "count"], providerRows, "No runner profiles found.")}
-${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</h2></section>${table(["provider", "detail", "state"], hostRows)}` : ""}`;
+${table(["provider", "profiles", "count"], providerRows, "No runner profiles found.", pageOptions("/settings", options, { tab: "providers" }, "providers_page"))}
+${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</h2></section>${table(["provider", "detail", "state"], hostRows, "", pageOptions("/settings", options, { tab: "providers" }, "host_page"))}` : ""}`;
 }
 
-function renderConnectors(models, { canConnect = false, canDisconnect = false } = {}) {
+function renderConnectors(models, options = {}) {
+  const { canConnect = false, canDisconnect = false, selectedIntegration = "" } = options;
+  const connector = models.operations.connectors.find((entry) => entry.id === selectedIntegration);
+  if (selectedIntegration && !connector) return empty("Integration not found.", "All integrations", "/integrations");
+  if (connector) {
+    const tab = options.tab === "rules" ? "rules" : "connection";
+    const scoped = { ...models, operations: { ...models.operations, connectors: [connector], eventRoutes: models.operations.eventRoutes.filter((route) => route.connectionId === connector.connectionId) } };
+    return `<section class="hero"><div><h1>${esc(connector.label)}</h1><p class="sub"><a href="/integrations">All integrations</a></p></div></section>
+${tabs("/integrations", [["connection", "Connection"], ["rules", "Event rules"]], tab, { integration: connector.id })}
+${tab === "rules" ? renderEvents(scoped, { ...options, rulesOnly: true }) : `<section class="connector-grid" style="margin-top:16px">${renderConnectorCard(connector, { canConnect, canDisconnect })}</section>${/calendar/i.test(connector.id) ? notice(options.calendarSyncAvailable ? "Scheduled tasks can mirror one way to this calendar. CrewRun remains the source of truth." : "Calendar mirroring is not installed in this host.") : ""}`}`;
+  }
+  const paging = paginate(models.operations.connectors, pageOptions("/integrations", options));
   return `
-<section class="hero"><div><p class="eyebrow">Connectors</p><h1>Integrations</h1><p class="sub">Connect your services, grant agents the tools they need, and review outgoing messages in Approvals. Available with standalone Crewrun or your own host.</p></div></section>
-<section class="connector-grid" style="margin-top:16px">${models.operations.connectors.map((connector) => renderConnectorCard(connector, { canConnect, canDisconnect })).join("")}</section>`;
+<section class="hero"><div><h1>Integrations</h1><p class="sub">Manage service connections, permissions, and event rules.</p></div></section>
+<section class="connector-grid" style="margin-top:16px">${paging.items.map((connector) => renderConnectorCard(connector, { canConnect, canDisconnect })).join("")}</section>${paging.html}`;
 }
 
 function renderConnectorCard(connector, { canConnect, canDisconnect }) {
   const state = connector.state || (connector.connected ? "connected" : "not connected");
+  const authorityScope = connector.connected && connector.connectionId
+    ? `connector:${connector.provider || connector.id}:${connector.connectionId}` : "";
   const action = connector.connected
     ? canDisconnect
-      ? `<form method="post" action="/connectors/disconnect"><input type="hidden" name="id" value="${esc(connector.connectionId || connector.id)}"><button class="secondary">Disconnect</button></form>`
+      ? `<form method="post" action="/integrations/disconnect"><input type="hidden" name="id" value="${esc(connector.connectionId || connector.id)}"><button class="secondary">Disconnect</button></form>`
       : `<span class="muted">Managed by your integration</span>`
-    : connector.localSetup
-      ? renderConnectorSetup(connector)
     : connector.connectUrl && safeHref(connector.connectUrl)
       ? `<a class="button" href="${esc(safeHref(connector.connectUrl))}">Continue connection</a>`
       : connector.hostSetup
         ? '<span class="muted">Set up in your CrewRun host gateway.</span>'
+      : connector.configured === false
+        ? `<span class="muted">${esc(connector.setupMessage || "Configure this integration in the host service before connecting.")}</span>`
       : canConnect
-        ? `<form method="post" action="/connectors/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>Connect ${esc(connector.label)}</button></form>`
+        ? renderHostedConnect(connector)
         : `<span class="muted">Connection setup is unavailable in this integration.</span>`;
-  return `<article class="connector-card${connector.localSetup && !connector.connected ? " local-setup" : ""}">
+  return `<article class="connector-card${connector.capabilityOptions?.length && !connector.connected ? " has-chooser" : ""}">
     <div class="card-head"><div style="display:flex;gap:9px;align-items:center"><span class="connector-icon">${esc(connector.initials || String(connector.label || "?").slice(0, 1).toUpperCase())}</span><div><h2>${esc(connector.label)}</h2><span class="faint">${esc(connector.account || connector.id)}</span></div></div>${pill(state, toneFor(state))}</div>
     <p class="description">${esc(connector.description || "A connected service.")}</p>
-    <p class="capabilities">${(connector.capabilities || []).map((entry) => `<code>${esc(entry)}</code>`).join(" · ") || "No actions advertised"}</p>
-    <div class="card-footer">${action}</div>
+    <p class="capabilities">${(connector.capabilities || []).map((entry) => `<code>${esc(entry)}</code>`).join(" · ") || "No actions advertised"}${connector.subscriptionHealth ? ` · ${esc(connector.subscriptionHealth)}` : ""}</p>
+    ${authorityScope ? `<p class="faint">Role data scope <code>${esc(authorityScope)}</code></p>` : ""}
+    <div class="card-footer">${action}<a class="button secondary" href="/integrations?integration=${encodeURIComponent(connector.id)}">Manage</a></div>
   </article>`;
 }
 
-function renderConnectorSetup(connector) {
-  const gmail = connector.id === "gmail";
-  return `<details class="connector-setup"><summary>Connect ${esc(connector.label)}</summary>
-    <form method="post" action="/connectors/connect" autocomplete="off">
-      <input type="hidden" name="id" value="${esc(connector.id)}">
-      <p class="help" style="margin:10px 0">${gmail ? 'Use a Google OAuth client with the Gmail API enabled and a refresh token granted gmail.compose. A refresh token keeps scheduled work connected. <a href="https://developers.google.com/identity/protocols/oauth2/native-app" target="_blank" rel="noreferrer">Google setup guide</a>.' : 'Install a Slack app with chat:write and invite it to the channels you want to use. Add app_mentions:read for the reply-to-mention action. <a href="https://docs.slack.dev/authentication/tokens/" target="_blank" rel="noreferrer">Slack token guide</a>.'}</p>
-      ${gmail ? `<div class="field"><label for="gmail-client">Google client ID</label><input id="gmail-client" name="client_id" required></div><div class="field"><label for="gmail-secret">Client secret</label><input id="gmail-secret" name="client_secret" type="password" required></div><div class="field"><label for="gmail-refresh">Refresh token</label><input id="gmail-refresh" name="refresh_token" type="password" required></div><label class="checkbox"><input type="checkbox" name="gmail_read" value="1"> Allow inbox search and reads (also needs gmail.readonly)</label>` : '<div class="field"><label for="slack-token">Slack OAuth token</label><input id="slack-token" name="access_token" type="password" placeholder="xoxb-…" required></div>'}
-      <p class="help" style="margin:10px 0">Credentials are saved in your private local Crewrun directory, outside the project. After connecting, grant the actions in your agent’s Authorized tools.</p>
-      <button>Verify and connect</button>
-    </form>
-  </details>`;
+function renderHostedConnect(connector) {
+  const options = connector.capabilityOptions || [];
+  const chooser = options.length
+    ? `<details class="connector-setup"><summary>Choose access</summary><form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><div class="field" style="margin-top:10px"><label for="capability-${esc(connector.id)}">Capabilities</label><select id="capability-${esc(connector.id)}" name="capabilities" multiple size="${Math.min(6, Math.max(2, options.length))}" required>${options.map((entry) => `<option value="${esc(entry.id)}">${esc(entry.label)}${entry.direction === "write" || entry.direction === "both" ? " · includes writes" : ""}</option>`).join("")}</select><span class="help">Choose only what this connection needs. Provider writes still require approval.</span></div><div class="button-row" style="margin-top:10px"><button>Connect ${esc(connector.label)}</button></div></form></details>`
+    : `<form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>Connect ${esc(connector.label)}</button></form>`;
+  return chooser;
+}
+
+function renderEvents(models, options = {}) {
+  const { canManageEventRoutes = false, rulesOnly = false } = options;
+  const events = models.operations.events;
+  const connected = models.operations.connectors.filter((connector) => connector.connected && connector.connectionId);
+  const choices = connected.flatMap((connector) => (connector.eventTypes || []).map((type) => ({ connectionId: connector.connectionId, label: connector.label, type })));
+  const eventRows = events.map((event) => [
+    when(event.receivedAt || event.occurredAt),
+    `<code>${esc(event.type)}</code>`,
+    (() => {
+      const connector = models.operations.connectors.find((entry) => entry.connectionId === event.connectionId);
+      return connector ? `<a href="/integrations?integration=${encodeURIComponent(connector.id)}">${esc(connector.label)}</a>` : `<code>${esc(event.connectionId)}</code>`;
+    })(),
+    `${pill(event.status || "received", toneFor(event.status))}${event.error ? `<div class="faint">${esc(event.error)}</div>` : ""}`,
+    event.providerEventId ? `<code>${esc(event.providerEventId)}</code>` : "—",
+    models.operations.runs.filter((run) => run.dedupe_key === `integration:${event.connectionId}:${event.providerEventId}:${run.agent}`)
+      .map((run) => `<a href="/tasks?run=${encodeURIComponent(run.id)}">${esc(run.agent)} task</a>`).join("<br>") || "—"
+  ]);
+  const routeRows = models.operations.eventRoutes.map((route) => [
+    `<code>${esc(route.connectionId)}</code>`,
+    `<code>${esc(route.eventType)}</code>`,
+    `<code>${esc(route.role)}</code>`,
+    pill(route.enabled ? "enabled" : "disabled", route.enabled ? "success" : "")
+  ]);
+  const ruleForm = canManageEventRoutes && choices.length && Object.keys(models.specs).length
+    ? `<section class="card" style="margin-top:16px"><div class="section-heading" style="margin-top:0"><div><h2>Add or update event rule</h2><span class="muted">The agent must also list this event in its hooks and have the connection in its contract data authority.</span></div></div><form method="post" action="/integrations/route"><div class="form-grid three"><div class="field"><label for="event-route-source">Connection and event</label><select id="event-route-source" name="source" required>${choices.map((choice) => `<option value="${esc(`${choice.connectionId}|${choice.type}`)}">${esc(choice.label)} — ${esc(choice.type)}</option>`).join("")}</select></div><div class="field"><label for="event-route-role">Agent</label>${roleSelect(models, "", "event-route-role")}</div><label class="checkbox" style="align-self:end"><input type="checkbox" name="enabled" value="1"> Enable this rule</label></div><div class="button-row" style="margin-top:13px"><button>Save event rule</button></div></form></section>`
+    : "";
+  return rulesOnly ? `
+<section class="section-heading"><h2>Event rules</h2><span class="muted">${routeRows.length} configured</span></section>
+<p class="help">Choose which incoming events create work for an agent. Unrouted events remain in <a href="/activity?tab=events">Activity</a>.</p>
+${table(["connection", "event", "agent", "state"], routeRows, "No event rules yet. Connect a service, then choose a verified event and authorized agent.", pageOptions("/integrations", options, { integration: options.selectedIntegration || "", tab: "rules" }))}
+${ruleForm}` : `
+<section class="section-heading"><h2>Recent verified receipts</h2><span class="muted">${eventRows.length} retained metadata-only receipt${eventRows.length === 1 ? "" : "s"}</span></section>
+<p class="help">These are incoming signals. Only an authorized event rule creates a task. <a href="/integrations">Manage integrations and rules</a>.</p>
+${table(["received", "event", "connection", "state", "provider receipt", "created work"], eventRows, "No provider events have arrived.", pageOptions("/activity", options, { tab: "events", q: options.search || "" }))}`;
 }
 
 function metric(label, value, summary, detail, tone = "") {
   return `<article class="metric"${summary ? ` data-summary="${esc(summary)}"` : ""}><span class="label">${esc(label)}</span><strong class="${esc(tone)}">${esc(value)}</strong><span class="detail">${esc(detail)}</span></article>`;
 }
 
-function table(headers, rows, emptyText = "Nothing here yet.") {
+function table(headers, rows, emptyText = "Nothing here yet.", paging = null) {
   if (!rows.length) return empty(emptyText);
-  return `<div class="table-wrap"><table><thead><tr>${headers.map((header) => `<th>${esc(header)}</th>`).join("")}</tr></thead><tbody>${rows.map((cells) => `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const page = paging ? paginate(rows, paging) : { items: rows, html: "" };
+  return `<div class="table-wrap"><table><thead><tr>${headers.map((header) => `<th>${esc(header)}</th>`).join("")}</tr></thead><tbody>${page.items.map((cells) => `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${page.html}`;
 }
 
 function empty(message, label = "", href = "") {
@@ -789,8 +864,8 @@ function roleSelect(models, selected, id) {
 }
 
 function approvalButtons(id) {
-  return `<form class="inline" method="post" action="/approvals/decide"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="action" value="approve"><button class="tiny">Approve</button></form>
-  <form class="inline" method="post" action="/approvals/decide"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`;
+  return `<form class="inline" method="post" action="/reviews/decide"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="action" value="approve"><button class="tiny">Approve</button></form>
+  <form class="inline" method="post" action="/reviews/decide"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`;
 }
 
 function roleJson(targetRoot, spec, own) {
@@ -809,23 +884,6 @@ function roleJson(targetRoot, spec, own) {
 function runnerLabel(models, runnerId) {
   const option = models.runnerOptions.find((entry) => entry.id === runnerId);
   return option?.label || (runnerId ? runnerProfileLabel(runnerId) : "not configured");
-}
-
-function contractFor(models, spec) {
-  const supplied = models.operations.contracts?.[spec.role];
-  const contract = supplied && typeof supplied === "object" ? supplied : spec.contract;
-  const summary = supplied?.summary && typeof supplied.summary === "object"
-    ? supplied.summary
-    : spec.contractSummary && typeof spec.contractSummary === "object"
-      ? spec.contractSummary
-      : null;
-  if (!contract && !summary) return null;
-  const tools = Number(summary?.tool_count)
-    || (Array.isArray(contract?.authority?.tools) ? contract.authority.tools.length : 0)
-    || (Array.isArray(contract?.tools) ? contract.tools.length : 0)
-    || (Array.isArray(contract?.allowedTools) ? contract.allowedTools.length : 0);
-  const text = summary?.mandate || contract?.summary || (tools ? `${tools} granted tool${tools === 1 ? "" : "s"}` : "");
-  return { status: String(summary?.status || contract?.status || "contract"), summary: text };
 }
 
 function currentUsage(value) {
@@ -867,7 +925,8 @@ function formatDuration(value) {
 }
 
 function when(value) {
-  return value ? esc(String(value).slice(0, 16).replace("T", " ")) : "—";
+  const date = typeof value === "number" && Number.isFinite(value) ? new Date(value) : null;
+  return value ? esc(String(date && Number.isFinite(date.getTime()) ? date.toISOString() : value).slice(0, 16).replace("T", " ")) : "—";
 }
 
 function dateTime(value) {
@@ -930,18 +989,17 @@ function normalizeOperations(value) {
   const source = value && typeof value === "object" ? value : {};
   const connectorInput = asArray(source.connectors);
   const normalizedConnectors = connectorInput.map(normalizeConnector);
-  const supplied = new Map(normalizedConnectors.map((entry) => [entry.id, entry]));
-  const connectors = [
-    ...DEFAULT_CONNECTORS.map((entry) => ({ ...entry, ...(supplied.get(entry.id) || {}) })),
-    ...normalizedConnectors.filter((entry) => entry.id && !DEFAULT_CONNECTORS.some((base) => base.id === entry.id))
-  ];
+  const connectors = normalizedConnectors.filter((entry) => entry.id);
   return {
     runs: asArray(source.runs),
+    workspaceProposals: asArray(source.workspaceProposals),
     delivery: source.delivery || null,
     outcomes: source.outcomes || null,
     usage: source.usage || source.budget || source.ledger || null,
     providers: asArray(source.providers).map(normalizeProvider),
     connectors,
+    events: asArray(source.events).map(normalizeIntegrationEvent),
+    eventRoutes: asArray(source.eventRoutes).map(normalizeEventRoute),
     chats: asArray(source.chats).map(normalizeChat),
     approvals: asArray(source.approvals).map(normalizeApproval),
     audit: asArray(source.audit ?? source.actions).map(normalizeAudit),
@@ -952,26 +1010,65 @@ function normalizeOperations(value) {
 
 function normalizeConnector(value = {}) {
   const provider = String(value.provider || "").trim().toLowerCase();
-  const connectionId = String(value.id || "").trim();
+  const suppliedId = String(value.id || "").trim();
+  const connectionId = String(value.connectionId || value.connection_id || (provider ? "" : suppliedId)).trim();
   // Connector metadata uses a connection id plus a provider. The dashboard has
   // one card per provider, so prefer the provider for the action target while
   // retaining a safe account label for the human.
-  const id = provider || connectionId.toLowerCase();
+  const id = provider || suppliedId.toLowerCase() || connectionId.toLowerCase();
   const state = String(value.state || value.status || (value.connected ? "connected" : "not connected")).trim().toLowerCase();
   const account = value.account && typeof value.account === "object" && !Array.isArray(value.account) ? value.account : {};
   return {
     id,
     connectionId,
-    localSetup: value.localSetup === true,
     label: String(value.label || value.name || providerLabel(provider) || id || "Connector").trim(),
     initials: String(value.initials || "").trim().slice(0, 2),
     description: String(value.description || "").trim(),
-    capabilities: asArray(value.capabilities || value.actions).map((entry) => String(entry)).filter(Boolean),
+    capabilities: asArray(value.capabilities || value.actions).map((entry) => typeof entry === "string" ? entry : String(entry?.label || entry?.id || "")).filter(Boolean),
+    capabilityOptions: asArray(value.capabilityOptions).map((entry) => {
+      const option = object(entry);
+      const id = String(option.id || "").trim();
+      return id ? { id, label: String(option.label || id).trim(), description: String(option.description || "").trim(), direction: String(option.direction || "read").trim() } : null;
+    }).filter(Boolean),
     account: String(account.label || account.id || value.accountLabel || value.accountId || value.workspace || "").trim(),
     state,
     connected: value.connected === true || state === "connected",
     connectUrl: String(value.connectUrl || value.connect_url || "").trim(),
-    hostSetup: value.hostSetup === true || value.host_setup === true
+    hostSetup: value.hostSetup === true || value.host_setup === true,
+    configured: value.configured !== false,
+    setupMessage: String(value.setupMessage || value.setup_message || "").trim().slice(0, 240),
+    eventTypes: asArray(value.eventTypes || value.events).map((entry) => typeof entry === "string" ? entry : String(entry?.id || "")).filter((entry) => /^[a-z][a-z0-9-]{0,63}\.[A-Za-z][A-Za-z0-9]*$/.test(entry)),
+    subscriptionHealth: String(value.subscriptionHealth || value.subscription_health || "").trim().slice(0, 80)
+  };
+}
+
+function normalizeIntegrationEvent(value = {}) {
+  const event = object(value);
+  const type = String(event.type || event.eventType || "").trim();
+  const connectionId = String(event.connectionId || event.connection_id || "").trim();
+  return {
+    id: Number(event.id) || 0,
+    type: /^[a-z][a-z0-9-]{0,63}\.[A-Za-z][A-Za-z0-9]*$/.test(type) ? type : "integration.event",
+    connectionId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(connectionId) ? connectionId : "unknown",
+    providerEventId: auditIdentifier(event.providerEventId || event.provider_event_id, 512),
+    occurredAt: auditTimestamp(event.occurredAt || event.occurred_at),
+    receivedAt: auditTimestamp(event.receivedAt || event.received_at),
+    status: auditOutcome(event.status) || "received",
+    error: String(event.error || "").trim().slice(0, 240)
+  };
+}
+
+function normalizeEventRoute(value = {}) {
+  const route = object(value);
+  const connectionId = String(route.connectionId || route.connection_id || "").trim();
+  const eventType = String(route.eventType || route.event_type || "").trim();
+  const role = auditRole(route.role);
+  return {
+    id: auditIdentifier(route.id, 128),
+    connectionId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(connectionId) ? connectionId : "unknown",
+    eventType: /^[a-z][a-z0-9-]{0,63}\.[A-Za-z][A-Za-z0-9]*$/.test(eventType) ? eventType : "integration.event",
+    role: role || "unknown",
+    enabled: route.enabled === true || route.enabled === 1 || route.enabled === "1" || route.enabled === "true"
   };
 }
 
@@ -1004,7 +1101,9 @@ function normalizeApproval(value = {}) {
     requestedBy: String(value.requestedBy || value.requested_by || value.role || "").trim(),
     risk: String(value.risk || value.impact || "").trim(),
     status: String(value.status || "pending").trim().toLowerCase(),
-    source: String(value.source || "").trim()
+    source: String(value.source || "").trim(),
+    runId: String(value.runId || value.run_id || ""),
+    decidedAt: value.decidedAt || value.approvedAt || value.rejectedAt || ""
   };
 }
 
@@ -1026,6 +1125,7 @@ function normalizeAudit(value = {}) {
     action: auditIdentifier(entry.action || entry.type, 80),
     toolName: auditIdentifier(entry.tool_name || entry.toolName, 120),
     outcome: auditOutcome(entry.outcome || entry.status),
+    approvalId: auditIdentifier(object(entry.approval).id, 160),
     authority: {
       decision: auditOutcome(authorization.decision || entry.decision),
       toolName: auditIdentifier(authority.tool_name || authority.toolName, 120),

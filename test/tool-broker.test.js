@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createToolBroker } from "../src/tool-broker.js";
+import { createRoleGovernance } from "../src/role-contract.js";
 
 const broker = createToolBroker({
+  governance: createRoleGovernance({ getContract: () => ({ version: 1, revision: 1, mandate: "Test document tools.", authority: { tools: ["doc.write", "doc.read"].map((name) => ({ name, impact: "internal-write" })) } }) }),
   allowlists: { writer: ["doc.write", "doc.read"], reader: ["doc.read"] },
   fallbackTools: (role, { reviewOnly = false } = {}) => (reviewOnly ? ["doc.read"] : ["doc.read", "doc.comment"]),
   extraTools: (role, { setup = false } = {}) => (role === "writer" && setup ? ["doc.configure"] : []),
@@ -45,4 +47,13 @@ test("callTool enforces the allowlist before invoking the registry implementatio
     broker.callTool({ role: "writer", toolName: "doc.configure", input: {}, registry }),
     /Lead Writer is not allowed to call doc\.configure/
   );
+});
+
+test("an allowlist alone never authorizes tool execution", async () => {
+  let called = false;
+  const bare = createToolBroker({ allowlists: { writer: ["doc.write"] } });
+  await assert.rejects(bare.callTool({ role: "writer", toolName: "doc.write", registry: {
+    "doc.write": () => { called = true; }
+  } }), /authority policy/);
+  assert.equal(called, false);
 });

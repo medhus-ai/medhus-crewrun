@@ -6,8 +6,7 @@ export function createToolBroker({
   extraTools = () => [],
   sharedTools = [],
   displayRole = (role) => String(role || "agent"),
-  // Optional v0.6 policy facade from createRoleGovernance(). Existing hosts retain their
-  // allowlist-only behavior until they deliberately supply one.
+  // A role contract is required in addition to the tool allowlist.
   governance = null
 } = {}) {
   function toolsForRole(role, options = {}) {
@@ -62,7 +61,8 @@ export function createToolBroker({
         });
       }
     }
-    if (decision && !decision.allowed) {
+    if (!decision) throw new Error("A host authority policy is required to execute tools.");
+    if (!decision.allowed) {
       await recordGovernance({ role, toolName: name, input, context, approval: effectiveApproval, data, impact, actor, runner, model, outcome: decision.decision, decision });
       if (decision.decision === "approval-required") {
         throw new Error(`${displayRole(role)} needs host approval to call ${name}`);

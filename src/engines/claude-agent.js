@@ -1,11 +1,6 @@
 import { anthropicRouteEnv, secretValueForRunner } from "../secret-store.js";
-import { claudeSubagentDefinitions, claudeSubagentToolRule, roleCapabilityProfile } from "../role-capabilities.js";
 import { emitLines } from "./utils.js";
-import { hostAllowed } from "../web.js";
-
-const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
-// Bash excluded by default: unlike file edits, a shell is not confined to the worktree and runs with the operator's full environment.
-const EXECUTE_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write"];
+import { claudeShellOptions, claudeShellEnv } from "./claude-shell.js";
 
 const EFFORT_MAP = {
   low: "low",
@@ -44,44 +39,24 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
     return { ...sdk, query: loadQuery ? await loadQuery() : sdk.query };
   });
 
-  // `tools` is a host MCP bridge (createMcpBridge); without one the turn has only file-read tools.
-  function buildOptions({ sdk, profile, workdir, systemPrompt, mode, abortController, resumeSessionId, role, capabilities, targetRoot, toolContext, tools, onToolCall, onPartialText }) {
-    const effectiveCapabilities = capabilities || roleCapabilityProfile(role, toolContext?.roleOptions || {});
-    const baseTools = mode === "execute"
-      ? (profile.allow_shell === true ? [...EXECUTE_TOOLS, "Bash"] : EXECUTE_TOOLS)
-      : READ_ONLY_TOOLS;
-    const subagentRule = claudeSubagentToolRule(effectiveCapabilities);
-    // Web access: the role spec's `web` turns on Claude's own WebFetch/WebSearch (the runner sets
-    // toolContext.nativeWeb when this engine should provide it); an allowlist is enforced with a
-    // PreToolUse hook on WebFetch, so the model cannot fetch outside it.
-    const web = toolContext?.nativeWeb ? toolContext.web : null;
-    const webTools = web ? ["WebFetch", ...(web.search ? ["WebSearch"] : [])] : [];
-    const nativeTools = [...(subagentRule ? [...baseTools, "Agent"] : baseTools), ...webTools];
+  // Without an authorized host bridge, a turn has no tools.
+  function buildOptions({ sdk, profile, workdir, systemPrompt, mode, abortController, resumeSessionId, role, capabilities, targetRoot, toolContext, tools, onToolCall, onPartialText, nativeShell }) {
+    const shell = toolContext?.shell;
+    shell?.check({ role, targetRoot });
+    const nativeTools = shell ? ["Bash"] : [];
     const mcp = tools && targetRoot ? tools.createClaudeMcp({ sdk, role, targetRoot, toolContext, onToolCall }) : null;
-    const nativeAllowedTools = [...(subagentRule ? [...baseTools, subagentRule] : baseTools), ...webTools];
-    const webHooks = web && web.allow.length ? {
-      hooks: {
-        PreToolUse: [{
-          matcher: "WebFetch",
-          hooks: [async (input) => {
-            let host = "";
-            try { host = new URL(String(input?.tool_input?.url || "")).hostname; } catch { /* unparsable → deny */ }
-            if (host && hostAllowed(host, web.allow)) return {};
-            return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `${host || "that URL"} is not in this role's web allowlist (${web.allow.join(", ")})` } };
-          }]
-        }]
-      }
-    } : {};
-    const allowedTools = mcp ? [...nativeAllowedTools, ...mcp.allowedTools] : nativeAllowedTools;
+    const allowedTools = mcp?.allowedTools || [];
     const toolInstructions = tools && targetRoot
       ? tools.claudeToolInstructions(role, { ...(toolContext || {}), targetRoot, root: targetRoot })
       : "";
     const effectiveSystemPrompt = [systemPrompt, toolInstructions].filter(Boolean).join("\n\n");
+    const authOptions = claudeAuthEnv(profile);
     // options.env replaces the subprocess env entirely, so claudeAuthEnv spreads process.env back in.
     return {
       cwd: workdir,
       model: profile.model || "sonnet",
-      ...claudeAuthEnv(profile),
+      ...authOptions,
+      ...(shell ? { env: claudeShellEnv(authOptions.env || process.env) } : {}),
       // Models without effort support (e.g. Haiku) run with the CLI default.
       ...(profile.reasoning_effort ? { effort: EFFORT_MAP[profile.reasoning_effort] || "high" } : {}),
       systemPrompt: effectiveSystemPrompt,
@@ -89,15 +64,11 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
       skills: [],
       tools: nativeTools,
       allowedTools,
-      ...(subagentRule ? {
-        agents: claudeSubagentDefinitions(effectiveCapabilities, { allowShell: profile.allow_shell === true }),
-        forwardSubagentText: true
-      } : {}),
       ...(mcp ? { mcpServers: { [mcp.serverName]: mcp.server }, strictMcpConfig: true } : {}),
-      ...webHooks,
-      // execute auto-accepts edits inside the isolated worktree; propose denies everything else without prompting.
-      permissionMode: mode === "execute" ? "acceptEdits" : "dontAsk",
+      permissionMode: "dontAsk",
+      ...(nativeShell?.options || {}),
       maxTurns: 50,
+      ...(toolContext?.maxBudgetUsd != null ? { maxBudgetUsd: toolContext.maxBudgetUsd } : {}),
       abortController,
       // Partial SDK events are useful for the live UI, but avoid the additional
       // stream traffic when no caller can render them.
@@ -109,8 +80,7 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
   return {
     id: "claude-agent",
     label: "Claude",
-    // nativeWeb "enforced": the engine's own web tools honor the role's allowlist.
-    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, nativeWeb: "enforced" },
+    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, governedToolsOnly: true },
 
     startTurn({ targetRoot, profile, workdir, role, mode, capabilities, systemPrompt, prompt, resumeSessionId, toolContext, tools, onLine, onPartialText, onStatus, onClose, onError }) {
       const abortController = new AbortController();
@@ -126,6 +96,7 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
           onStatus?.("thinking…");
           const sdk = await load();
           const query = sdk.query;
+          const nativeShell = toolContext?.shell ? claudeShellOptions(toolContext.shell, workdir) : null;
           const stream = query({
             prompt,
             options: buildOptions({
@@ -140,6 +111,7 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
               capabilities,
               targetRoot,
               toolContext,
+              nativeShell,
               tools,
               onToolCall: (toolName) => {
                 onLine?.(tools?.toolLineMarker || "[tool]");
@@ -154,6 +126,10 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
           let engineSessionId = resumeSessionId || null;
           for await (const message of stream) {
             if (message.type === "system") {
+              if (toolContext?.shell && message.subtype === "init" && message.permissionMode !== "auto") {
+                abortController.abort();
+                throw new Error("Claude native auto mode is unavailable for this runner/account. Shell access has not fallen back to another permission mode.");
+              }
               onStatus?.("session ready — waiting for the model…");
             } else if (message.type === "stream_event") {
               const event = message.event;
@@ -187,6 +163,7 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
                 }
               }
             } else if (message.type === "result") {
+              if (nativeShell) for (const denial of message.permission_denials || []) nativeShell.recordDenial(denial);
               usage = {
                 inputTokens: message.usage?.input_tokens ?? null,
                 outputTokens: message.usage?.output_tokens ?? null,

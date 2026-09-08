@@ -8,15 +8,18 @@ import { cronFromRecurrence, listSchedules, normalizeSchedule, removeSchedule, u
 import { approveSkill, proposeSkill, rejectSkill } from "../skill-proposals.js";
 import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
-import { approveAction, getActionApproval, listActionApprovals, rejectAction } from "../action-approvals.js";
 import { normalizeRoleContract } from "../role-contract.js";
 import { readAgentSpecForEditing, roleScheduledEntries } from "../role-spec.js";
 import { parseInterval, validateRoleSettings, loadRoleSettings } from "../pulse.js";
-import { createStandaloneRuntime } from "../standalone.js";
 import { renderPage } from "./shell.js";
 import { pageFromUrl } from "./navigation.js";
+import { pendingReviewCount } from "./views.js";
 import { collectModels, renderHelperDrawer, renderPartial } from "./pages.js";
 import { HELPER_ROLE } from "../console-chat.js";
+import { validateWorkspaceChange } from "../workspace-tools.js";
+import { setShellAgent } from "../shell-access.js";
+import { runnerIdForRole } from "../runner.js";
+import { resolveRunnerProfile } from "../runner-config.js";
 
 // The crewrun console is a local operator surface over one project's .crew/.
 // `operations` is optional host integration:
@@ -25,9 +28,10 @@ import { HELPER_ROLE } from "../console-chat.js";
 //   connect?: ({ targetRoot, connectorId }), disconnect?: (...),
 //   decideApproval?: ({ targetRoot, id, action })
 // }
-// It is deliberately data/action shaped rather than a product dependency. The
-// console uses the standalone local connector adapter when none is supplied.
+// The bundled host supplies durable operations. Without operations the console
+// can edit configuration, but it cannot execute work or connect providers.
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
+const RESERVED_ROLE_SLUGS = new Set(["new", HELPER_ROLE]);
 const VERSION = (() => {
   try { return JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")).version; } catch { return ""; }
 })();
@@ -37,7 +41,13 @@ function parseBody(request) {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; if (body.length > 1_000_000) request.destroy(); });
-    request.on("end", () => resolve(Object.fromEntries(new URLSearchParams(body))));
+    request.on("end", () => {
+      const params = new URLSearchParams(body);
+      const form = Object.fromEntries(params);
+      const capabilities = params.getAll("capabilities").filter(Boolean);
+      if (capabilities.length) form.capabilities = capabilities;
+      resolve(form);
+    });
     request.on("error", reject);
   });
 }
@@ -58,6 +68,7 @@ function readSpec(file) {
 }
 
 function writeSpec(file, spec) {
+  validateWorkspaceChange(`.crew/agents/${path.basename(file)}`, JSON.stringify(spec));
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(spec, null, 2) + "\n");
 }
@@ -96,15 +107,20 @@ function roleUrl(role, tab = "manage") {
 
 function roleRoute(url) {
   const segments = url.pathname.split("/").filter(Boolean);
-  if (!["agents", "roles"].includes(segments[0])) return null;
+  if (segments[0] !== "agents") return null;
   const roleTab = url.searchParams.get("tab") === "defaults" ? "defaults" : "manage";
   if (segments.length === 1) {
     const selectedRole = String(url.searchParams.get("role") || "");
-    return ROLE_SLUG.test(selectedRole) ? { view: "detail", selectedRole, roleTab } : { view: "list", selectedRole: "", roleTab: "manage" };
+    return editableRole(selectedRole) ? { view: "detail", selectedRole, roleTab } : { view: "list", selectedRole: "", roleTab: "manage" };
   }
   if (segments.length === 2 && segments[1] === "new") return { view: "create", selectedRole: "", roleTab: "manage" };
-  if (segments.length === 2 && ROLE_SLUG.test(segments[1])) return { view: "detail", selectedRole: segments[1], roleTab };
+  if (segments.length === 2 && editableRole(segments[1])) return { view: "detail", selectedRole: segments[1], roleTab };
   return null;
+}
+
+function editableRole(value) {
+  const role = String(value || "").trim();
+  return ROLE_SLUG.test(role) && !RESERVED_ROLE_SLUGS.has(role);
 }
 
 function redirectTarget(value, fallback) {
@@ -123,26 +139,21 @@ function localRedirect(value, fallback) {
 export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {} } = {}) {
   if (!targetRoot) throw new Error("createConsole requires targetRoot");
   const root = path.resolve(targetRoot);
-  const standalone = !operations && !up?.operations ? createStandaloneRuntime({ targetRoot: root, env, log }) : null;
-  operations ||= up?.operations || standalone?.operations;
+  // Browser authorities require brackets around IPv6, while Node's listen API requires the bare
+  // address. Normalize once so a private `::1` console is both reachable and origin-checked.
+  const listenHost = normalizedListenHost(host);
+  operations ||= up?.operations;
 
   async function snapshot() {
-    // The kernel's small host-local approval queue is useful even without a product host. A
-    // host snapshot may add its own queue; IDs are de-duplicated in the host's favor.
-    const coreApprovals = listActionApprovals({ targetRoot: root, env }).map((approval) => ({ ...approval, source: "crewrun" }));
     try {
       const getter = typeof operations === "function" ? operations : operations?.getSnapshot || operations?.snapshot;
       const value = typeof getter === "function" ? await getter({ targetRoot: root }) : operations;
       const hostSnapshot = value && typeof value === "object" ? value : {};
-      const merged = new Map(coreApprovals.filter((a) => !(hostSnapshot.supersededApprovalIds || []).includes(a.id)).map((approval) => [approval.id, approval]));
-      for (const approval of Array.isArray(hostSnapshot.approvals) ? hostSnapshot.approvals : []) {
-        if (approval && typeof approval === "object") merged.set(String(approval.id || ""), approval);
-      }
-      return { ...hostSnapshot, approvals: [...merged.values()] };
+      return hostSnapshot;
     } catch (error) {
       // A host dashboard integration should never take away the local role UI.
       log(`[console] host snapshot unavailable: ${error.message}`);
-      return { approvals: coreApprovals };
+      return { approvals: [] };
     }
   }
 
@@ -174,13 +185,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
   }
 
   async function handleAction(pathname, form) {
-    // Keep old console forms and bookmarks working while the operator surface
-    // calls these Scheduled tasks.
-    pathname = pathname.replace(/^\/agents(?=\/|$)/, "/roles");
-    pathname = pathname.replace(/^\/schedules(?=\/|$)/, "/scheduled");
-    if (pathname === "/roles/save") {
+    if (pathname === "/agents/shell") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
+      await (operation(["setShellAgent"]) || setShellAgent)({ targetRoot: root, role, enabled: form.enabled === "1", confirmed: form.confirmed === "1", profile: resolveRunnerProfile(runnerIdForRole(role, root)) });
+      return roleUrl(role);
+    }
+    if (pathname === "/agents/save") {
+      const role = String(form.role || "");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent spec must be a JSON object");
       roleScheduledEntries(parsed);
@@ -189,9 +202,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (problems.length) log(`[console] saved ${role}.json with validation problems: ${problems.join("; ")}`);
       return roleUrl(role);
     }
-    if (pathname === "/roles/update") {
+    if (pathname === "/agents/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const title = String(form.title || "").trim();
@@ -207,9 +220,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/behavior") {
+    if (pathname === "/agents/behavior") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const interval = String(form.heartbeat || "off").trim();
@@ -231,9 +244,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/contract") {
+    if (pathname === "/agents/contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const existing = spec.contract ? normalizeRoleContract(spec.contract, { role }) : initialContract(role, spec.title || "");
@@ -254,9 +267,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/initialize-contract") {
+    if (pathname === "/agents/initialize-contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       if (spec.contract) throw new Error(`${role} already has an agent-specific contract`);
@@ -264,9 +277,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/add") {
+    if (pathname === "/agents/add") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       if (existsSync(file)) throw new Error(`agent ${role} already exists`);
       const title = String(form.title || "").trim();
@@ -282,9 +295,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/defaults/update") {
+    if (pathname === "/agents/defaults/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = defaultsPath(root);
       const defaults = readSpec(file);
       const runner = String(form.runner || "").trim();
@@ -295,9 +308,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, defaults);
       return roleUrl(role, "defaults");
     }
-    if (pathname === "/roles/defaults/save") {
+    if (pathname === "/agents/defaults/save") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shared defaults must be a JSON object");
       if (parsed.contract != null) normalizeRoleContract(parsed.contract, { role: "" });
@@ -349,7 +362,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const next = { ...task, enabled: form.enabled === "1" };
       upsertSchedule({ targetRoot: root, schedule: next });
       await syncCalendarTask(next, task);
-      return "/scheduled";
+      return localRedirect(form.return_to, "/scheduled?tab=list");
     }
     if (pathname === "/scheduled/delete") {
       const role = String(form.role || "");
@@ -363,9 +376,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (pathname === "/scheduled/run") {
       if (!up?.scheduler?.runNow) throw new Error("run task now needs the console attached to a running crew loop");
       void Promise.resolve(up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") })).catch((error) => log(`[console] run-now failed: ${error.message}`));
-      return "/scheduled";
+      return localRedirect(form.return_to, "/scheduled?tab=list");
     }
-    if (pathname === "/proposals/decide") {
+    if (pathname === "/reviews/learning/decide") {
       const approve = form.action === "approve";
       const kind = String(form.kind || "");
       const handlers = {
@@ -376,7 +389,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const fn = handlers[kind];
       if (!fn) throw new Error("proposal kind must be skill, pref, or reflection");
       fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator", target: form.target, key: form.key, description: form.description, env });
-      return "/approvals";
+      return "/reviews?tab=learning";
     }
     if (pathname === "/skills/propose") {
       proposeSkill({
@@ -389,26 +402,29 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         evidence: String(form.evidence || ""),
         proposedBy: "operator"
       });
-      return "/approvals";
+      return "/reviews?tab=learning";
     }
-    if (pathname === "/approvals/decide") {
-      const approvalId = String(form.id || "");
-      const action = String(form.action || "").trim().toLowerCase();
-      const local = getActionApproval({ targetRoot: root, approvalId, env });
-      if (local) {
-        if (action === "approve") approveAction({ targetRoot: root, approvalId, approvedBy: "operator", env });
-        else if (action === "reject") rejectAction({ targetRoot: root, approvalId, rejectedBy: "operator", env });
-        else throw new Error("approval action must be approve or reject");
-        await operation(["afterApproval"])?.({ id: approvalId, action });
-        return "/approvals";
-      }
-      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/approvals");
+    if (pathname === "/reviews/decide") {
+      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=actions");
     }
-    if (pathname === "/connectors/connect") {
-      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), credentials: form }, "/connectors");
+    if (pathname === "/integrations/connect") {
+      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), capabilities: Array.isArray(form.capabilities) ? form.capabilities : [], credentials: form }, "/integrations");
     }
-    if (pathname === "/connectors/disconnect") {
-      return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/connectors");
+    if (pathname === "/integrations/disconnect") {
+      return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/integrations");
+    }
+    if (pathname === "/integrations/route") {
+      const [connectionId, eventType] = String(form.source || "").split("|", 2);
+      if (!connectionId || !eventType) throw new Error("Choose a connected integration event.");
+      await callOperation(["saveEventRoute", "saveRoute"], {
+        connectionId,
+        eventType,
+        role: String(form.role || ""),
+        enabled: form.enabled === "1"
+      }, "/events");
+      const data = await snapshot();
+      const connector = (data.connectors || []).find((entry) => entry.connectionId === connectionId);
+      return connector ? `/integrations?integration=${encodeURIComponent(connector.id)}&tab=rules` : "/integrations";
     }
     if (pathname === "/chats/send") {
       const role = String(form.role || "").trim();
@@ -417,8 +433,18 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       await send({ targetRoot: root, role, message: String(form.message || "") });
       return localRedirect(form.return_to, `/chats?agent=${encodeURIComponent(role)}`);
     }
-    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
-    if (pathname === "/tasks/control") return callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || "") }, "/tasks");
+    if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=workspace");
+    if (pathname === "/workspace/lifecycle") return callOperation(["toggleLifecycle"], { id: String(form.id || ""), enabled: form.enabled === "1" }, "/settings?tab=host");
+    if (pathname === "/workspace/revise") {
+      const changes = Object.keys(form).filter((key) => /^path_\d+$/.test(key)).map((key) => ({ path: form[key], content: form[key.replace("path_", "content_")] }));
+      return callOperation(["reviseWorkspace"], { id: form.id, title: form.title, changes }, "/reviews?tab=workspace");
+    }
+    if (pathname === "/tasks/answer") return callOperation(["answerQuestion"], { id: String(form.id || ""), answer: String(form.answer || "") }, "/tasks");
+    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), title: String(form.title || ""), priority: String(form.priority || "normal"), outcome: String(form.outcome || ""), criteria: String(form.criteria || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
+    if (pathname === "/tasks/control") {
+      const redirect = await callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || ""), feedback: String(form.feedback || "") }, "/tasks");
+      return form.action === "accept" ? "/reviews?tab=results" : redirect;
+    }
     if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/tasks");
     if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/tasks");
     throw new Error("unknown action");
@@ -432,7 +458,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       // The console owns local credentials and outgoing approvals. Reject browser
       // requests from another origin, including DNS rebinding onto loopback.
       const authority = request.headers.host || "";
-      const expected = `${host}:${server.address()?.port}`;
+      const expected = consoleAuthority(listenHost, server.address()?.port);
       if (authority !== expected && authority !== `localhost:${server.address()?.port}`) {
         response.writeHead(403).end("Invalid console host"); return;
       }
@@ -474,9 +500,19 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const localUrl = (value) => `${value.pathname}${value.search}`;
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
+        tab: String(url.searchParams.get("tab") || ""),
+        page: url.searchParams.get("page"),
+        pageParams: Object.fromEntries(url.searchParams),
+        calendarCount: url.searchParams.get("count"),
+        calendarFrom: url.searchParams.get("from"),
+        search: String(url.searchParams.get("q") || ""),
+        selectedReview: String(url.searchParams.get("review") || ""),
+        selectedIntegration: String(url.searchParams.get("integration") || ""),
         selectedRun: String(url.searchParams.get("run") || ""),
         canManageTasks: Boolean(operation(["enqueueTask"])),
+        canCheckDelivery: Boolean(operation(["checkDelivery"])),
         canRunNow: Boolean(up?.scheduler?.runNow),
+        calendarSyncAvailable: Boolean(operation(["syncCalendarTask", "syncScheduledTask"])),
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
         roleTab: roles?.roleTab || "manage",
@@ -489,6 +525,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         canChat,
         canConnect: Boolean(operation(["connect", "connectConnector"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
+        canManageEventRoutes: Boolean(operation(["saveEventRoute", "saveRoute"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))
           || Array.isArray(hostOperations.approvals) && hostOperations.approvals.some((approval) => approval?.source === "crewrun" && approval?.status === "pending")
       }), {
@@ -497,6 +534,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         backHref: roleSubpage ? "/agents" : page === "dashboard" ? "" : "/",
         backLabel: roleSubpage ? "Back to agents" : "Back to dashboard",
         recentChats: models.operations.chats,
+        pendingReviews: pendingReviewCount(models),
         helperContent: renderHelperDrawer(models, {
           helperOpen,
           helperChat,
@@ -513,12 +551,20 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
 
   return {
     server,
-    listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, () => {
+    listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, listenHost, () => {
       server.removeListener("error", reject);
-      standalone?.start();
-      log(`[console] http://${host}:${server.address().port}/`);
+      log(`[console] http://${consoleAuthority(listenHost, server.address().port)}/`);
       resolve(server.address().port);
     }); }),
-    close: async () => { await standalone?.close(); return new Promise((resolve) => server.close(resolve)); }
+    close: async () => new Promise((resolve) => server.close(resolve))
   };
+}
+
+function normalizedListenHost(value) {
+  const host = String(value || "127.0.0.1").trim();
+  return host === "[::1]" ? "::1" : host;
+}
+
+function consoleAuthority(host, port) {
+  return `${host === "::1" ? "[::1]" : host}:${port}`;
 }

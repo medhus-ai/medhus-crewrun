@@ -52,14 +52,9 @@ Web access is off by default. Set `"web": true` for open access, or restrict dom
 { "web": { "allow": ["docs.example.com", "*.example.org"], "search": true, "max_chars": 40000 } }
 ```
 
-Crewrun uses native web tools when the engine can honor the requested access. Otherwise it
-provides `web.fetch` and `web.search`; fetch rejects private addresses and rechecks redirects.
-A domain allowlist uses fallback tools for Codex because its native search cannot enforce it.
-This setting governs exposed web tools; it is not a network sandbox for arbitrary native commands.
+Web tools use the governed MCP bridge. Fetch rejects private addresses and rechecks redirects;
+grant the relevant tools and data authority in the agent contract as well as enabling web.
+This setting does not constrain the privileged shell agent's native commands.
 
-## Existing Roles projects
-
-Existing `.crew/roles` files, `role` fields, role-named library exports, `/roles` bookmarks,
-and `crewrun roles check` remain supported. Existing files are edited in place.
-If both directories define an agent, the `.crew/agents` definition wins. Shared defaults fall
-back to the legacy folder, and duplicate definitions do not produce duplicate schedules.
+Agent definitions must be JSON in `.crew/agents`. Markdown is context, not a
+definition; old role folders and schedule keys need [explicit migration](v6-migration.md).

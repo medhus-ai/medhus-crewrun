@@ -1,48 +1,38 @@
 # Security and storage
 
-[Documentation](README.md) / Security and storage
+The private owner console is loopback-only. Publish only the documented callback
+ingress through an explicitly configured HTTPS proxy or Funnel.
 
-Crewrun keeps project configuration separate from private operator state. The console binds to
-loopback by default. Agent permissions are checked when tools are exposed and again when invoked.
-
-## Storage locations
-
-`CREW_HOME` defaults to `~/.crew`. Project paths use `.crew` unless an embedding application
-configures another directory.
-
-| Data | Default location | Protection |
+| Data | Location | Protection |
 |---|---|---|
-| Agent specs, contracts, schedules, repository Skills and context | `<project>/.crew/` and explicitly referenced files | Project filesystem permissions and Git review |
-| Runner profiles | `~/.crew/ai-runners.json` | Operator configuration; keep credentials in the vault or environment |
-| Stored model API keys | `~/.crew/secrets.json` | Password-sealed scrypt + AES-256-GCM vault |
-| Standalone credentials, tasks, actions, receipts, and usage | `~/.crew/runtime/<project-hash>/state.sqlite` | Private operator directory; not encrypted |
+| Knowledge and agent configuration | Workspace Markdown and `.crew/` | Scoped tools; durable changes require reviewed patches |
+| Tasks, chats, exact approvals, usage | Private runtime SQLite under `CREW_HOME/runtime/` | Owner-only Unix permissions; not encrypted |
+| Integration tokens and OAuth state | Private integration SQLite | Authenticated encryption with a separate host key |
+| Model keys | Host environment or password-sealed model vault | Outside workspace and agent chat |
+| Runner profiles | `CREW_HOME/ai-runners.json` | Operator-owned SDK configuration |
 
-Private standalone directories and files use owner-only permissions on Unix. Windows relies on
-the operator account's filesystem permissions. Keep the SQLite database on a local disk;
-shared network filesystems and distributed multi-machine workers are not supported.
+`CREW_HOME` defaults to `~/.crew`. Workspace identity, not its directory name,
+selects new operational state. Old queues and credential files are not imported.
+Keep SQLite on local disk; distributed multi-machine workers are not supported.
 
-Old standalone connection files import once and remain as a backup. Imported pending actions
-need reconciliation because their earlier delivery may be unknown. Disconnecting an account
-removes its local credentials and preserves delivery history.
+Claude runs with no native tools except the explicitly selected shell agent.
+Codex uses its pinned, Linux-verified boundary and a turn-scoped authenticated MCP
+listener. Provider credentials stay in host closures, not model child processes.
+Scoped paths reject traversal and symlinks. Missing contracts fail closed. Tool bridges
+and brokers cannot run tools with an allowlist alone: a host authority policy is
+required, and existing handlers recheck authority on every call. Workspace governance
+cannot be disabled. The helper has a bounded setup-only contract.
 
-## Permissions and isolation
+The sole shell agent is a privileged exception with the service user's OS
+permissions. Native Claude auto-review can make mistakes; it is not filesystem
+isolation. Flagged commands require exact owner approval. Revocation stops future
+claims and signals an active turn, but cannot undo completed system actions.
 
-Grant only the tools and data scopes an agent needs. Slack/Gmail writes require approval;
-review changes to an agent's contract like other project configuration.
-[Permissions and approvals](governed-operations-v1.md) describes the enforcement boundary.
-
-Execute-mode turns can use dedicated Git worktrees or Docker containers. A worktree separates
-edits but is not a security sandbox. Container execution drops capabilities, restricts mounts,
-and supports network controls. Subscription credentials are not mounted into containers;
-use API authentication. See the [execution policy](host-api-v1.md#execution-policy).
-
-MCP child processes receive declared context. Configured child authentication values use a
-private file rather than the child environment. A web allowlist controls the exposed web tools;
-it does not constrain arbitrary native shell commands.
+Custom CLI engines, worktree/Docker execution policies, and serialized MCP
+credential-child transport are removed. [Workspace limits](workspaces.md).
 
 ## Installation
 
-SQLite is a required native dependency. If a prebuilt binary is unavailable, installation needs
-Python and a C++ compiler. Node 20 with Visual Studio 2026 needs npm 11.6.3 or a compatible newer
-npm; the bundled npm 10 cannot detect that compiler. Windows CI uses npm 11.6.3 and Python 3.12.
-[node-gyp build requirements](https://github.com/nodejs/node-gyp#installation).
+SQLite is a required native dependency. When a prebuilt binary is unavailable,
+installation needs Python and a C++ compiler. See
+[node-gyp requirements](https://github.com/nodejs/node-gyp#installation).

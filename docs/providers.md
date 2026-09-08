@@ -56,4 +56,4 @@ for that route.
   Ollama, LM Studio, or llama.cpp server. Compatibility depends on its protocol and tool support.
 
 Stored API keys use the encrypted operator vault. Slack and Gmail credentials use separate
-standalone storage. See [Security and storage](security.md).
+private host storage. See [Security and storage](security.md).

@@ -1,0 +1,44 @@
+{
+  "name": "@medhus-ai/crewrun-reference-host",
+  "version": "0.6.0",
+  "description": "One-owner OAuth, webhook, and governed integration host for CrewRun.",
+  "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",
+  "bugs": {
+    "url": "https://github.com/medhus-ai/medhus-crewrun/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medhus-ai/medhus-crewrun.git",
+    "directory": "packages/crewrun-reference-host"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./index.js",
+  "files": [
+    "index.js",
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "medhus-crewrun": "^0.6.0"
+  },
+  "dependencies": {
+    "@medhus-ai/crewrun-plugin-sdk": "^0.6.0",
+    "@medhus-ai/crewrun-plugin-slack": "^0.6.0",
+    "@medhus-ai/crewrun-plugin-google-workspace": "^0.6.0",
+    "@medhus-ai/crewrun-plugin-microsoft-365": "^0.6.0",
+    "@medhus-ai/crewrun-plugin-github": "^0.6.0",
+    "better-sqlite3": "^12.10.0"
+  },
+  "devDependencies": {
+    "medhus-crewrun": "file:../.."
+  }
+}

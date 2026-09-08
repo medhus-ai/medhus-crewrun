@@ -45,7 +45,7 @@ crewrun proposals approve ./my-project <proposal-id>
 crewrun proposals reject ./my-project <proposal-id>
 ```
 
-The console's **Approvals** page provides the same review flow.
+The console's **Reviews → Learning** page provides the same review flow.
 
 ## Preferences and reflections
 

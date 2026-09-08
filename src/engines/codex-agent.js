@@ -5,6 +5,8 @@ import path from "node:path";
 import { crewHome } from "../crew-dirs.js";
 import { secretValueForRunner } from "../secret-store.js";
 import { emitLines } from "./utils.js";
+import { serveLocalMcp } from "../mcp-local.js";
+import { assertCodexBoundary, codexBoundaryId, CODEX_BOUNDARY_CONFIG } from "./codex-boundary.js";
 
 const EFFORT_MAP = {
   low: "low",
@@ -20,19 +22,19 @@ const HEALTHCHECK_TIMEOUT_MS = 60_000;
 
 // Routed profiles target an OpenAI-compatible endpoint (e.g. vLLM) with their own
 // key; without base_url the ambient subscription/env auth stays untouched.
-function codexClientOptions(profile, mcpConfig = {}, capabilities = null) {
+function codexClientOptions(profile, mcpConfig = {}, capabilities = null, boundaryId = null) {
   const auth = profile?.auth || "auto";
   let apiKey = profile?.base_url ? secretValueForRunner(profile) : "";
   if (auth === "api-key") {
     apiKey = secretValueForRunner(profile) || process.env.OPENAI_API_KEY || "";
     if (!apiKey) throw new Error(`runner ${profile.id} is set to API-key auth but no OpenAI API key is available; store one or switch the profile to subscription auth`);
   }
-  const allowSubagents = capabilities?.subagents?.allowed === true;
+  const allowSubagents = false;
   return {
     ...(profile?.base_url ? { baseUrl: profile.base_url } : {}),
     ...(apiKey ? { apiKey } : {}),
     // Subscription-forced profiles drop the ambient key so ChatGPT login auth is used.
-    env: codexRuntimeEnv(process.env, { dropApiKey: auth === "subscription" }),
+    env: codexRuntimeEnv(process.env, { dropApiKey: auth === "subscription", boundaryId }),
     config: {
       features: {
         hooks: false,
@@ -45,12 +47,13 @@ function codexClientOptions(profile, mcpConfig = {}, capabilities = null) {
       memories: { use_memories: false, generate_memories: false },
       project_doc_max_bytes: 0,
       project_doc_fallback_filenames: [],
-      ...mcpConfig
+      ...mcpConfig,
+      ...(boundaryId ? CODEX_BOUNDARY_CONFIG : {})
     }
   };
 }
 
-function codexRuntimeEnv(env = process.env, { dropApiKey = false } = {}) {
+function codexRuntimeEnv(env = process.env, { dropApiKey = false, boundaryId = null } = {}) {
   const allowed = [
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
     "LANG", "TERM", "CODEX_HOME", "OPENAI_API_KEY", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -63,15 +66,16 @@ function codexRuntimeEnv(env = process.env, { dropApiKey = false } = {}) {
   const ghConfig = path.join(os.tmpdir(), "crew-provider-no-gh-auth");
   try { mkdirSync(ghConfig, { recursive: true, mode: 0o700 }); } catch { /* best effort */ }
   out.GH_CONFIG_DIR = ghConfig;
-  out.CODEX_HOME = isolatedCodexHome(env);
+  out.CODEX_HOME = isolatedCodexHome(env, boundaryId);
+  if (boundaryId) out.HOME = out.CODEX_HOME;
   return out;
 }
 
-function isolatedCodexHome(env) {
+function isolatedCodexHome(env, boundaryId = null) {
   // Codex creates trusted helper aliases (including codex-linux-sandbox) under
   // CODEX_HOME. It intentionally refuses to create them below a temporary
   // directory, so keep the isolated runtime under the crew's secured home.
-  const managed = path.join(crewHome(env), "provider-runtime", "codex");
+  const managed = path.join(crewHome(env), "provider-runtime", boundaryId ? `codex-governed/${boundaryId}` : "codex");
   const source = path.resolve(env.CODEX_HOME || path.join(env.HOME || os.homedir(), ".codex"));
   try {
     mkdirSync(managed, { recursive: true, mode: 0o700 });
@@ -83,7 +87,8 @@ function isolatedCodexHome(env) {
       chmodSync(managedAuth, 0o600);
     }
     return managed;
-  } catch {
+  } catch (error) {
+    if (boundaryId) throw new Error(`Cannot prepare private governed Codex state: ${error.message}`);
     // API-key profiles remain usable even when the isolated home cannot be prepared.
     return managed;
   }
@@ -93,15 +98,10 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
   const load = loadCodex || (async () => (await import("@openai/codex-sdk")).Codex);
 
   function threadOptions({ profile, workdir, mode, toolContext }) {
-    // Codex's own web search rides the role spec's `web` (runner sets nativeWeb when Codex should
-    // provide it — only for open access, since Codex cannot enforce a host allowlist).
-    const nativeWeb = Boolean(toolContext?.nativeWeb && toolContext?.web);
     return {
       workingDirectory: workdir,
       skipGitRepoCheck: true,
-      webSearchMode: nativeWeb && toolContext.web.search !== false ? "live" : "disabled",
-      // propose: sandbox blocks all writes; execute: writes allowed inside the isolated worktree only.
-      sandboxMode: mode === "execute" ? "workspace-write" : "read-only",
+      webSearchMode: "disabled",
       ...(profile.model ? { model: profile.model } : {}),
       ...(EFFORT_MAP[profile.reasoning_effort]
         ? { modelReasoningEffort: EFFORT_MAP[profile.reasoning_effort] }
@@ -112,32 +112,40 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
   return {
     id: "codex-agent",
     label: "Codex",
-    // nativeWeb "open": Codex has web search but no per-host allowlist; allowlisted roles use the kernel tools.
-    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, nativeWeb: "open" },
+    capabilities: { agentic: true, streamEvents: true, reportsUsage: true, subscriptionAuth: true, governedToolsOnly: true },
 
-    // `tools` is a host MCP bridge; it is served to Codex through the host's stdio entry script.
+    // Every turn uses the verified boundary and the live, turn-scoped host bridge.
     startTurn({ targetRoot, profile, workdir, role, mode, capabilities, systemPrompt, prompt, resumeSessionId, toolContext, tools, onLine, onPartialText, onStatus, onClose, onError }) {
       const abortController = new AbortController();
       const effectiveTargetRoot = toolContext?.targetRoot || targetRoot || null;
       const effectiveToolContext = effectiveTargetRoot
         ? { ...(toolContext || {}), targetRoot: effectiveTargetRoot, root: effectiveTargetRoot, role }
         : (toolContext || {});
-      const mcp = tools && effectiveTargetRoot
-        ? tools.codexMcpConfig({ role, targetRoot: effectiveTargetRoot, toolContext: effectiveToolContext })
-        : NO_TOOLS;
+      const governed = true;
+      let mcp = NO_TOOLS;
       let closed = false;
-      const close = (payload) => {
+      const close = async (payload) => {
         if (closed) return;
         closed = true;
-        mcp.cleanup?.();
-        onClose?.({ ...payload, tools: { available: mcp.available, transport: mcp.transport, mcp: mcp.mcp } });
+        try { await mcp.cleanup?.(); }
+        finally { onClose?.({ ...payload, tools: { available: mcp.available, transport: mcp.transport, mcp: mcp.mcp } }); }
       };
 
       (async () => {
         try {
+          if (governed) {
+            assertCodexBoundary();
+            if (!effectiveTargetRoot) throw new Error("Governed Codex requires a workspace identity.");
+            if (toolContext?.maxBudgetUsd != null) throw new Error("Codex cannot enforce a hard per-run USD limit. Use run-count limits or a budget-enforcing host.");
+            if (tools?.enabled(effectiveToolContext)) mcp = await serveLocalMcp({ bridge: tools, role, toolContext: effectiveToolContext });
+          }
+          if (abortController.signal.aborted) throw new Error("Codex turn cancelled.");
           onStatus?.("thinking…");
           const Codex = await load();
-          const codex = new Codex(codexClientOptions(profile, mcp.available ? mcp.config : {}, capabilities));
+          const clientOptions = codexClientOptions(profile, mcp.available ? mcp.config : {}, capabilities,
+            governed ? codexBoundaryId(effectiveTargetRoot, role, profile) : null);
+          if (mcp.env) Object.assign(clientOptions.env, mcp.env);
+          const codex = new Codex(clientOptions);
           const options = threadOptions({ profile, workdir, mode, toolContext: effectiveToolContext });
           const thread = resumeSessionId ? codex.resumeThread(resumeSessionId, options) : codex.startThread(options);
           // Codex has no separate system-prompt channel; prepend it on the first turn only.
@@ -203,10 +211,10 @@ export function createCodexAgentEngine({ loadCodex } = {}) {
             }
           }
 
-          close({ code: failure ? 1 : 0, stderr: failure, usage, engineSessionId });
+          await close({ code: failure ? 1 : 0, stderr: failure, usage, engineSessionId });
         } catch (error) {
           onError?.(error);
-          close({ code: 1, stderr: error?.message || String(error), usage: null, engineSessionId: null });
+          await close({ code: 1, stderr: error?.message || String(error), usage: null, engineSessionId: null });
         }
       })();
 

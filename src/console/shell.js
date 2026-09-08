@@ -75,7 +75,21 @@ h2 { margin: 0; color: #15171a; font-size: 14px; font-weight: 570; letter-spacin
 h3 { margin: 0; color: #15171a; font-size: 13px; font-weight: 570; }
 p { margin: 0; }
 p.sub { max-width: 760px; margin-top: 6px; color: #5d6571; font-size: 13px; }
-.agent-tabs { display: flex; gap: 18px; margin-top: 15px; border-bottom: 1px solid var(--line); }
+.agent-tabs { display: flex; gap: 18px; margin: 15px 0 20px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.agent-tabs > a { white-space: nowrap; }
+.task-list { display: grid; gap: 12px; }
+.task-list > .card { margin: 0; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
+.compact-select { width: auto; min-width: 58px; padding: 4px 8px; }
+button.state-toggle { display: inline-flex; width: 34px; min-height: 20px; padding: 2px; border: 0; border-radius: 20px; background: #c6c9cd; }
+button.state-toggle::before { content: ""; width: 16px; height: 16px; border-radius: 50%; background: white; margin-right: auto; }
+button.state-toggle[aria-checked="true"] { background: var(--green); }
+button.state-toggle[aria-checked="true"]::before { margin-right: 0; margin-left: auto; }
+button.state-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.shell-access h3 { color: var(--red, #c0392b); }
+.shell-access button.state-toggle[aria-checked="true"] { background: var(--red, #c0392b); }
+.summary-grid > a { text-decoration: none; }
+.summary-grid > a:hover { outline: 1px solid var(--line); border-radius: 12px; }
 .agent-tab { display: inline-flex; padding: 0 1px 8px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 12px; font-weight: 560; text-decoration: none; }
 .agent-tab:hover { color: var(--text); }
 .agent-tab.active { border-color: #1b1c1e; color: #171719; }
@@ -164,8 +178,8 @@ summary { color: var(--muted); cursor: pointer; font-size: 12px; }
 .list-row .secondary { margin-top: 2px; color: var(--faint); font-size: 11px; }
 .connector-grid { display: grid; gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .connector-card { position: relative; display: flex; min-height: 91px; flex-direction: column; padding: 16px 130px 16px 17px; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; background: transparent; }
-.connector-card.local-setup { padding: 17px; }
-.connector-card.local-setup .card-footer { position: static; display: block; padding-top: 10px; }
+.connector-card.has-chooser { padding-right: 17px; }
+.connector-card.has-chooser .card-footer { position: static; display: block; margin-top: 12px; padding: 0; }
 .connector-card:last-child { border-bottom: 0; }
 .connector-card .card-footer { position: absolute; top: 25px; right: 16px; margin: 0; padding: 0; }
 .connector-icon { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid #e2e2e2; border-radius: 7px; background: #f8f8f8; color: #38495f; font-size: 11px; font-weight: 750; }
@@ -286,16 +300,16 @@ const RESIZER_SCRIPT = `
 })();
 `;
 
-export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "", recentChats = [], helperContent = "" } = {}) {
+export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "", recentChats = [], pendingReviews = 0, helperContent = "" } = {}) {
   const sidebarLink = ({ id, label, icon: iconName }) =>
-    `<a href="/${id === "dashboard" ? "" : id}" class="sidebar-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span></a>`;
+    `<a href="/${id === "dashboard" ? "" : id}" class="sidebar-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span>${id === "reviews" && pendingReviews ? `<span class="pill" aria-label="${esc(pendingReviews)} pending reviews">${esc(pendingReviews)}</span>` : ""}</a>`;
   const chats = Array.isArray(recentChats)
     ? recentChats.filter((chat) => /^[a-z][a-z0-9-]{0,79}$/.test(String(chat?.role || "")) && chat.purpose !== "console-helper").slice(0, 6)
     : [];
   const groups = ["primary", "operations", "account"].map((group) => {
     const entries = PAGES.filter((entry) => entry.group === group);
     const links = group === "account"
-      ? `${entries.filter((entry) => entry.id !== "usage").map(sidebarLink).join("")}${chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat with ${esc(chat.role)}">${icon("chat")}<span class="nav-text">${esc(chat.role)}</span></a>`).join("")}</div>` : ""}${entries.filter((entry) => entry.id === "usage").map(sidebarLink).join("")}`
+      ? `${entries.filter((entry) => entry.id === "chats").map(sidebarLink).join("")}${chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat with ${esc(chat.role)}">${icon("chat")}<span class="nav-text">${esc(chat.role)}</span></a>`).join("")}</div>` : ""}${entries.filter((entry) => entry.id !== "chats").map(sidebarLink).join("")}`
       : entries.map(sidebarLink).join("");
     return links ? `<div class="nav-group">${links}</div>` : "";
   }).join("");

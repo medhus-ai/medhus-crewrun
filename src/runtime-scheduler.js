@@ -1,8 +1,8 @@
-import { listSchedules, nextRun, readScheduleState } from "./schedules.js";
-import { loadRoleSettings, readHeartbeatState } from "./pulse.js";
+import { listSchedules, nextRun } from "./schedules.js";
+import { loadRoleSettings } from "./pulse.js";
 
 // Persist a trigger cursor and its queued task together. Definitions stay human-editable;
-// concurrent processes share cursors and claims through the standalone database.
+// concurrent processes share cursors and claims through the runtime database.
 export function createRuntimeScheduler({ targetRoot, runtime, env, now = () => new Date(), log = () => {} }) {
   const { store } = runtime;
   let timer;
@@ -12,22 +12,20 @@ export function createRuntimeScheduler({ targetRoot, runtime, env, now = () => n
       const queued = [];
       const last = (key) => store.db.prepare("SELECT fired_at FROM runtime_triggers WHERE key=?").get(key)?.fired_at;
       const active = (agent, workflow) => store.db.prepare("SELECT 1 FROM runtime_runs WHERE agent=? AND workflow=? AND status IN ('queued','running','interrupted','paused') LIMIT 1").get(agent, workflow);
-      const legacy = readScheduleState({ targetRoot, env });
       for (const schedule of listSchedules({ targetRoot })) {
         const key = `schedule:${schedule.role}:${schedule.id}`;
-        const previous = last(key) ?? Date.parse(legacy.runs?.[`${schedule.role}:${schedule.id}`]?.lastRunAt || legacy.runs?.[schedule.id]?.lastRunAt || "");
-        const due = nextRun(schedule.cron, new Date(Number.isFinite(previous) ? previous : at - 60_000));
+        const previous = last(key);
+        const due = nextRun(schedule.cron, new Date(Number.isFinite(previous) ? previous : at - 60_000), { timezone: schedule.timezone });
         if (!schedule.enabled || !due || due.getTime() > at || active(schedule.role, key)) continue;
         queued.push(store.schedule(key, at, { agent: schedule.role, prompt: schedule.prompt, workflow: key }));
       }
-      const oldHeartbeats = readHeartbeatState(targetRoot, env);
       for (const setting of Object.values(loadRoleSettings(targetRoot))) {
         const heartbeat = setting.heartbeat;
         if (!heartbeat) continue;
         const interval = heartbeat.intervalSeconds;
         if (!Number.isFinite(interval) || interval <= 0) continue;
         const key = `heartbeat:${setting.role}`;
-        const previous = last(key) ?? Date.parse(oldHeartbeats.roles?.[setting.role]?.lastRunAt || "");
+        const previous = last(key);
         if (Number.isFinite(previous) && at - previous < interval * 1000 || active(setting.role, key)) continue;
         const cap = heartbeat.budgetUsdPerDay;
         if (cap != null) {

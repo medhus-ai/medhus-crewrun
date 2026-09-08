@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { crewHome } from "./crew-dirs.js";
+import { workspaceIdentity } from "./workspace-manifest.js";
 
 // A role contract is intentionally small: it describes the authority the host gives a role,
 // while the role prompt remains ordinary reviewed prose.  `version` is the schema version and
@@ -16,10 +17,11 @@ const TOOL_NAME = /^[a-z][A-Za-z0-9_.:-]{0,119}$/;
 const DATA_SCOPE = /^[a-z][a-z0-9_.:/*-]{0,159}$/;
 const MAX_LIST = 100;
 const IMPACT_ORDER = new Map(ACTION_IMPACTS.map((impact, index) => [impact, index]));
+const AUDIT_LOCK_WAIT_MS = 5_000;
+const AUDIT_LOCK_STALE_MS = 30_000;
+const AUDIT_LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
-// Normalizes a JSON-safe, reviewable role contract. `null` deliberately remains null: old role
-// specs stay legacy until a host or user adds a contract, rather than silently receiving a broad
-// default authority.
+// Unconfigured agents keep a null contract and fail closed; no broad default authority.
 export function normalizeRoleContract(value, { role = "" } = {}) {
   if (value == null) return null;
   if (!isObject(value)) throw new Error("role contract must be an object");
@@ -87,7 +89,7 @@ export function summarizeRoleContract(contract, { role = "" } = {}) {
   if (!normalized) {
     return freeze({
       role: normalizeRole(role),
-      status: "legacy",
+      status: "unconfigured",
       version: null,
       revision: null,
       fingerprint: null,
@@ -149,20 +151,19 @@ export function roleContractFingerprint(contract) {
 
 // Evaluates the authority for one host action. A connector supplies an action's actual impact
 // and data references; lowering either below a contract declaration never lowers the decision.
-// `requireContract` lets a v0.6 host deny legacy roles while preserving the older opt-in host API.
+// Missing contracts always fail closed in v6.
 export function evaluateRoleAction(contract, {
   toolName,
   impact,
   data,
   approval,
-  requireContract = false
 } = {}) {
   const name = normalizeToolName(toolName, { required: false });
   if (!contract) {
     return freeze({
-      allowed: !requireContract,
-      decision: requireContract ? "denied" : "legacy",
-      reason: requireContract ? "a governed role contract is required" : "role has no governed contract",
+      allowed: false,
+      decision: "denied",
+      reason: "a governed role contract is required",
       tool_name: name,
       impact: normalizeImpact(impact, { fallback: "external-write" }),
       approval_required: false,
@@ -236,16 +237,15 @@ export function evaluateRoleAction(contract, {
 export function evaluateRoleHandoff(contract, {
   direction = "send",
   role,
-  requireContract = false
 } = {}) {
   const peer = normalizeRole(role);
   const side = String(direction || "send").trim().toLowerCase();
   if (side !== "send" && side !== "receive") throw new Error("handoff direction must be send or receive");
   if (!contract) {
     return freeze({
-      allowed: !requireContract,
-      decision: requireContract ? "denied" : "legacy",
-      reason: requireContract ? "a governed role contract is required" : "role has no governed contract",
+      allowed: false,
+      decision: "denied",
+      reason: "a governed role contract is required",
       direction: side,
       role: peer,
       contract_version: null,
@@ -272,7 +272,6 @@ export function evaluateRoleHandoff(contract, {
 export function createRoleGovernance({
   contracts = {},
   getContract = null,
-  requireContracts = false,
   requestApproval = null,
   audit = null,
   targetRoot = "",
@@ -285,14 +284,12 @@ export function createRoleGovernance({
   };
   const authorizeAction = ({ role, ...action } = {}) => evaluateRoleAction(contractFor(role), {
     ...action,
-    requireContract: action.requireContract ?? requireContracts
   });
   // `role` is always the acting role, matching authorizeAction. `peerRole` is the other end
   // of the handoff: use it as the recipient for send or the sender for receive.
-  const authorizeHandoff = ({ role, peerRole, direction = "send", requireContract, ...handoff } = {}) => evaluateRoleHandoff(contractFor(role), {
+  const authorizeHandoff = ({ role, peerRole, direction = "send", ...handoff } = {}) => evaluateRoleHandoff(contractFor(role), {
     direction,
     role: peerRole ?? handoff.peer ?? (direction === "send" ? handoff.recipientRole : handoff.senderRole),
-    requireContract: requireContract ?? requireContracts
   });
   const recordAction = (record = {}) => {
     if (!actionAudit) return null;
@@ -311,10 +308,10 @@ export function createRoleGovernance({
 }
 
 // JSONL is append-only and tamper-evident: every record includes the previous record's hash.
-// Hosts with multiple writers should serialize append operations through their host DB/queue,
-// just as they do schedule claiming. No raw tool input or output is retained; only digests are.
+// A small local file lock serializes read-head/append across independently started hosts, just as
+// the runtime store serializes schedule claims. No raw tool input or output is retained; only digests are.
 export function actionAuditPath(targetRoot, env = process.env) {
-  const key = createHash("sha1").update(path.resolve(targetRoot || process.cwd())).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(workspaceIdentity(targetRoot || process.cwd())).digest("hex").slice(0, 16);
   return path.join(crewHome(env), "audit", `${key}.jsonl`);
 }
 
@@ -323,60 +320,65 @@ export function createActionAuditLog({ targetRoot, file, env = process.env, now 
   if (!auditFile) throw new Error("createActionAuditLog requires targetRoot or file");
 
   function append(record = {}) {
-    const previous = readLastAuditRecord(auditFile);
-    const contract = record.contract == null ? null : normalizeRoleContract(record.contract, { role: record.role || record.contract.role || "" });
-    const timestamp = isoTimestamp(now());
-    const entry = {
-      version: 1,
-      id: `action-${String(createId()).replace(/^action-/, "")}`,
-      ...((record.operation_id ?? record.operationId) ? { operation_id: compactText(record.operation_id ?? record.operationId, 160) } : {}),
-      at: timestamp,
-      role: normalizeRole(record.role || contract?.role),
-      actor: compactText(record.actor, 120),
-      action: compactText(record.action || "tool", 80),
-      tool_name: normalizeToolName(record.toolName ?? record.tool_name, { required: false }),
-      outcome: normalizeOutcome(record.outcome),
-      authorization: summarizeAuthorization(record.decision, contract),
-      runner: compactText(record.runner ?? record.runner_id, 160),
-      model: compactText(record.model, 160),
-      data: safeData(record.data),
-      budget: contract?.budget || normalizeBudget(record.budget),
-      approval: summarizeApproval(record.approval),
-      ...(record.input !== undefined ? { input_hash: digestValue(record.input) } : {}),
-      ...(record.output !== undefined ? { output_hash: digestValue(record.output) } : {}),
-      ...(record.error ? { error: compactText(record.error, 500) } : {}),
-      previous_hash: previous?.hash || null
-    };
-    entry.hash = auditHash(entry);
-    mkdirSync(path.dirname(auditFile), { recursive: true, mode: 0o700 });
-    appendFileSync(auditFile, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
-    return freeze(entry);
+    return withAuditFileLock(auditFile, () => {
+      const previous = readLastAuditRecord(auditFile);
+      const contract = record.contract == null ? null : normalizeRoleContract(record.contract, { role: record.role || record.contract.role || "" });
+      const timestamp = isoTimestamp(now());
+      const entry = {
+        version: 1,
+        id: `action-${String(createId()).replace(/^action-/, "")}`,
+        ...((record.operation_id ?? record.operationId) ? { operation_id: compactText(record.operation_id ?? record.operationId, 160) } : {}),
+        at: timestamp,
+        role: normalizeRole(record.role || contract?.role),
+        actor: compactText(record.actor, 120),
+        action: compactText(record.action || "tool", 80),
+        tool_name: normalizeToolName(record.toolName ?? record.tool_name, { required: false }),
+        outcome: normalizeOutcome(record.outcome),
+        authorization: summarizeAuthorization(record.decision, contract),
+        runner: compactText(record.runner ?? record.runner_id, 160),
+        model: compactText(record.model, 160),
+        data: safeData(record.data),
+        budget: contract?.budget || normalizeBudget(record.budget),
+        approval: summarizeApproval(record.approval),
+        ...(record.input !== undefined ? { input_hash: digestValue(record.input) } : {}),
+        ...(record.output !== undefined ? { output_hash: digestValue(record.output) } : {}),
+        ...(record.error ? { error: compactText(record.error, 500) } : {}),
+        previous_hash: previous?.hash || null
+      };
+      entry.hash = auditHash(entry);
+      appendFileSync(auditFile, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
+      return freeze(entry);
+    });
   }
 
   function list({ limit = 100 } = {}) {
-    const records = readAuditRecords(auditFile);
-    const count = Math.max(1, Math.min(1_000, Number(limit) || 100));
-    return records.slice(-count).map((entry) => freeze(entry));
+    return withAuditFileLock(auditFile, () => {
+      const records = readAuditRecords(auditFile);
+      const count = Math.max(1, Math.min(1_000, Number(limit) || 100));
+      return records.slice(-count).map((entry) => freeze(entry));
+    });
   }
 
   function verify() {
-    let records;
-    try {
-      records = readAuditRecords(auditFile);
-    } catch {
-      return { valid: false, records: 0, error: "audit log contains an invalid record" };
-    }
-    let previousHash = null;
-    const ids = new Set();
-    for (let index = 0; index < records.length; index += 1) {
-      const entry = records[index];
-      if (!entry?.hash || entry.previous_hash !== previousHash || entry.hash !== auditHash(entry) || ids.has(entry.id)) {
-        return { valid: false, records: records.length, error: `audit chain failed at record ${index + 1}` };
+    return withAuditFileLock(auditFile, () => {
+      let records;
+      try {
+        records = readAuditRecords(auditFile);
+      } catch {
+        return { valid: false, records: 0, error: "audit log contains an invalid record" };
       }
-      ids.add(entry.id);
-      previousHash = entry.hash;
-    }
-    return { valid: true, records: records.length, head: previousHash };
+      let previousHash = null;
+      const ids = new Set();
+      for (let index = 0; index < records.length; index += 1) {
+        const entry = records[index];
+        if (!entry?.hash || entry.previous_hash !== previousHash || entry.hash !== auditHash(entry) || ids.has(entry.id)) {
+          return { valid: false, records: records.length, error: `audit chain failed at record ${index + 1}` };
+        }
+        ids.add(entry.id);
+        previousHash = entry.hash;
+      }
+      return { valid: true, records: records.length, head: previousHash };
+    });
   }
 
   return { file: auditFile, append, list, verify };
@@ -499,9 +501,9 @@ function hasDataScopes(data) {
   return Boolean(data?.read?.length || data?.write?.length);
 }
 
-function scopeAllows(scopes, value) {
+export function scopeAllows(scopes, value) {
   return (scopes || []).some((scope) => scope === "*" || scope === value
-    || ((scope.endsWith(".*") || scope.endsWith(":*")) && value.startsWith(scope.slice(0, -1))));
+    || ((scope.endsWith(".*") || scope.endsWith(":*") || scope.endsWith("/*")) && value.startsWith(scope.slice(0, -1))));
 }
 
 function normalizeScopes(value, label) {
@@ -662,6 +664,31 @@ function readLastAuditRecord(file) {
 function readAuditRecords(file) {
   if (!existsSync(file)) return [];
   return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+function withAuditFileLock(file, work) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + AUDIT_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const descriptor = openSync(lock, "wx", 0o600);
+      closeSync(descriptor);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > AUDIT_LOCK_STALE_MS) rmSync(lock, { force: true });
+      } catch { /* a competing writer released or refreshed the lock */ }
+      if (Date.now() >= deadline) throw new Error("timed out waiting for the action audit log");
+      Atomics.wait(AUDIT_LOCK_SLEEP, 0, 0, 10);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    try { rmSync(lock, { force: true }); } catch { /* best-effort cleanup; stale locks are recovered */ }
+  }
 }
 
 function auditHash(entry) {

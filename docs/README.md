@@ -14,9 +14,12 @@ Start with [Getting started](getting-started.md). Existing installations should 
 | [Providers](providers.md) | Runner profiles, local sign-ins, and API keys |
 | [Integrations](integrations.md) | Connect accounts, grant actions, review outgoing messages, and add host gateways |
 | [Hosted integration reference host](reference-host.md) | Browser OAuth, signed webhooks, event routing, and one-owner Funnel deployment |
+| [Integration plugins](integration-plugins.md) | Private app setup, capability limits, pinned installation, scaffolding and contract tests |
+| [Tailscale HTTPS setup](tailscale-setup.md) | Recommended public callbacks, private console, verification and rollback |
 | [Tasks and recovery](runtime-recovery.md) | Results, receipts, pause/cancel, retries, and usage |
 | [Scheduling](scheduling.md) | Recurring tasks, check-ins, hooks, and handoffs |
 | [Skills and context](learning.md) | Save useful procedures and preferences; review optional reflections |
+| [Workspace knowledge](workspace-knowledge.md) | Scoped QMD search, Docling document reads, local setup and isolation |
 | [Security and storage](security.md) | Credentials, permissions, isolation, and local state |
 | [Capabilities and limits](state.md) | What is supported today |
 

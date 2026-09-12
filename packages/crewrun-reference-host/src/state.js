@@ -38,6 +38,13 @@ export function createIntegrationState({ targetRoot, vaultKey, env = process.env
   db.pragma("synchronous = FULL");
   db.pragma("foreign_keys = ON");
   db.exec(`
+    CREATE TABLE IF NOT EXISTS integration_app_config (
+      plugin_id TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS integration_connection_checks (
+      connection_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, checked_at INTEGER NOT NULL,
+      PRIMARY KEY(connection_id,kind)
+    );
     CREATE TABLE IF NOT EXISTS integration_connections (
       id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL, status TEXT NOT NULL,
       account TEXT NOT NULL DEFAULT '{}', scopes TEXT NOT NULL DEFAULT '[]',
@@ -94,7 +101,34 @@ export function createIntegrationState({ targetRoot, vaultKey, env = process.env
   `);
   const transaction = (fn) => db.transaction(fn).immediate();
 
-  function issueOAuthState({ pluginId, capabilities = [], returnPath = "/connectors", verifier, ttlMs = 10 * 60_000 } = {}) {
+  function getAppConfig(pluginId) {
+    assertPlugin(pluginId);
+    const row = db.prepare("SELECT ciphertext FROM integration_app_config WHERE plugin_id=?").get(pluginId);
+    return row ? open(row.ciphertext, key, encryptionContext("app-config", pluginId)) : {};
+  }
+
+  function connectionCheck(connectionId, kind, status) {
+    assertConnection(connectionId);
+    if (status != null) {
+      if (!["healthy", "check failed", "setup started", "setup complete", "setup failed"].includes(status)) throw new Error("Invalid account check status.");
+      db.prepare("INSERT INTO integration_connection_checks VALUES (?,?,?,?) ON CONFLICT(connection_id,kind) DO UPDATE SET status=excluded.status,checked_at=excluded.checked_at")
+        .run(connectionId, kind, status, now());
+    }
+    const row = db.prepare("SELECT status,checked_at FROM integration_connection_checks WHERE connection_id=? AND kind=?").get(connectionId, kind);
+    return row ? { status: row.status, checkedAt: row.checked_at } : { status: "not checked", checkedAt: null };
+  }
+
+  function saveAppConfig(pluginId, patch) {
+    assertPlugin(pluginId);
+    return transaction(() => {
+      const config = { ...getAppConfig(pluginId), ...patch };
+      db.prepare("INSERT INTO integration_app_config VALUES (?,?,?) ON CONFLICT(plugin_id) DO UPDATE SET ciphertext=excluded.ciphertext,updated_at=excluded.updated_at")
+        .run(pluginId, seal(config, key, encryptionContext("app-config", pluginId)), now());
+      db.prepare("DELETE FROM integration_oauth_states WHERE plugin_id=?").run(pluginId);
+    });
+  }
+
+  function issueOAuthState({ pluginId, capabilities = [], returnPath = "/integrations", verifier, ttlMs = 10 * 60_000 } = {}) {
     assertPlugin(pluginId);
     if (!verifier || typeof verifier !== "string") throw new Error("OAuth PKCE verifier is required");
     const state = crypto.randomBytes(32).toString("base64url");
@@ -367,7 +401,7 @@ export function createIntegrationState({ targetRoot, vaultKey, env = process.env
 
   function close() { db.close(); }
   return {
-    db, file, issueOAuthState, consumeOAuthState, purgeExpiredOAuthStates,
+    db, file, getAppConfig, saveAppConfig, accountCheck: (id, status) => connectionCheck(id, "account", status), eventSetup: (id, status) => connectionCheck(id, "events", status), issueOAuthState, consumeOAuthState, purgeExpiredOAuthStates,
     saveConnection, getConnection, listConnections, findConnections, disconnectConnection,
     claimConnectionLease, releaseConnectionLease,
     upsertSubscription, getSubscription, subscriptionSecretById, getSubscriptionSecret, listSubscriptions, subscriptionsDue, claimSubscriptionsDue, releaseSubscriptionLease,

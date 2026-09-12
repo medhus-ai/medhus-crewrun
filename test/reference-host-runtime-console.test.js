@@ -211,7 +211,7 @@ test("the hosted console does not offer Slack or Google consent before their OAu
   for (const id of ["slack", "google-workspace"]) {
     const connector = connectors.find((entry) => entry.id === id);
     assert.equal(connector.configured, false);
-    assert.match(connector.setupMessage, /client ID and client secret/i);
+    assert.match(connector.setupMessage, /Set up this provider app/i);
   }
 });
 
@@ -295,6 +295,7 @@ test("a durable provider lease prevents two reference-host processes from replac
       async exchangeCode({ code }) {
         await new Promise((resolve) => setImmediate(resolve));
         exchanges += 1;
+        if (exchanges === 1) { signalFirstSubscription(); await holdFirstSubscription; }
         return {
           account: { id: `account-${code}`, label: `Account ${code}` },
           credentials: { accessToken: `private-${code}` }, scopes: ["messages.read"]
@@ -588,7 +589,9 @@ test("the hosted console renders actual plugin cards and the event inbox, not le
   const models = collectModels(root, { knownEvents: host.knownEvents, operations: await host.operations.getSnapshot() });
   const connectors = renderPartial("integrations", models, { canConnect: true, canDisconnect: true });
   for (const label of ["Slack", "Google Workspace", "Microsoft 365", "GitHub"]) assert.match(connectors, new RegExp(label));
-  assert.match(connectors, /Choose access/, "host plugin capabilities use the OAuth access chooser");
+  assert.match(connectors, /Connect Google Workspace/, "the inventory has visible connection actions");
+  const detail = renderPartial("integrations", models, { canConnect: true, selectedIntegration: "google-workspace" });
+  assert.match(detail, /Choose access/, "capabilities are chosen on the connection page");
   assert.doesNotMatch(connectors, /WhatsApp Business|Google Calendar/, "host inventory replaces old standalone gateway cards");
   assert.doesNotMatch(connectors, /slack-client-secret-never-public|slack-access-token-never-public/);
 

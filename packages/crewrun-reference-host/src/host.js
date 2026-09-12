@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import { loadRoleSettings } from "medhus-crewrun/pulse";
 import { LIFECYCLE_EVENTS, readWorkspace } from "medhus-crewrun/workspace-manifest";
 import { setShellAgent } from "medhus-crewrun/shell-access";
-import { createPluginRegistry, redactIntegrationText } from "@medhus-ai/crewrun-plugin-sdk";
+import { createPluginRegistry, redactIntegrationText, pluginSetupStatus, pluginSetupPatch } from "@medhus-ai/crewrun-plugin-sdk";
 
-import { createIntegrationIngress, oauthCallbackUrl } from "./ingress.js";
+import { createIntegrationIngress, oauthCallbackUrl, webhookUrl } from "./ingress.js";
 import { createIntegrationRuntime, refreshConnectionIfNeeded } from "./runtime.js";
 import { createIntegrationState } from "./state.js";
 
@@ -32,11 +32,15 @@ export function createIntegrationHost({
   if (!targetRoot) throw new Error("createIntegrationHost requires targetRoot");
   const registry = pluginRegistry(plugins);
   const state = createIntegrationState({ targetRoot, vaultKey, env, now });
-  const configFor = (pluginId) => safeObject(pluginConfig[pluginId]);
+  const externalConfig = pluginConfig;
+  const configFor = (pluginId) => ({ ...state.getAppConfig(pluginId), ...safeObject(externalConfig[pluginId]) });
+  // Getters keep OAuth, refresh, subscriptions and approved delivery on the same private config.
+  pluginConfig = Object.fromEntries(registry.list().map((plugin) => [plugin.id, null]));
+  for (const plugin of registry.list()) Object.defineProperty(pluginConfig, plugin.id, { get: () => configFor(plugin.id) });
   // Provider secrets stay in host state/configuration closures, never a model child.
   const runtime = createIntegrationRuntime({ targetRoot, state, plugins: registry, pluginConfig, fetchImpl, env, now, log });
   const ingress = publicBaseUrl ? createIntegrationIngress({
-    plugins: registry, state, configFor, publicBaseUrl, fetchImpl, log,
+    plugins: registry, state, configFor, publicBaseUrl, fetchImpl, log, autoSubscribe: false,
     onEvent: processInboundEvent,
     onConnectionConnected: retirePriorConnection
   }) : null;
@@ -152,7 +156,14 @@ export function createIntegrationHost({
       const connections = state.listConnections();
       return {
         replaceConnectorInventory: true,
-        connectors: registry.list().map((plugin) => ({ ...connectorSnapshot(plugin, connections.filter((connection) => connection.plugin === plugin.id), state, configFor(plugin.id)), ...(!publicBaseUrl ? { configured: false, setupMessage: "Configure the provider app and CREWRUN_PUBLIC_BASE_URL (HTTPS) on the host before connecting." } : {}) })),
+        connectors: registry.list().map((plugin) => ({
+          ...connectorSnapshot(plugin, connections.filter((connection) => connection.plugin === plugin.id), state, configFor(plugin.id)),
+          setup: plugin.setup ? { ...plugin.setup, fields: pluginSetupStatus(plugin, configFor(plugin.id), safeObject(externalConfig[plugin.id])).fields } : null,
+          callbackUrl: publicBaseUrl ? oauthCallbackUrl(publicBaseUrl, plugin.id) : "",
+          webhookUrl: publicBaseUrl ? webhookUrl(publicBaseUrl, plugin.id) : "",
+          ingressPort,
+          ...(!publicBaseUrl ? { configured: false, setupMessage: "Set CREWRUN_PUBLIC_BASE_URL to your public HTTPS origin and restart the host. Publish only the callback listener, never the console." } : {})
+        })),
         events: state.listEvents({ limit: 100 }),
         eventRoutes: eventRoutes(),
         ...runtimeSnapshot,
@@ -164,6 +175,67 @@ export function createIntegrationHost({
         audit: runtime.governance.audit?.list?.() || [],
         chats: runtime.chats.listChats()
       };
+    },
+
+    async saveIntegrationSetup({ connectorId, fields = {} } = {}) {
+      const plugin = registry.get(connectorId);
+      if (!plugin) throw new Error("Choose an installed integration.");
+      const lease = state.claimConnectionLease({ pluginId: plugin.id });
+      if (!lease) throw new Error("A connection operation is in progress. Try again when it finishes.");
+      try {
+        if (state.listConnections().some((connection) => connection.plugin === plugin.id && connection.status !== "disconnected")) {
+          throw new Error("Disconnect before changing app configuration. Existing authorizations must not use a different app.");
+        }
+        const patch = pluginSetupPatch(plugin, fields, safeObject(externalConfig[plugin.id]));
+        if (Object.keys(patch).length) state.saveAppConfig(plugin.id, patch);
+      } finally { state.releaseConnectionLease(lease); }
+      return `/integrations?integration=${encodeURIComponent(plugin.id)}`;
+    },
+
+    async configureIntegrationEvents({ id } = {}) {
+      let connection = state.getConnection(id, { credentials: true });
+      if (!connection || connection.status !== "connected") throw new Error("Choose a connected integration.");
+      const plugin = registry.get(connection.plugin);
+      if (!plugin?.adapter?.subscribe) throw new Error("Configure this provider's webhook in its app settings.");
+      const lease = state.claimConnectionLease({ pluginId: plugin.id });
+      if (!lease) throw new Error("A connection operation is in progress.");
+      let attempted = false;
+      try {
+        if (state.listSubscriptions({ connectionId: id }).length || state.eventSetup(id).checkedAt) throw new Error("Event setup already attempted. Reconcile remote subscriptions before disconnecting and reconnecting.");
+        state.eventSetup(id, "setup started");
+        attempted = true;
+        connection = await refreshConnectionIfNeeded({ state, connection, plugin, pluginConfig, fetchImpl, now });
+        const config = configFor(plugin.id);
+        const subscriptions = await plugin.adapter.subscribe({ connection, credentials: connection.credentials, config, ...config, publicBaseUrl, fetch: fetchImpl });
+        for (const subscription of Array.isArray(subscriptions) ? subscriptions : []) state.upsertSubscription({ ...subscription, connectionId: id });
+        state.eventSetup(id, "setup complete");
+      } catch (error) {
+        if (!attempted) throw error;
+        state.eventSetup(id, "setup failed");
+        log(`[integrations] event setup failed for ${plugin.id}: ${safeError(error)}`);
+        throw new Error("Event setup did not complete. Your account is still connected. Reconcile any subscriptions created remotely before disconnecting and reconnecting to retry.");
+      } finally { state.releaseConnectionLease(lease); }
+      return `/integrations?integration=${encodeURIComponent(plugin.id)}&tab=rules`;
+    },
+
+    async checkIntegrationConnection({ id } = {}) {
+      let connection = state.getConnection(id, { credentials: true });
+      if (!connection || connection.status !== "connected") throw new Error("Choose a connected integration.");
+      const plugin = registry.get(connection.plugin);
+      if (!plugin?.adapter?.identifyAccount) throw new Error("This plugin does not support an account check.");
+      const lease = state.claimConnectionLease({ pluginId: plugin.id });
+      if (!lease) throw new Error("A connection operation is in progress.");
+      try {
+        connection = await refreshConnectionIfNeeded({ state, connection, plugin, pluginConfig, fetchImpl, now });
+        const config = configFor(plugin.id);
+        const account = await plugin.adapter.identifyAccount({ connection, credentials: connection.credentials, config, ...config, fetch: fetchImpl });
+        if (!account?.id || String(account.id) !== String(connection.account.id)) throw new Error("account changed");
+        state.accountCheck(id, "healthy");
+      } catch {
+        state.accountCheck(id, "check failed");
+        throw new Error("Account check failed. Check provider availability and consent; reconnect if access was revoked. No event rules were changed.");
+      } finally { state.releaseConnectionLease(lease); }
+      return `/integrations?integration=${encodeURIComponent(plugin.id)}`;
     },
 
     async connect({ connectorId, capabilities = [], credentials = {} } = {}) {
@@ -190,11 +262,13 @@ export function createIntegrationHost({
       if (!connection) throw new Error("Integration connection not found.");
       const plugin = registry.get(connection.plugin);
       const subscriptions = state.listSubscriptions({ connectionId: connection.id });
+      const lease = state.claimConnectionLease({ pluginId: connection.plugin });
+      if (!lease) throw new Error("A connection operation is in progress.");
       try {
         connection = await refreshConnectionIfNeeded({ state, connection, plugin, pluginConfig, fetchImpl, now });
         await plugin?.adapter?.revoke?.({ connection, subscriptions, credentials: connection.credentials, config: configFor(connection.plugin), fetch: fetchImpl });
       }
-      finally { state.disconnectConnection(connection.id); }
+      finally { state.disconnectConnection(connection.id); state.releaseConnectionLease(lease); }
       return "/integrations";
     },
 
@@ -315,33 +389,21 @@ function connectorSnapshot(plugin, connections, state, config = {}) {
   return {
     id: plugin.id, provider: plugin.id, label: plugin.label || plugin.id,
     description: plugin.description || "A governed CrewRun integration plugin.",
+    connectable: Boolean(plugin.oauth || plugin.adapter?.authorizationUrl),
     status: newest?.status || "not connected", connected: Boolean(newest && newest.status === "connected"),
     connectionId: newest?.id || "", accountLabel: newest?.account?.label || newest?.account?.id || "",
     capabilities: selectedOptions.map((option) => option.label), capabilityOptions: options,
-    eventTypes, subscriptionHealth: connectorSubscriptionHealth(plugin, newest, subscriptions),
+    selectedCapabilities: [...selected], actions: plugin.actions.map(({ id, label, capability, risk }) => ({ id, label, capability, risk })),
+    canCheck: Boolean(plugin.adapter?.identifyAccount), canSubscribe: Boolean(plugin.adapter?.subscribe) && !plugin.subscription?.manual && eventTypes.length > 0 && !subscriptions.length && !(newest && state.eventSetup(newest.id).checkedAt),
+    eventTypes, subscriptionHealth: newest && ["setup started", "setup failed"].includes(state.eventSetup(newest.id).status)
+      ? "setup incomplete — reconcile before retrying" : connectorSubscriptionHealth(plugin, newest, subscriptions),
+    accountHealth: newest ? state.accountCheck(newest.id) : { status: "not connected", checkedAt: null },
     configured: setup.configured, setupMessage: setup.message
   };
 }
 
 function connectorConfiguration(plugin, config) {
-  const source = safeObject(config);
-  if (plugin.id === "github") {
-    const configured = Boolean(source.appId && source.appSlug && source.webhookSecret
-      && (source.privateKey || source.privateKeyBase64 || typeof source.signAppJwt === "function"));
-    return { configured, message: configured ? "" : "Configure the GitHub App in the host service before connecting." };
-  }
-  // These confidential web OAuth exchanges always authenticate the host at the token endpoint.
-  // Showing Connect without the secret would let a user complete consent only to fail on the
-  // callback, so surface the setup gap before they leave the private console.
-  if (["slack", "google-workspace"].includes(plugin.id)) {
-    const configured = Boolean(source.clientId && source.clientSecret);
-    return { configured, message: configured ? "" : "Configure this provider's OAuth client ID and client secret in the host service before connecting." };
-  }
-  if (plugin.oauth) {
-    const configured = Boolean(source.clientId);
-    return { configured, message: configured ? "" : "Configure this provider's OAuth app in the host service before connecting." };
-  }
-  return { configured: true, message: "" };
+  return pluginSetupStatus(plugin, config);
 }
 
 function connectorSubscriptionHealth(plugin, connection, subscriptions) {

@@ -9,6 +9,8 @@ export {
   providerOAuthMetadata
 } from "./manifest.js";
 export { createPluginRegistry } from "./registry.js";
+export { assertIntegrationPluginContract } from "./contract-test.js";
+export { normalizePluginSetup, pluginSetupStatus, pluginSetupPatch } from "./setup.js";
 export { oauthAuthorizationUrl } from "./oauth.js";
 export {
   connectionMetadata,

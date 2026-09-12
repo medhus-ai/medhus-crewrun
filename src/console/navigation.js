@@ -9,9 +9,9 @@ export const PAGES = [
   { id: "skills", label: "Skills", icon: "blocks", group: "operations" },
   { id: "integrations", label: "Integrations", icon: "network", group: "operations" },
   { id: "activity", label: "Activity", icon: "list", group: "operations" },
-  { id: "chats", label: "Chats", icon: "chat", group: "account" },
   { id: "usage", label: "Usage", icon: "chart", group: "account" },
-  { id: "settings", label: "Settings", icon: "key", group: "account" }
+  { id: "settings", label: "Settings", icon: "key", group: "account" },
+  { id: "chats", label: "Chats", icon: "chat", group: "account" }
 ];
 
 export function pageFromUrl(pathname) {

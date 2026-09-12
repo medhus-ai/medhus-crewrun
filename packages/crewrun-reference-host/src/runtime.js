@@ -45,7 +45,7 @@ export function createIntegrationRuntime({ targetRoot, state, plugins, pluginCon
     getContract: (role) => loadRoleSpec(targetRoot, role)?.contract,
     requestApproval: async (request) => requestApproval(request)
   });
-  const workspace = createWorkspaceTools({ targetRoot, store, governance, now });
+  const workspace = createWorkspaceTools({ targetRoot, store, governance, env, now });
 
   function connectionRecords() {
     return state.listConnections().map((connection) => ({

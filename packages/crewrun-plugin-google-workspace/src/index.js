@@ -48,6 +48,17 @@ export function createGoogleWorkspacePlugin(options = {}) {
   return defineIntegrationPlugin({
     id: "google-workspace",
     label: "Google Workspace",
+    setup: {
+      docsUrl: "https://console.cloud.google.com/apis/credentials",
+      instructions: "Create a Web application OAuth client and add the callback URL. Configure the consent screen and test users, then enable Gmail, Drive, Docs and Sheets APIs as needed. Gmail events additionally require authenticated Pub/Sub push setup. Calendar is not included in this plugin.",
+      fields: [
+        {"key":"clientId","label":"Client ID","type":"text","required":true},
+        {"key":"clientSecret","label":"Client secret","type":"secret","required":true},
+        {"key":"gmailPubsubTopic","label":"Gmail Pub/Sub topic","type":"text","help":"Optional: projects/PROJECT/topics/TOPIC; grant Gmail permission to publish."},
+        {"key":"gmailPushAudience","label":"Gmail push audience","type":"text","help":"Optional: audience configured for authenticated Pub/Sub push."},
+        {"key":"gmailPushServiceAccount","label":"Gmail push service account","type":"text","help":"Optional: service account email used to authenticate Pub/Sub push, not a second connected user."}
+      ]
+    },
     description: "Governed Gmail, Drive, Docs, and Sheets capabilities with verified mail and file-change signals.",
     oauth: googleWorkspaceOAuth,
     capabilities: [

@@ -6,8 +6,20 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { createConsole } from "../src/console/server.js";
+import { renderPage } from "../src/console/shell.js";
 import { proposeReflection } from "../src/reflection-proposals.js";
 import { proposeSkill } from "../src/skill-proposals.js";
+
+test("sidebar places Chats and Recent chats after Usage and Settings", () => {
+  for (const recentChats of [[], [{ role: "ops" }]]) {
+    const sidebar = renderPage("chats", "", { recentChats }).match(/<aside[\s\S]*?<\/aside>/)[0];
+    const labels = ['aria-label="Usage"', 'aria-label="Settings"', 'aria-label="Chats"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat with ops"'] : [])];
+    const positions = labels.map((label) => sidebar.indexOf(label));
+    assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+    assert.match(sidebar, /aria-label="Chats" aria-current="page"/);
+    if (!recentChats.length) assert.doesNotMatch(sidebar, /Recent chats/);
+  }
+});
 
 async function project() {
   const parent = await mkdtemp(path.join(os.tmpdir(), "crew-console-"));

@@ -6,6 +6,24 @@ Crewrun focuses on recurring work that produces a useful, reviewable result acro
 team already uses. The priorities below are planned improvements, not delivery commitments.
 See [Capabilities and limits](state.md) for current support.
 
+## Integration hosting direction
+
+**Current release: self-hosted.** Users own their provider app registrations, credentials,
+runtime and workspace. CrewRun connects directly to provider APIs, with Tailscale Funnel as
+the recommended HTTPS setup for callbacks and webhooks only; the console stays private.
+Continue improving this guided setup without introducing a required CrewRun-hosted service.
+
+**Future option: Easy Connect.** Explore an opt-in CrewRun-managed authorization service
+and registered provider apps so users can connect through browser consent without creating
+their own apps. This is a future direction, not an implemented feature or release commitment.
+The self-hosted path must remain available independently.
+
+Before implementation, define account isolation, token custody and refresh, revocation,
+provider verification requirements, operating costs, and behavior during service outages.
+Keep agents, workspace data and execution local by default, and make any additional hosted
+credential/data handling explicit to the user. No provider registration, cloud deployment,
+or migration to shared OAuth is authorized by this roadmap.
+
 ## Planned improvements
 
 | Priority | Intended outcome |

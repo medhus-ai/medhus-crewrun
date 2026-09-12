@@ -1,5 +1,6 @@
 import { createConsole } from "medhus-crewrun/console/server";
 import { createUp } from "medhus-crewrun/up";
+import { loadInstalledPlugins } from "medhus-crewrun/integration-plugins";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -17,15 +18,18 @@ export { createIntegrationState, integrationStatePath } from "./src/state.js";
 export { createIntegrationIngress } from "./src/ingress.js";
 
 export const referencePlugins = Object.freeze([slackPlugin, googleWorkspacePlugin, microsoft365Plugin, githubPlugin]);
+export async function loadReferencePlugins(env = process.env) {
+  return [...referencePlugins, ...await loadInstalledPlugins({ env })];
+}
 
 // This is the bundled `crewrun up` host factory. It deliberately
 // reads only operator-owned environment configuration and always keeps the console separate
 // from the public callback listener. For programmatic/vault integrations, call
 // createIntegrationHost directly with constructed plugin instances and pluginConfig instead.
-export function createHost({ targetRoot, log = () => {}, env = process.env } = {}) {
+export function createHost({ targetRoot, log = () => {}, env = process.env, plugins = referencePlugins } = {}) {
   return createIntegrationHost({
     targetRoot,
-    plugins: referencePlugins,
+    plugins,
     pluginConfig: referencePluginConfig(env),
     publicBaseUrl: env.CREWRUN_PUBLIC_BASE_URL,
     vaultKey: env.CREWRUN_INTEGRATIONS_KEY || localVaultKey(targetRoot, env),
@@ -60,10 +64,10 @@ export async function startReferenceHost({
   if (!isLoopback(consoleHost)) throw new Error("the reference console must listen on a loopback address");
   const integrationHost = host || createIntegrationHost({
     targetRoot,
-    plugins: referencePlugins,
+    plugins: hostOptions.plugins || await loadReferencePlugins(env),
     pluginConfig: hostOptions.pluginConfig || referencePluginConfig(env),
     publicBaseUrl: hostOptions.publicBaseUrl || env.CREWRUN_PUBLIC_BASE_URL,
-    vaultKey: hostOptions.vaultKey || env.CREWRUN_INTEGRATIONS_KEY,
+    vaultKey: hostOptions.vaultKey || env.CREWRUN_INTEGRATIONS_KEY || localVaultKey(targetRoot, env),
     ingressHost: hostOptions.ingressHost || env.CREWRUN_INTEGRATIONS_HOST || "127.0.0.1",
     ingressPort: hostOptions.ingressPort || numberEnv(env.CREWRUN_INTEGRATIONS_PORT, 4411),
     fetchImpl: hostOptions.fetchImpl,

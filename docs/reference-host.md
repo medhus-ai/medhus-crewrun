@@ -55,10 +55,11 @@ checkout or normal npm `file:`/workspace resolution.
 
 ## Public endpoint and ingress
 
-This deployment has one fixed public base URL:
+Tailscale Funnel is the recommended default. Follow the [step-by-step setup](tailscale-setup.md),
+also available in each integration’s setup page. Use your own host’s Tailscale DNS name; for example:
 
 ```text
-https://arsazmar0smars3.taila9c41d.ts.net
+https://YOUR-MACHINE.YOUR-TAILNET.ts.net
 ```
 
 Set it as `CREWRUN_PUBLIC_BASE_URL` without a trailing slash. It must be an HTTPS origin (no path,
@@ -66,7 +67,7 @@ query, fragment, or user-info); that keeps its deterministic callback paths reac
 root-mounted Funnel. The reference ingress then binds only to `127.0.0.1:4411` by default:
 
 ```bash
-export CREWRUN_PUBLIC_BASE_URL=https://arsazmar0smars3.taila9c41d.ts.net
+export CREWRUN_PUBLIC_BASE_URL=https://YOUR-MACHINE.YOUR-TAILNET.ts.net
 export CREWRUN_INTEGRATIONS_HOST=127.0.0.1
 export CREWRUN_INTEGRATIONS_PORT=4411
 # Use a long, random secret held by the service manager, not in the repository.
@@ -82,9 +83,9 @@ Callback paths are deterministic:
 | Webhook, connection-specific | `/integrations/webhooks/<plugin-id>/<connection-id>` |
 
 For example, the Slack OAuth callback is
-`https://arsazmar0smars3.taila9c41d.ts.net/integrations/oauth/slack/callback`; the standard
+`https://YOUR-MACHINE.YOUR-TAILNET.ts.net/integrations/oauth/slack/callback`; the standard
 Slack Events API endpoint is
-`https://arsazmar0smars3.taila9c41d.ts.net/integrations/webhooks/slack`. The host maps its signed
+`https://YOUR-MACHINE.YOUR-TAILNET.ts.net/integrations/webhooks/slack`. The host maps its signed
 Slack `team_id` to exactly one connected workspace. A connection-specific webhook URL remains
 available where a provider or deployment needs an opaque per-connection route.
 
@@ -94,7 +95,7 @@ Funnel is not activated by Crewrun. After starting the loopback listener, the op
 only that port with a current Tailscale CLI, for example:
 
 ```bash
-tailscale funnel --bg 4411
+tailscale funnel --bg --https=443 http://127.0.0.1:4411
 tailscale funnel status
 ```
 
@@ -122,16 +123,18 @@ From this source checkout, use `node bin/crewrun.js` in place of `crewrun`. The 
 the console on `127.0.0.1:4400`; do not override that to a public address. The integration ingress
 is started by the host on the loopback address and port shown above.
 
-Keep client secrets, webhook signing secrets, and the GitHub App private key in the service
-manager or vault that launches CrewRun. Do not put them in agent files, `.crew` files, console
-form fields, or source control. The standard host reads these operator-owned environment values:
+Use **Integrations → Set up** to save app credentials in the encrypted private host vault, or
+supply them through the service manager environment. Saved values are never read back into forms;
+environment-owned fields are locked. Never put secrets in agent files, workspace files, chats, or
+source control. See the [connection flow and plugin guide](integration-plugins.md). The standard
+host also reads these operator-owned environment values:
 
 | Provider | Required configuration | Optional configuration |
 |---|---|---|
-| Host | `CREWRUN_PUBLIC_BASE_URL`, `CREWRUN_INTEGRATIONS_KEY` | `CREWRUN_INTEGRATIONS_HOST`, `CREWRUN_INTEGRATIONS_PORT` |
-| Slack | `CREWRUN_SLACK_CLIENT_ID`, `CREWRUN_SLACK_CLIENT_SECRET`, `CREWRUN_SLACK_SIGNING_SECRET` | — |
+| Host | `CREWRUN_PUBLIC_BASE_URL` | `CREWRUN_INTEGRATIONS_KEY` (otherwise a private local key is generated), `CREWRUN_INTEGRATIONS_HOST`, `CREWRUN_INTEGRATIONS_PORT` |
+| Slack | `CREWRUN_SLACK_CLIENT_ID`, `CREWRUN_SLACK_CLIENT_SECRET` | `CREWRUN_SLACK_SIGNING_SECRET` required for events |
 | Google Workspace | `CREWRUN_GOOGLE_CLIENT_ID`, `CREWRUN_GOOGLE_CLIENT_SECRET` | For Gmail push: `CREWRUN_GOOGLE_GMAIL_PUBSUB_TOPIC`, `CREWRUN_GOOGLE_GMAIL_PUSH_AUDIENCE`, and `CREWRUN_GOOGLE_GMAIL_PUSH_SERVICE_ACCOUNT` |
-| Microsoft 365 | `CREWRUN_MICROSOFT_CLIENT_ID` | `CREWRUN_MICROSOFT_CLIENT_SECRET` |
+| Microsoft 365 | `CREWRUN_MICROSOFT_CLIENT_ID`, `CREWRUN_MICROSOFT_CLIENT_SECRET` | — |
 | GitHub App | `CREWRUN_GITHUB_APP_ID`, `CREWRUN_GITHUB_APP_SLUG`, `CREWRUN_GITHUB_WEBHOOK_SECRET`, and `CREWRUN_GITHUB_PRIVATE_KEY` or `CREWRUN_GITHUB_PRIVATE_KEY_BASE64` | — |
 
 `CREWRUN_INTEGRATION_PLUGIN_CONFIG` may instead carry a JSON object keyed by plugin ID; it merges
@@ -175,8 +178,8 @@ Useful provider guides: [Slack OAuth](https://docs.slack.dev/authentication/inst
 [Microsoft identity platform authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow),
 and [GitHub App creation](https://docs.github.com/apps/creating-github-apps/creating-github-apps/about-creating-github-apps).
 
-The standard Microsoft connection creates Outlook and OneDrive subscriptions only for the
-capabilities selected during Connect. A Teams inbound subscription is deliberately not inferred:
+The standard Microsoft event-setup action creates Outlook and OneDrive subscriptions only for the
+capabilities selected during Connect. OAuth itself does not create subscriptions. A Teams inbound subscription is deliberately not inferred:
 it needs an operator-selected concrete Graph resource such as one team/channel path, supplied by
 a custom host extension. Merely granting Teams access never creates a broad tenant or all-channel
 subscription.
@@ -203,8 +206,9 @@ provider does not grant every agent access to it.
 
 1. Connect an account from the private console. The browser returns to the fixed callback, which
    consumes its state exactly once.
-2. Confirm the safe account label, consented scopes/capabilities, and subscription health in
-   **Integrations → service → Connection**.
+2. Confirm the safe account label and consented capabilities in **Integrations → service → Connection**.
+   Use **Check account**, then configure event delivery separately. Subscription health is not the same
+   as account health; neither is proof of every API capability.
 3. Inspect verified metadata-only receipts in **Activity → Integration events**. Create a rule
    under **Integrations → service → Event rules** only after
    adding the event name to the agent's `hooks` and its connection scope to the contract's read
@@ -215,9 +219,9 @@ provider does not grant every agent access to it.
 The reference host keeps one active connection per provider. A successful reconnect holds a
 durable provider-replacement claim and replaces every prior non-disconnected local connection
 after attempting provider revocation, so its connection-specific role scopes and event routes
-stay unambiguous even when two host processes receive callbacks at once. If subscription setup
-fails, the attempted connection is revoked/cleared and the browser receives a failure page; the
-previous usable connection remains in place. Schedules, subscription renewals, and heartbeats use
+stay unambiguous even when two host processes receive callbacks at once. Event setup is a separate
+operator action: a failure leaves account access connected and requires reconciliation before
+retrying, since some subscriptions may already exist remotely. Schedules, subscription renewals, and heartbeats use
 durable claims as well, so concurrent reference-host processes do not run the same trigger or
 renewal.
 
@@ -236,6 +240,9 @@ Credential loss and a changed integration key are recovery events, not reasons t
 Disconnect and reconnect; do not manually paste access or refresh tokens into Crewrun.
 
 ## Writing an integration plugin
+
+See [plugin scaffolding, installation, setup metadata and contract tests](integration-plugins.md)
+for the operator CLI and developer workflow.
 
 Plugins declare `apiVersion: "crewrun.integration/v1"` through
 `defineIntegrationPlugin(...)`. A manifest has a provider ID, safe label/description, optional

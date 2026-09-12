@@ -13,6 +13,16 @@ export function createGitHubPlugin(options = {}) {
     apiVersion: "crewrun.integration/v1",
     id: "github",
     label: "GitHub",
+    setup: {
+      docsUrl: "https://github.com/settings/apps/new",
+      instructions: "Create a GitHub App. Use the callback URL as its Setup URL, and the webhook URL for repository events. Enable only the required repository permissions and select individual repositories when installing. One GitHub App installation is supported; no personal access tokens or repository administration.",
+      fields: [
+        {"key":"appId","label":"App ID","type":"text","required":true},
+        {"key":"appSlug","label":"App slug","type":"text","required":true},
+        {"key":"privateKey","label":"App private key (PEM)","type":"pem","required":true,"alternatives":["privateKeyBase64","signAppJwt"]},
+        {"key":"webhookSecret","label":"Webhook secret","type":"secret","required":true}
+      ]
+    },
     description: "Governed GitHub App repository access and signed webhook deliveries.",
     capabilities: [
       { id: "repositories", label: "Repositories", description: "Read metadata for installed repositories.", direction: "read", scopes: ["metadata:read"] },

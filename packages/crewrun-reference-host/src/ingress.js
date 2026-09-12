@@ -7,7 +7,7 @@ const MAX_BODY_BYTES = 1_000_000;
 
 // A deliberately tiny public server. It exposes only provider callbacks and verified
 // webhook endpoints; the CrewRun console remains on a separate private listener.
-export function createIntegrationIngress({ plugins, state, configFor = () => ({}), onEvent = async () => {}, onConnectionConnected = async () => {}, publicBaseUrl = "", fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+export function createIntegrationIngress({ plugins, state, configFor = () => ({}), onEvent = async () => {}, onConnectionConnected = async () => {}, publicBaseUrl = "", fetchImpl = globalThis.fetch, log = () => {}, autoSubscribe = true } = {}) {
   if (!plugins?.get) throw new Error("createIntegrationIngress requires a plugin registry");
   if (!state?.consumeOAuthState || !state?.claimConnectionLease || !state?.releaseConnectionLease || !state?.ingestEvent) {
     throw new Error("createIntegrationIngress requires integration state");
@@ -39,12 +39,8 @@ export function createIntegrationIngress({ plugins, state, configFor = () => ({}
     const installationId = String(url.searchParams.get("installation_id") || url.searchParams.get("installationId") || "");
     const providerError = String(url.searchParams.get("error") || "");
     const stateValue = String(url.searchParams.get("state") || "");
-    const pending = state.consumeOAuthState(stateValue, { pluginId });
-    if (!pending) return respond(response, 400, completionPage("Connection expired", "Start the connection again from CrewRun."), "text/html; charset=utf-8");
-    if (providerError || (!code && !installationId)) return respond(response, 400, completionPage("Connection not completed", providerError || "The provider returned no authorization result."), "text/html; charset=utf-8");
     const adapter = plugin.adapter || {};
     if (typeof adapter.exchangeCode !== "function") throw new Error(`${pluginId} does not implement OAuth exchange`);
-    const config = configFor(pluginId) || {};
     // Browser callbacks may arrive at nearly the same time (double-clicks, duplicate browser
     // windows, or a user reconnecting while an older consent tab returns). Serialize each
     // provider's persistence/replacement phase so a one-owner host cannot retire both records.
@@ -57,6 +53,12 @@ export function createIntegrationIngress({ plugins, state, configFor = () => ({}
         return respond(response, 409, completionPage("Connection already in progress", "Another CrewRun host is finishing this provider connection. Start again from CrewRun if it does not complete."), "text/html; charset=utf-8");
       }
       try {
+        // Consume only after the provider lease: private setup invalidates pending consent
+        // under this same lease, so an older callback cannot exchange with replaced app keys.
+        const pending = state.consumeOAuthState(stateValue, { pluginId });
+        if (!pending) return respond(response, 400, completionPage("Connection expired", "Start the connection again from CrewRun."), "text/html; charset=utf-8");
+        if (providerError || (!code && !installationId)) return respond(response, 400, completionPage("Connection not completed", "Consent was cancelled or the provider returned no authorization result."), "text/html; charset=utf-8");
+        const config = configFor(pluginId) || {};
         const result = await adapter.exchangeCode({
           code, installationId, verifier: pending.verifier, redirectUri: oauthCallbackUrl(publicBase, pluginId),
           capabilities: pending.capabilities, clientId: config.clientId, clientSecret: config.clientSecret, config, ...config, fetch: fetchImpl
@@ -90,7 +92,7 @@ export function createIntegrationIngress({ plugins, state, configFor = () => ({}
           await discardConnection("returned a non-connected OAuth result");
           return respond(response, 502, completionPage("Connection not completed", "CrewRun did not receive a usable provider connection. The new authorization was removed; try connecting again."), "text/html; charset=utf-8");
         }
-        if (typeof adapter.subscribe === "function") {
+        if (autoSubscribe && typeof adapter.subscribe === "function") {
           try {
             const subscriptions = await adapter.subscribe({ connection, credentials: result.credentials, config, ...config, publicBaseUrl: publicBase, fetch: fetchImpl });
             for (const subscription of Array.isArray(subscriptions) ? subscriptions : []) {

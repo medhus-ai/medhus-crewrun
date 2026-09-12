@@ -146,6 +146,14 @@ export function createMicrosoft365Plugin(options = {}) {
     apiVersion: "crewrun.integration/v1",
     id: "microsoft365",
     label: "Microsoft 365",
+    setup: {
+      docsUrl: "https://entra.microsoft.com/",
+      instructions: "Register an application with a Web redirect URI matching the callback URL. Create a client secret and select delegated permissions only. Outlook and OneDrive support eligible personal accounts; Teams requires a work or school account, and Excel support depends on the account and workbook. Tenant policy may require consent. No application-wide or SharePoint permissions.",
+      fields: [
+        {"key":"clientId","label":"Client ID","type":"text","required":true},
+        {"key":"clientSecret","label":"Client secret","type":"secret","required":true}
+      ]
+    },
     description: "Governed delegated Microsoft Graph access for Outlook, OneDrive, Excel, and Teams.",
     oauth: microsoft365OAuth,
     capabilities: microsoft365Capabilities,

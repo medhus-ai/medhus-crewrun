@@ -13,6 +13,15 @@ export function createSlackPlugin(options = {}) {
   return defineIntegrationPlugin({
     id: "slack",
     label: "Slack",
+    setup: {
+      docsUrl: "https://api.slack.com/apps",
+      instructions: "Create a Slack app in your workspace. Add the callback URL under OAuth & Permissions. After connecting, enable Events API with the webhook URL and subscribe to the selected events. One Slack workspace connection is supported.",
+      fields: [
+        {"key":"clientId","label":"Client ID","type":"text","required":true},
+        {"key":"clientSecret","label":"Client secret","type":"secret","required":true},
+        {"key":"signingSecret","label":"Signing secret","type":"secret","help":"Required to verify Events API deliveries."}
+      ]
+    },
     description: "Governed Slack messages and signed Events API deliveries.",
     oauth: slackOAuth,
     capabilities: [

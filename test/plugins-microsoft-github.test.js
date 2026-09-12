@@ -46,7 +46,7 @@ test("Microsoft 365 manifest exposes narrow governed capabilities without provid
   assert.ok(actions.filter((action) => action.risk === "external-write").every((action) => action.approval === "required"));
   const publicPlugin = registry.list()[0];
   assert.equal(publicPlugin.adapter, undefined);
-  assert.doesNotMatch(JSON.stringify(publicPlugin), /accessToken|refreshToken|clientSecret|credentialRef/i);
+  assert.doesNotMatch(JSON.stringify({ ...publicPlugin, setup: undefined }), /accessToken|refreshToken|clientSecret|credentialRef/i);
   assert.equal(publicPlugin.subscription.webhookPath, "/integrations/webhooks/microsoft365/{connectionId}");
 });
 
@@ -292,7 +292,7 @@ test("GitHub manifest permits curated repository work but excludes destructive o
   ]);
   assert.ok(!actionIds.some((id) => /delete|admin|member|settings|force/i.test(id)));
   assert.ok(registry.actions().filter((action) => action.risk === "external-write").every((action) => action.approval === "required"));
-  assert.doesNotMatch(JSON.stringify(registry.list()), /privateKey|accessToken|refreshToken|clientSecret|credentialRef/i);
+  assert.doesNotMatch(JSON.stringify(registry.list().map(({ setup, ...plugin }) => plugin)), /privateKey|accessToken|refreshToken|clientSecret|credentialRef/i);
 });
 
 test("GitHub write permissions retain the matching curated read tools", () => {

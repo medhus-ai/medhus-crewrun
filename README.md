@@ -65,18 +65,23 @@ For a released version: `npm install -g medhus-crewrun`, then
 - Chat with any agent in its single durable thread; use the Crew helper to prepare reviewable setup changes.
 - Assign outcomes and completion criteria, delegate bounded child tasks, and answer blockers without losing the original task.
 - Write scoped drafts freely while reviewing durable knowledge, skills, and agent configuration changes.
+- Search authorized workspace knowledge with QMD and read Word, Excel and PDF files
+  with Docling through the same scoped tools; see [local setup](docs/workspace-knowledge.md).
 - Propose reusable Skills for approval instead of silently rewriting long-term agent behavior.
 - Connect Slack or Gmail, then review the exact approved outbound action before it is delivered.
 - See task outcomes, artifacts, receipts, approval decisions, audit metadata, and usage in one place.
 - Use the bundled one-owner host for browser-based OAuth and signed events across Slack, Google
   Workspace, Microsoft 365, and GitHub App installations. Provider apps and HTTPS ingress still
   require self-host configuration; connecting alone does not enable automation.
+- Set up provider apps in the private console, choose access, and connect through browser consent.
+  Extend capabilities with [reviewed, pinned npm plugins](docs/integration-plugins.md)—without adding another agent runtime.
 
 ## Documentation
 
 [Getting started](docs/getting-started.md) · [Agents](docs/agents.md) ·
 [Providers](docs/providers.md) · [Integrations](docs/integrations.md) ·
-[Hosted integrations](docs/reference-host.md) ·
+[Hosted integrations](docs/reference-host.md) · [Build a plugin](docs/integration-plugins.md) ·
+[Tailscale HTTPS setup](docs/tailscale-setup.md) ·
 [Portable workspaces](docs/workspaces.md) · [v6 migration](docs/v6-migration.md) ·
 [Tasks and recovery](docs/runtime-recovery.md) · [Skills and context](docs/learning.md)
 

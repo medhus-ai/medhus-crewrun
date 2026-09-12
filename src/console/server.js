@@ -410,6 +410,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (pathname === "/integrations/connect") {
       return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), capabilities: Array.isArray(form.capabilities) ? form.capabilities : [], credentials: form }, "/integrations");
     }
+    if (pathname === "/integrations/setup") {
+      return callOperation(["saveIntegrationSetup"], { connectorId: String(form.id || ""), fields: form }, "/integrations");
+    }
+    if (pathname === "/integrations/check") {
+      return callOperation(["checkIntegrationConnection"], { id: String(form.id || "") }, "/integrations");
+    }
+    if (pathname === "/integrations/subscribe") {
+      return callOperation(["configureIntegrationEvents"], { id: String(form.id || "") }, "/integrations");
+    }
     if (pathname === "/integrations/disconnect") {
       return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/integrations");
     }
@@ -524,6 +533,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         selectedChatRole,
         canChat,
         canConnect: Boolean(operation(["connect", "connectConnector"])),
+        canConfigureIntegrations: Boolean(operation(["saveIntegrationSetup"])),
+        canCheckIntegrations: Boolean(operation(["checkIntegrationConnection"])),
+        canSubscribeIntegrations: Boolean(operation(["configureIntegrationEvents"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
         canManageEventRoutes: Boolean(operation(["saveEventRoute", "saveRoute"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))

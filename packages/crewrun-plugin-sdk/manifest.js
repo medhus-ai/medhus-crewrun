@@ -1,4 +1,5 @@
 import { deepFreeze, normalizedProvider, normalizedStrings, requiredText, safeMetadata, safeText } from "./safe.js";
+import { normalizePluginSetup } from "./setup.js";
 
 export const INTEGRATION_PLUGIN_API_VERSION = "crewrun.integration/v1";
 
@@ -48,6 +49,7 @@ export function validateIntegrationPlugin(raw) {
     label,
     ...(description ? { description } : {}),
     oauth,
+    ...(raw.setup ? { setup: normalizePluginSetup(raw.setup) } : {}),
     capabilities,
     actions,
     events,

@@ -18,6 +18,12 @@ with Node 20 and 24 and Windows with Node 20. Live-provider tests are opt-in.
 
 ## Live tests
 
+Local knowledge integration checks need no provider credentials: install the
+[QMD/Docling dependencies](workspace-knowledge.md), then run
+`CREW_LIVE_KNOWLEDGE=1 node --test test/workspace-knowledge.test.js` on Linux.
+These exercise real keyword retrieval, document extraction and OS isolation,
+not semantic-model quality.
+
 These commands make real provider calls. Configure the corresponding credentials
 or local vendor sign-in before using them:
 

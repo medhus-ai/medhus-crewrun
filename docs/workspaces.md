@@ -19,6 +19,11 @@ The bundled CLI uses the reference host automatically. Programmatic `createUp` r
 
 ## Accountable work
 
+Agents can search and read authorized documents through the existing workspace
+tools: [QMD search and Docling extraction](workspace-knowledge.md). File authority
+is checked before indexing and again before retrieval; no global cross-agent
+knowledge index is exposed.
+
 The existing run is the logical task, with retained execution attempts. Optional fields are `title`, `priority` (`low|normal|high|urgent`), `outcome`, `criteria`, and `parent_id`; `agent` is the owner. `progress`, structured `blockers`, saved artifacts, and owner answers survive restarts. No parallel Markdown inbox exists.
 
 Internal MCP tools: `task.list`, `task.get`, `task.create`, `task.update`, `task.delegate`, `task.askOwner`, and `task.saveArtifact`. Task lists return ten authorized records and `nextOffset`. Agents update their own work; explicit `task:<agent>` read/write data scopes grant coordination. Agents never call human acceptance or approval operations.

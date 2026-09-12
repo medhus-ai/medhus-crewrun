@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import path from "node:path";
 
 import { crewHome } from "./crew-dirs.js";
-import { workspaceIdentity } from "./workspace-manifest.js";
+import { workspaceIdentity, relativeWorkspacePath } from "./workspace-manifest.js";
 
 // A role contract is intentionally small: it describes the authority the host gives a role,
 // while the role prompt remains ordinary reviewed prose.  `version` is the schema version and
@@ -510,8 +510,15 @@ function normalizeScopes(value, label) {
   if (value == null) return freeze([]);
   if (!Array.isArray(value) || value.length > MAX_LIST) throw new Error(`${label} must contain at most ${MAX_LIST} scopes`);
   const scopes = [...new Set(value.map((entry) => String(entry || "").trim().toLowerCase()))].sort();
-  if (scopes.some((scope) => !DATA_SCOPE.test(scope))) throw new Error(`${label} contains an invalid scope`);
+  if (scopes.some((scope) => !DATA_SCOPE.test(scope) && !workspaceFileScope(scope))) throw new Error(`${label} contains an invalid scope`);
   return freeze(scopes);
+}
+
+function workspaceFileScope(scope) {
+  // File scopes must support ordinary document names (spaces, Unicode, parentheses).
+  // Other provider scope grammars and the existing exact/prefix matching stay unchanged.
+  if (!/^workspace:[^\x00-\x1f\x7f\\]{1,150}$/u.test(scope)) return false;
+  try { relativeWorkspacePath(scope.slice("workspace:".length)); return true; } catch { return false; }
 }
 
 function normalizeRoleScopes(value, label) {

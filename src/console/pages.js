@@ -736,7 +736,7 @@ ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</
 }
 
 function renderConnectors(models, options = {}) {
-  const { canConnect = false, canDisconnect = false, selectedIntegration = "" } = options;
+  const { selectedIntegration = "" } = options;
   const connector = models.operations.connectors.find((entry) => entry.id === selectedIntegration);
   if (selectedIntegration && !connector) return empty("Integration not found.", "All integrations", "/integrations");
   if (connector) {
@@ -744,16 +744,16 @@ function renderConnectors(models, options = {}) {
     const scoped = { ...models, operations: { ...models.operations, connectors: [connector], eventRoutes: models.operations.eventRoutes.filter((route) => route.connectionId === connector.connectionId) } };
     return `<section class="hero"><div><h1>${esc(connector.label)}</h1><p class="sub"><a href="/integrations">All integrations</a></p></div></section>
 ${tabs("/integrations", [["connection", "Connection"], ["rules", "Event rules"]], tab, { integration: connector.id })}
-${tab === "rules" ? renderEvents(scoped, { ...options, rulesOnly: true }) : `<section class="connector-grid" style="margin-top:16px">${renderConnectorCard(connector, { canConnect, canDisconnect })}</section>${/calendar/i.test(connector.id) ? notice(options.calendarSyncAvailable ? "Scheduled tasks can mirror one way to this calendar. CrewRun remains the source of truth." : "Calendar mirroring is not installed in this host.") : ""}`}`;
+${tab === "rules" ? renderEvents(scoped, { ...options, rulesOnly: true }) : `<section class="connector-grid" style="margin-top:16px">${renderConnectorCard(connector, { ...options, detail: true })}</section>${renderIntegrationSetup(connector, options)}${/calendar/i.test(connector.id) ? notice(options.calendarSyncAvailable ? "Scheduled tasks can mirror one way to this calendar. CrewRun remains the source of truth." : "Calendar mirroring is not installed in this host.") : ""}`}`;
   }
   const paging = paginate(models.operations.connectors, pageOptions("/integrations", options));
   return `
 <section class="hero"><div><h1>Integrations</h1><p class="sub">Manage service connections, permissions, and event rules.</p></div></section>
-<section class="connector-grid" style="margin-top:16px">${paging.items.map((connector) => renderConnectorCard(connector, { canConnect, canDisconnect })).join("")}</section>${paging.html}`;
+<section class="connector-grid" style="margin-top:16px">${paging.items.map((connector) => renderConnectorCard(connector, options)).join("")}</section>${paging.html}`;
 }
 
-function renderConnectorCard(connector, { canConnect, canDisconnect }) {
-  const state = connector.state || (connector.connected ? "connected" : "not connected");
+function renderConnectorCard(connector, { canConnect, canDisconnect, canConfigureIntegrations, canCheckIntegrations, canSubscribeIntegrations, detail = false }) {
+  const state = connector.state || connector.status || (connector.connected ? "connected" : "not connected");
   const authorityScope = connector.connected && connector.connectionId
     ? `connector:${connector.provider || connector.id}:${connector.connectionId}` : "";
   const action = connector.connected
@@ -764,26 +764,89 @@ function renderConnectorCard(connector, { canConnect, canDisconnect }) {
       ? `<a class="button" href="${esc(safeHref(connector.connectUrl))}">Continue connection</a>`
       : connector.hostSetup
         ? '<span class="muted">Set up in your CrewRun host gateway.</span>'
+      : connector.connectable === false
+        ? '<span class="muted">This plugin does not use browser consent.</span>'
       : connector.configured === false
-        ? `<span class="muted">${esc(connector.setupMessage || "Configure this integration in the host service before connecting.")}</span>`
+        ? canConfigureIntegrations && connector.setup
+          ? `<a class="button" href="/integrations?integration=${encodeURIComponent(connector.id)}#setup">Set up ${esc(connector.label)}</a>`
+          : `<span class="muted">${esc(connector.setupMessage || "Configure this integration in the host service before connecting.")}</span>`
       : canConnect
-        ? renderHostedConnect(connector)
+        ? detail ? renderHostedConnect(connector) : `<a class="button" href="/integrations?integration=${encodeURIComponent(connector.id)}#access">${connector.status === "needs_reconnect" ? "Reconnect" : "Connect"} ${esc(connector.label)}</a>`
         : `<span class="muted">Connection setup is unavailable in this integration.</span>`;
   return `<article class="connector-card${connector.capabilityOptions?.length && !connector.connected ? " has-chooser" : ""}">
-    <div class="card-head"><div style="display:flex;gap:9px;align-items:center"><span class="connector-icon">${esc(connector.initials || String(connector.label || "?").slice(0, 1).toUpperCase())}</span><div><h2>${esc(connector.label)}</h2><span class="faint">${esc(connector.account || connector.id)}</span></div></div>${pill(state, toneFor(state))}</div>
+    <div class="card-head"><div style="display:flex;gap:9px;align-items:center"><span class="connector-icon">${esc(connector.initials || String(connector.label || "?").slice(0, 1).toUpperCase())}</span><div><h2>${esc(connector.label)}</h2><span class="faint">${esc(connector.accountLabel || connector.account || connector.id)}</span></div></div>${pill(state, toneFor(state))}</div>
     <p class="description">${esc(connector.description || "A connected service.")}</p>
+    ${detail && connector.connected ? `<p class="help">Account: ${esc(connector.accountHealth?.status || "not checked")}${connector.accountHealth?.checkedAt ? ` · ${when(connector.accountHealth.checkedAt)}` : ""}. Events: ${esc(connector.subscriptionHealth || "not configured")}.</p>` : ""}
     <p class="capabilities">${(connector.capabilities || []).map((entry) => `<code>${esc(entry)}</code>`).join(" · ") || "No actions advertised"}${connector.subscriptionHealth ? ` · ${esc(connector.subscriptionHealth)}` : ""}</p>
     ${authorityScope ? `<p class="faint">Role data scope <code>${esc(authorityScope)}</code></p>` : ""}
-    <div class="card-footer">${action}<a class="button secondary" href="/integrations?integration=${encodeURIComponent(connector.id)}">Manage</a></div>
+    <div class="card-footer">${action}${!detail ? `<a class="button secondary" href="/integrations?integration=${encodeURIComponent(connector.id)}">Manage</a>` : ""}
+    ${detail && connector.connected && canCheckIntegrations && connector.canCheck ? integrationButton("check", connector.connectionId, "Check account") : ""}
+    ${detail && connector.connected && canSubscribeIntegrations && connector.canSubscribe ? integrationButton("subscribe", connector.connectionId, "Set up event delivery") : ""}</div>
+    ${detail && connector.connected && canConnect ? renderHostedConnect(connector) : ""}
   </article>`;
 }
 
 function renderHostedConnect(connector) {
   const options = connector.capabilityOptions || [];
   const chooser = options.length
-    ? `<details class="connector-setup"><summary>Choose access</summary><form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><div class="field" style="margin-top:10px"><label for="capability-${esc(connector.id)}">Capabilities</label><select id="capability-${esc(connector.id)}" name="capabilities" multiple size="${Math.min(6, Math.max(2, options.length))}" required>${options.map((entry) => `<option value="${esc(entry.id)}">${esc(entry.label)}${entry.direction === "write" || entry.direction === "both" ? " · includes writes" : ""}</option>`).join("")}</select><span class="help">Choose only what this connection needs. Provider writes still require approval.</span></div><div class="button-row" style="margin-top:10px"><button>Connect ${esc(connector.label)}</button></div></form></details>`
-    : `<form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>Connect ${esc(connector.label)}</button></form>`;
+    ? `<details id="access" class="connector-setup" open><summary>Choose access</summary><form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><div class="field" style="margin-top:10px"><label for="capability-${esc(connector.id)}">Capabilities</label><select id="capability-${esc(connector.id)}" name="capabilities" multiple size="${Math.min(6, Math.max(2, options.length))}" required>${options.map((entry) => `<option value="${esc(entry.id)}"${connector.selectedCapabilities?.includes(entry.id) ? " selected" : ""}>${esc(entry.label)}${entry.direction === "write" || entry.direction === "both" ? " · includes writes" : ""}</option>`).join("")}</select><span class="help">Choose only what this connection needs. Provider writes still require approval.</span></div><div class="button-row" style="margin-top:10px"><button>${connector.connected || connector.status === "needs_reconnect" ? "Reconnect" : "Connect"} ${esc(connector.label)}</button></div></form></details>`
+    : `<form method="post" action="/integrations/connect"><input type="hidden" name="id" value="${esc(connector.id)}"><button>${connector.connected || connector.status === "needs_reconnect" ? "Reconnect" : "Connect"} ${esc(connector.label)}</button></form>`;
   return chooser;
+}
+
+function integrationButton(action, id, label) {
+  return `<form method="post" action="/integrations/${action}"><input type="hidden" name="id" value="${esc(id)}"><button class="secondary">${esc(label)}</button></form>`;
+}
+
+function renderHttpsSetup(connector) {
+  const port = Number(connector.ingressPort);
+  const target = Number.isInteger(port) && port > 0 && port < 65536 ? port : 4411;
+  let origin = "";
+  try { origin = new URL(connector.callbackUrl).origin; } catch { /* Not configured yet. */ }
+  return `<details class="connector-setup" id="https-setup"${origin ? "" : " open"}>
+    <summary>Tailscale HTTPS — recommended default</summary>
+    <p>Set this up once per host, then reuse it for every integration. This publishes only callbacks and verified webhooks. Your dashboard and app credentials stay private.</p>
+    <ol>
+      <li><a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Install Tailscale</a> on the CrewRun host and sign in. Enable MagicDNS, HTTPS certificates and Funnel permission in your tailnet.</li>
+      <li>Find this device’s full <code>machine.tailnet.ts.net</code> hostname in Tailscale. In the environment of the service that launches CrewRun, set <code>CREWRUN_PUBLIC_BASE_URL=https://YOUR-MACHINE.YOUR-TAILNET.ts.net</code>, then restart CrewRun. Do not use another user’s hostname or put secrets in workspace files.</li>
+      <li>Inspect <code>tailscale serve status</code> and <code>tailscale funnel status</code> first. If HTTPS port 443 is already in use, resolve the conflict without resetting unrelated routes.</li>
+      <li>When ready to make the callback listener public, run this on the host:<pre><code>tailscale funnel --bg --https=443 http://127.0.0.1:${target}</code></pre>Complete any Tailscale permission prompt. If access is denied on Linux, run the same command with <code>sudo</code> in your own terminal. Never enter a sudo password in CrewRun or grant the agent administrator access. Never substitute the dashboard port.</li>
+      <li>Confirm <code>tailscale funnel status</code> points only to <code>127.0.0.1:${target}</code>, then use the exact callback and webhook URLs below when creating your provider apps.</li>
+    </ol>
+    <p>Configured origin: <code>${esc(origin || "Not configured")}</code>. A configured URL does not prove public reachability or provider event delivery.</p>
+    <p class="help">Anyone on the internet can reach Funnel; provider verification and one-time OAuth state still protect the callback routes. No event rules are enabled by publishing them.</p>
+    <p>To stop this mapping after checking it is still CrewRun’s: <code>tailscale funnel --https=443 off</code>. This does not revoke provider grants.</p>
+    <p><a href="https://tailscale.com/docs/features/tailscale-funnel" target="_blank" rel="noopener noreferrer">Funnel prerequisites</a> · <a href="https://tailscale.com/docs/reference/tailscale-cli/funnel" target="_blank" rel="noopener noreferrer">Commands and troubleshooting</a></p>
+    <details><summary>Already have an HTTPS reverse proxy?</summary><p>Use its HTTPS origin instead and forward only to <code>127.0.0.1:${target}</code>. Tailscale is recommended, not required. Keep the dashboard on localhost; private Tailscale Serve needs separate trusted-origin support and must never share Funnel’s external port.</p></details>
+  </details>`;
+}
+
+function renderIntegrationSetup(connector, options) {
+  if (!connector.setup || !options.canConfigureIntegrations) return "";
+  const setup = connector.setup;
+  const disabled = connector.connected || connector.status === "needs_reconnect";
+  return `<section id="setup" class="panel" style="margin-top:20px;padding:20px">
+    ${renderHttpsSetup(connector)}
+    <h2>Provider app setup</h2>
+    <p>One account per provider in this workspace. Credentials stay in encrypted host storage, outside agent chats.</p>
+    <p>${esc(setup.instructions)} <a href="${esc(safeHref(setup.docsUrl))}" target="_blank" rel="noopener noreferrer">Open provider app settings ↗</a></p>
+    ${connector.setupMessage ? notice(connector.setupMessage) : ""}
+    <p>Callback / setup URL: <code>${esc(connector.callbackUrl || "Set CREWRUN_PUBLIC_BASE_URL on the host, then restart.")}</code></p>
+    <p>Webhook URL: <code>${esc(connector.webhookUrl || "Available after the HTTPS origin is configured.")}</code></p>
+    <p class="help">HTTPS ingress must be published by the operator. Never publish the private console. Connecting does not enable any event rules.</p>
+    ${disabled ? notice("Disconnect before editing app credentials. Reconnect above to change consent. Event delivery health is separate from account access.") : ""}
+    <form method="post" action="/integrations/setup" autocomplete="off">
+      <input type="hidden" name="id" value="${esc(connector.id)}">
+      ${setup.fields.map((field) => `<div class="field"><label for="setup-${esc(field.key)}">${esc(field.label)}${field.required ? " (required)" : ""}</label>
+        ${field.type === "pem" ? `<textarea id="setup-${esc(field.key)}" name="${esc(field.key)}" rows="4" autocomplete="off" spellcheck="false"${disabled || field.locked ? " disabled" : ""}></textarea>`
+          : `<input id="setup-${esc(field.key)}" name="${esc(field.key)}" type="${field.type === "secret" ? "password" : "text"}" autocomplete="off" spellcheck="false"${disabled || field.locked ? " disabled" : ""}>`}
+        <span class="help">${field.locked ? "Managed by host environment." : field.configured ? "Saved. Leave blank to keep the current value." : "Not configured."} ${esc(field.help)}</span></div>`).join("")}
+      <button${disabled ? " disabled" : ""}>Save app configuration</button>
+    </form>
+    <h3 style="margin-top:24px">Available capabilities</h3>
+    <p class="help">Consent is not agent authority. An agent still needs the relevant tools and connection data scope; external writes require approval.</p>
+    ${(connector.capabilityOptions || []).map((capability) => `<p><strong>${esc(capability.label)}</strong> — ${esc(capability.description || capability.direction)}<br><span class="help">${(connector.actions || []).filter((action) => action.capability === capability.id).map((action) => esc(action.label)).join(" · ")}</span></p>`).join("")}
+  </section>`;
 }
 
 function renderEvents(models, options = {}) {
@@ -1035,7 +1098,22 @@ function normalizeConnector(value = {}) {
     connected: value.connected === true || state === "connected",
     connectUrl: String(value.connectUrl || value.connect_url || "").trim(),
     hostSetup: value.hostSetup === true || value.host_setup === true,
+    status: state,
+    setup: value.setup ? {
+      instructions: String(value.setup.instructions || ""), docsUrl: String(value.setup.docsUrl || ""),
+      fields: asArray(value.setup.fields).map((field) => ({
+        key: String(field.key || ""), label: String(field.label || ""), type: String(field.type || "secret"),
+        help: String(field.help || ""), required: field.required === true, configured: field.configured === true, locked: field.locked === true
+      }))
+    } : null,
+    callbackUrl: String(value.callbackUrl || ""), webhookUrl: String(value.webhookUrl || ""),
+    ingressPort: Number(value.ingressPort) || 4411,
+    selectedCapabilities: asArray(value.selectedCapabilities).map(String),
+    actions: asArray(value.actions).map((action) => ({ capability: String(action.capability || ""), label: String(action.label || "") })),
+    canCheck: value.canCheck === true, canSubscribe: value.canSubscribe === true,
+    accountHealth: { status: String(value.accountHealth?.status || "not checked"), checkedAt: Number(value.accountHealth?.checkedAt) || null },
     configured: value.configured !== false,
+    connectable: value.connectable !== false,
     setupMessage: String(value.setupMessage || value.setup_message || "").trim().slice(0, 240),
     eventTypes: asArray(value.eventTypes || value.events).map((entry) => typeof entry === "string" ? entry : String(entry?.id || "")).filter((entry) => /^[a-z][a-z0-9-]{0,63}\.[A-Za-z][A-Za-z0-9]*$/.test(entry)),
     subscriptionHealth: String(value.subscriptionHealth || value.subscription_health || "").trim().slice(0, 80)

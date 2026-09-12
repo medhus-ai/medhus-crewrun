@@ -13,6 +13,7 @@ import { createUp } from "../src/up.js";
 import { createConsole } from "../src/console/server.js";
 import { initializeWorkspace } from "../src/workspace-setup.js";
 import { requireWorkspace, LIFECYCLE_EVENTS } from "../src/workspace-manifest.js";
+import { installIntegrationPlugin, listInstalledPlugins, scaffoldIntegrationPlugin } from "../src/integration-plugins.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
@@ -38,13 +39,20 @@ const [command, ...rest] = process.argv.slice(2);
 if (rest.includes("--host")) fail("v6 removed --host modules. Use the bundled host and integration plugins; see docs/v6-migration.md.");
 async function commandHost(targetRoot) {
   const manifest = requireWorkspace(targetRoot);
-  const { createHost } = await import("@medhus-ai/crewrun-reference-host");
+  const { createHost, loadReferencePlugins } = await import("@medhus-ai/crewrun-reference-host");
   process.env.TZ = manifest.timezone;
-  return createHost({ targetRoot, log });
+  return createHost({ targetRoot, log, plugins: await loadReferencePlugins() });
 }
 
 if (command === "--version" || command === "-v") {
   console.log(JSON.parse(readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version);
+} else if (command === "plugins") {
+  if (rest[0] === "list") console.log(JSON.stringify(await listInstalledPlugins(), null, 2));
+  else if (rest[0] === "create" && rest[1]) console.log(await scaffoldIntegrationPlugin(rest[1], { id: argValue(rest, "--id") || "example" }));
+  else if (rest[0] === "install" && rest[1]) {
+    console.log(JSON.stringify(await installIntegrationPlugin(rest[1], { trust: rest.includes("--trust") }), null, 2));
+    console.log("Installed. Restart CrewRun to load the reviewed plugin; no agent permissions or event rules were enabled.");
+  } else fail("usage: crewrun plugins list | create <new-directory> [--id slug] | install <package@1.2.3|./directory> --trust");
 } else if (command === "init") {
   const targetRoot = targetArgument(rest, ["--preset", "--name", "--timezone"]);
   if (!targetRoot) fail("usage: crewrun init <targetRoot> [--preset personal|organization] [--name name] [--timezone UTC]");
@@ -124,7 +132,8 @@ if (command === "--version" || command === "-v") {
   const targetRoot = targetArgument(rest.slice(1), ["--host"]);
   if (!targetRoot) fail("usage: crewrun agents check <targetRoot> ");
   requireWorkspace(targetRoot);
-  const { referencePlugins } = await import("@medhus-ai/crewrun-reference-host");
+  const { loadReferencePlugins } = await import("@medhus-ai/crewrun-reference-host");
+  const referencePlugins = await loadReferencePlugins();
   const knownEvents = [...LIFECYCLE_EVENTS, ...referencePlugins.flatMap((plugin) => plugin.events.map((event) => typeof event === "string" ? event : event.id))];
   const settings = loadRoleSettings(targetRoot);
   const { problems, warnings } = validateRoleSettings(settings, { knownEvents });
@@ -142,6 +151,7 @@ if (command === "--version" || command === "-v") {
   crewrun up <targetRoot>  [--console] [--console-host <address>]   run the crew loop on a project (+ console)
   crewrun console <targetRoot> [--port N] [--console-host <address>]                  the operator UI without the loop
   crewrun agents check <targetRoot>   validate agent heartbeat/hook settings
+  crewrun plugins list | create <new-directory> [--id slug] | install <package@1.2.3|./directory> --trust
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version

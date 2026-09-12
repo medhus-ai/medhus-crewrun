@@ -309,7 +309,7 @@ export function renderPage(page, content, { targetRoot, version = "", backHref =
   const groups = ["primary", "operations", "account"].map((group) => {
     const entries = PAGES.filter((entry) => entry.group === group);
     const links = group === "account"
-      ? `${entries.filter((entry) => entry.id === "chats").map(sidebarLink).join("")}${chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat with ${esc(chat.role)}">${icon("chat")}<span class="nav-text">${esc(chat.role)}</span></a>`).join("")}</div>` : ""}${entries.filter((entry) => entry.id !== "chats").map(sidebarLink).join("")}`
+      ? `${entries.map(sidebarLink).join("")}${chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat with ${esc(chat.role)}">${icon("chat")}<span class="nav-text">${esc(chat.role)}</span></a>`).join("")}</div>` : ""}`
       : entries.map(sidebarLink).join("");
     return links ? `<div class="nav-group">${links}</div>` : "";
   }).join("");

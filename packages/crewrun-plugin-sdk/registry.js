@@ -78,6 +78,7 @@ function publicManifest(plugin) {
     label: plugin.label,
     ...(plugin.description ? { description: plugin.description } : {}),
     oauth: plugin.oauth ? providerOAuthMetadata(plugin) : null,
+    ...(plugin.setup ? { setup: structuredClone(plugin.setup) } : {}),
     capabilities: plugin.capabilities.map((entry) => ({ ...entry, scopes: [...entry.scopes] })),
     actions: plugin.actions.map(publicDescriptor),
     events: plugin.events.map(publicDescriptor),

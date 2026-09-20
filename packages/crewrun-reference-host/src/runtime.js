@@ -281,6 +281,7 @@ export function createIntegrationRuntime({ targetRoot, state, plugins, pluginCon
     if (closed) return;
     closed = true;
     await stop();
+    await workspace.knowledge.close();
     store.close();
   }
 

@@ -9,6 +9,29 @@ import { createConsole } from "../src/console/server.js";
 import { renderPage } from "../src/console/shell.js";
 import { proposeReflection } from "../src/reflection-proposals.js";
 import { proposeSkill } from "../src/skill-proposals.js";
+import { renderKnowledge } from "../src/console/knowledge.js";
+
+test("knowledge setup uses existing settings forms and owner-only operations", async () => {
+  const { parent, root } = await project();
+  const actions = [];
+  const state = { model: "EmbeddingGemma 300M Q8_0", bytes: 333590944, status: "not installed", ready: false, enabled: false, fallback: true, supported: true, docling: true };
+  const console_ = createConsole({ targetRoot: root, port: 0, operations: {
+    getSnapshot: () => ({ knowledge: state }),
+    knowledgeAction: (value) => { actions.push(value); return "/settings?tab=knowledge"; }
+  } });
+  try {
+    const base = `http://127.0.0.1:${await console_.listen()}`;
+    const page = await (await fetch(base + "/settings?tab=knowledge")).text();
+    assert.match(page, /Local knowledge search/); assert.match(page, /Download and set up/);
+    assert.match(page, /Gemma model terms/); assert.match(page, /keyword search and report degraded/);
+    const response = await fetch(base + "/settings/knowledge", { method: "POST", redirect: "manual", headers: { Origin: base }, body: new URLSearchParams({ action: "install", consent: "1", url: "https://evil.test" }) });
+    assert.equal(response.status, 303); assert.equal(actions[0].consent, true); assert.equal(actions[0].url, undefined);
+    const blocked = await fetch(base + "/settings/knowledge", { method: "POST", headers: { Origin: "https://evil.test" }, body: new URLSearchParams({ action: "cancel" }) });
+    assert.equal(blocked.status, 403); assert.equal(actions.length, 1);
+    const active = renderKnowledge({ specs: {}, operations: { knowledge: { ...state, busy: true, completed: 10, total: 100, status: "downloading", error: "<script>bad</script>" } } });
+    assert.match(active, /Cancel job/); assert.match(active, /<progress/); assert.match(active, /&lt;script&gt;bad/);
+  } finally { await console_.close(); await rm(parent, { recursive: true, force: true }); }
+});
 
 test("sidebar places Chats and Recent chats after Usage and Settings", () => {
   for (const recentChats of [[], [{ role: "ops" }]]) {

@@ -15,6 +15,7 @@ import { knownSecretStatus, isUnlocked, secretsFileExists } from "../secret-stor
 import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
 import { renderTasks } from "./tasks.js";
+import { renderKnowledge } from "./knowledge.js";
 import { esc, icon } from "./shell.js";
 import { renderWorkspaceReviews } from "./workspace.js";
 import { readWorkspace } from "../workspace-manifest.js";
@@ -690,8 +691,9 @@ ${table(["engine", "runs", "spend", "failed"], engineRows, "No engine totals ava
 }
 
 function renderSettings(models, options = {}) {
-  const tab = options.tab === "host" ? "host" : "providers";
-  const header = `<section class="hero"><div><h1>Settings</h1><p class="sub">Model providers, credential availability, and host configuration.</p></div></section>${tabs("/settings", [["providers", "Providers & credentials"], ["host", "Host"]], tab)}`;
+  const tab = ["host", "knowledge"].includes(options.tab) ? options.tab : "providers";
+  const header = `<section class="hero"><div><h1>Settings</h1><p class="sub">Model providers, local knowledge, and host configuration.</p></div></section>${tabs("/settings", [["providers", "Providers & credentials"], ["knowledge", "Knowledge"], ["host", "Host"]], tab)}`;
+  if (tab === "knowledge") return header + renderKnowledge(models);
   const boundary = models.workspace ? notice("Governed workspace: Claude-compatible runners and the verified Codex SDK on Linux use the internal tool bridge. Native tools are disabled or denied by default. The owner may opt one direct-Claude agent into privileged native shell auto mode from agent settings; this exception is not filesystem isolation. Generic CLI runners fail closed. Daily run limits are supported; hard per-run USD is Claude-only, and hard token/monthly-dollar limits require a reservation-capable host.", "info") : "";
   if (tab === "providers") return header + boundary + renderProviders(models, options);
   const lifecycle = models.workspace ? `<section class="section-heading"><h2>Lifecycle follow-ups</h2></section><p class="help">The helper can propose rules for review. Enable them here only after the agent's hook and authority are configured.</p>${table(["rule", "event", "agent", "enabled"], models.workspace.rules.map((rule) => [esc(rule.id), esc(rule.event), esc(rule.agent), `<form method="post" action="/workspace/lifecycle"><input type="hidden" name="id" value="${esc(rule.id)}"><input type="hidden" name="enabled" value="${rule.enabled ? "" : "1"}"><button class="state-toggle" role="switch" aria-checked="${rule.enabled}" aria-label="Enable ${esc(rule.id)}"></button></form>`]), "No lifecycle follow-ups are configured.", pageOptions("/settings", options, { tab: "host" }))}` : "";
@@ -1055,6 +1057,7 @@ function normalizeOperations(value) {
   const connectors = normalizedConnectors.filter((entry) => entry.id);
   return {
     runs: asArray(source.runs),
+    knowledge: source.knowledge || null,
     workspaceProposals: asArray(source.workspaceProposals),
     delivery: source.delivery || null,
     outcomes: source.outcomes || null,

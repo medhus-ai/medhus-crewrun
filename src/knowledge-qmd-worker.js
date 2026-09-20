@@ -1,13 +1,25 @@
 // Runs only inside knowledge-process's isolated child, never inside the credential-owning host.
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { createStore, extractSnippet } from "@tobilu/qmd";
 
-const { query, mode, limit } = JSON.parse(readFileSync("/work/request.json", "utf8"));
-const store = await createStore({ dbPath: "/index/index.sqlite", config: { collections: { sources: { path: "/work/sources", pattern: "*.md" } } } });
+const { query, mode, limit, build = false, indexOnly = false, verify = false, fingerprint = "smoke", rebuild = false } = JSON.parse(readFileSync("/work/request.json", "utf8"));
+const model = "/models/embeddinggemma-300M-Q8_0.gguf";
+const progress = (completed, total) => process.stdout.write(JSON.stringify({ progress: { completed, total } }) + "\n");
+const store = await createStore({ dbPath: "/index/index.sqlite", config: { models: { embed: model }, collections: { sources: { path: "/work/sources", pattern: "*.md" } } } });
 try {
   await store.update();
-  if (mode === "hybrid") await store.embed();
-  const results = mode === "hybrid" ? await store.search({ query, limit }) : await store.searchLex(query, { limit });
+  if (mode === "hybrid" && build) {
+    const embedded = await store.embed({ force: rebuild, maxDocsPerBatch: 4, maxBatchBytes: 65536,
+      onProgress: (info) => progress(info.chunksEmbedded, info.totalChunks) });
+    if (embedded.errors) throw new Error("Incomplete embedding index");
+    writeFileSync("/index/embedded.tmp", fingerprint); renameSync("/index/embedded.tmp", "/index/embedded");
+  }
+  const ready = existsSync("/index/embedded") && readFileSync("/index/embedded", "utf8") === fingerprint;
+  if (mode === "hybrid" && !ready) throw new Error("Embedding index not ready");
+  // Explicit lex/vec inputs skip query expansion; rerank:false avoids a second model.
+  const results = indexOnly ? [] : verify ? await store.searchVector(query, { limit }) : mode === "hybrid"
+    ? await store.search({ queries: [{ type: "lex", query }, { type: "vec", query }], rerank: false, limit })
+    : await store.searchLex(query, { limit });
   const matches = [];
   for (const row of results) {
     const file = row.filepath || row.file;

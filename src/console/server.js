@@ -444,6 +444,11 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=workspace");
     if (pathname === "/workspace/lifecycle") return callOperation(["toggleLifecycle"], { id: String(form.id || ""), enabled: form.enabled === "1" }, "/settings?tab=host");
+    if (pathname === "/settings/knowledge") return callOperation(["knowledgeAction"], {
+      action: String(form.action || ""), consent: form.consent === "1", enabled: form.enabled === "1",
+      fallback: form.fallback === "1", role: String(form.role || ""),
+      paths: String(form.paths || "").trim() ? lines(form.paths) : undefined, rebuild: form.rebuild === "1"
+    }, "/settings?tab=knowledge");
     if (pathname === "/workspace/revise") {
       const changes = Object.keys(form).filter((key) => /^path_\d+$/.test(key)).map((key) => ({ path: form[key], content: form[key.replace("path_", "content_")] }));
       return callOperation(["reviseWorkspace"], { id: form.id, title: form.title, changes }, "/reviews?tab=workspace");

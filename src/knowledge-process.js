@@ -4,14 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const KNOWLEDGE_VERSIONS = Object.freeze({ qmd: "2.8.3", docling: "2.126.0", boundary: 1 });
+export const KNOWLEDGE_VERSIONS = Object.freeze({ qmd: "2.8.3", docling: "2.126.0", boundary: 2 });
 
 // These are host-only paths. Never accept executable, config, model or index paths from tools.
 export function knowledgeInstallation(env = process.env) {
   let modules = "";
   try { modules = path.resolve(path.dirname(fileURLToPath(import.meta.resolve("@tobilu/qmd"))), "../../.."); } catch { /* optional dependency */ }
   const venv = path.resolve(env.CREW_DOCLING_VENV || path.join(here, "../node_modules/.crewrun-docling"));
-  return { modules, venv, qmd: Boolean(modules) && Number(process.versions.node.split(".")[0]) >= 22, docling: existsSync(path.join(venv, "bin/python")), sandbox: process.platform === "linux" && existsSync("/usr/bin/bwrap"), semantic: env.CREW_KNOWLEDGE_SEMANTIC === "1" };
+  return { modules, venv, qmd: Boolean(modules) && Number(process.versions.node.split(".")[0]) >= 22, docling: existsSync(path.join(venv, "bin/python")), sandbox: process.platform === "linux" && existsSync("/usr/bin/bwrap") };
 }
 
 export function knowledgeSandboxArgs({ kind, job, cache, models, installation }) {
@@ -22,7 +22,7 @@ export function knowledgeSandboxArgs({ kind, job, cache, models, installation })
   for (const directory of ["/usr", "/bin", "/lib", "/lib64"]) if (existsSync(directory)) args.push("--ro-bind", realpathSync(directory), directory);
   args.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/home/worker",
     "--ro-bind", job, "/work", "--chdir", "/work");
-  const environment = { PATH: "/usr/bin:/bin", HOME: "/home/worker", LANG: "C.UTF-8", TMPDIR: "/tmp", OMP_NUM_THREADS: "2", OPENBLAS_NUM_THREADS: "2", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1", PYTHONDONTWRITEBYTECODE: "1", QMD_FORCE_CPU: "1", XDG_CACHE_HOME: "/models", XDG_CONFIG_HOME: "/tmp/config" };
+  const environment = { PATH: "/usr/bin:/bin", HOME: "/home/worker", LANG: "C.UTF-8", TMPDIR: "/tmp", OMP_NUM_THREADS: "2", OPENBLAS_NUM_THREADS: "2", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1", PYTHONDONTWRITEBYTECODE: "1", QMD_FORCE_CPU: "1", QMD_EMBED_PARALLELISM: "1", QMD_EMBED_MODEL: "/models/embeddinggemma-300M-Q8_0.gguf", XDG_CACHE_HOME: "/tmp/cache", XDG_CONFIG_HOME: "/tmp/config" };
   for (const [key, value] of Object.entries(environment)) args.push("--setenv", key, value);
   if (models && existsSync(models)) args.push("--ro-bind", models, "/models");
   else args.push("--dir", "/models");
@@ -50,12 +50,28 @@ export async function runKnowledgeProcess(options) {
       reject(new Error(`${options.kind} could not complete in its restricted sandbox. Check installation, input limits and local model setup (docs/workspace-knowledge.md).`));
     };
     const timer = setTimeout(fail, options.kind === "qmd" ? 180000 : 100000);
-    child.stdout.on("data", (chunk) => { size += chunk.length; if (size > 8000000) fail(); else output += chunk.toString("utf8"); });
+    options.signal?.addEventListener("abort", fail, { once: true });
+    if (options.signal?.aborted) fail();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size > 8000000) return fail();
+      output += chunk;
+      // Only the QMD worker emits framed progress. Never forward parser diagnostics.
+      while (options.kind === "qmd" && output.includes("\n")) {
+        const end = output.indexOf("\n"), line = output.slice(0, end); output = output.slice(end + 1);
+        try {
+          const p = JSON.parse(line).progress;
+          if (p && Number.isSafeInteger(p.completed) && Number.isSafeInteger(p.total) && p.completed >= 0 && p.total >= 0) options.onProgress?.(p);
+        } catch { return fail(); }
+      }
+    });
     // Parser diagnostics can contain document text or host paths. Never forward them to agents.
     child.stderr.on("data", (chunk) => { size += chunk.length; if (size > 8000000) fail(); });
     child.on("error", () => { clearTimeout(timer); fail(); });
     child.on("close", (code) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", fail);
       if (failed) return;
       if (code !== 0) return fail();
       try { resolve(JSON.parse(output)); } catch { fail(); }

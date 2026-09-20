@@ -150,12 +150,19 @@ export function createIntegrationHost({
   }
 
   const operations = {
+    knowledgeAction: ({ action, ...options }) => {
+      const allowed = { install: "install", configure: "configure", cancel: "cancel", build: "build" };
+      if (!Object.hasOwn(allowed, action)) throw new Error("Unknown knowledge action.");
+      runtime.workspace.knowledge[allowed[action]](options);
+      return "/settings?tab=knowledge";
+    },
     setShellAgent: (options) => setShellAgent({ ...options, env }),
     async getSnapshot() {
       const runtimeSnapshot = runtime.snapshot();
       const connections = state.listConnections();
       return {
         replaceConnectorInventory: true,
+        knowledge: runtime.workspace.knowledge.snapshot(),
         connectors: registry.list().map((plugin) => ({
           ...connectorSnapshot(plugin, connections.filter((connection) => connection.plugin === plugin.id), state, configFor(plugin.id)),
           setup: plugin.setup ? { ...plugin.setup, fields: pluginSetupStatus(plugin, configFor(plugin.id), safeObject(externalConfig[plugin.id])).fields } : null,

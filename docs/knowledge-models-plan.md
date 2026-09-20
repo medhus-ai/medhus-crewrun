@@ -1,11 +1,44 @@
-# Knowledge models and local AI — deferred plan
+# Knowledge models and local AI — release plan
 
-Status: discussion draft, implementation explicitly paused by the owner.
-Recorded: 2026-09-09.
+Status: guided local embedding setup implemented for the verified Linux host; installer packaging remains separate.
+Recorded: 2026-09-09. Decision updated: 2026-09-20.
 
-This document records the requested direction, not released functionality or
-authorization to download models, install services, change settings, or restart
-CrewRun. Discuss the local AI runtime stack before implementation.
+The owner approved implementation of local knowledge setup after recording this
+plan. Settings now provisions a pinned local model and bounded indexes. This does
+not choose a chat server, activate a production workspace or ship desktop installers.
+
+## Agreed built-in embedding experience
+
+CrewRun's free core must include a first-class local knowledge setup using
+**EmbeddingGemma 300M Q8_0**, matching the existing pinned QMD dependency's default.
+Bundle inference support, not model weights in the installer: download weights
+after install through owner-approved setup. No API key, paid subscription, separate
+Ollama service or hosted account is required for document embeddings.
+
+Why this default: reuse QMD/node-llama-cpp already present, a relatively small local
+artifact and multilingual retrieval. Google describes the model as trained on over
+100 languages; usefulness on our documents still requires measured evaluation.
+[Model overview](https://ai.google.dev/gemma/docs/embeddinggemma).
+
+Download only the embedding model for the baseline. The worker now uses explicit
+lexical/vector queries and disables reranking, avoiding QMD's separate generation
+and reranking weights. Both QMD's store and tokenizer resolve the fixed local model.
+
+Settings shows Download and set up, terms, size, progress/cancel/retry, ready/degraded
+status and index rebuild controls. Skipping setup keeps keyword search usable;
+embedding failure must be visible and never trigger cloud upload. The pinned artifact
+revision, checksum and maximum download size are recorded in `src/knowledge-models.js`;
+do not rely on a mutable upstream branch or add model binaries to Git.
+
+Docling extracts supported PDF/Office content; embeddings find relevant passages;
+workspace.read returns authorized source text for the agent to interpret. Embeddings
+do not add OCR, spreadsheet calculation, unsupported parsing or new file permissions.
+Do not promise correct reading from retrieval alone.
+
+First release targets Windows/Linux with independently verified runtime boundaries;
+macOS is deferred. Initial chat choices are the separate local-model project or
+OpenRouter. The embedding worker does not depend on either. Earlier Claude/Codex
+optional-reranker ideas below are future design options, not bundled launch clients.
 
 ## Requested search pipeline
 
@@ -25,19 +58,24 @@ without first discussing a concrete upstream limitation.
 
 ## Current implementation versus proposed work
 
-The current `workspace.search` defaults to QMD keyword search. Its optional hybrid
-mode invokes QMD's local embedding, query-expansion, and reranking pipeline.
-Model downloads are operator-managed; the sandbox cannot access the network.
+The current `workspace.search` defaults to QMD keyword search until owner setup,
+then lexical/vector retrieval with visible keyword fallback. Model setup is an
+owner-only, host-managed download followed by sandboxed inference verification.
+New index generations build in a bounded background job; the sandbox has no network.
 See [current workspace knowledge behavior](workspace-knowledge.md).
 
-The requested independent provider selectors, embedding-only hybrid path,
-existing-runner query improvement/reranking, and guided model download are not
-implemented. An OpenAI embedding adapter requires investigation of the pinned
+Independent cloud providers and existing-runner query improvement/reranking remain
+deferred. Embedding-only hybrid retrieval and guided local provisioning are implemented.
+An OpenAI embedding adapter requires investigation of the pinned
 QMD interfaces; changing a local model filename is not sufficient. Confirm that
 external vectors and provider-specific query embeddings can be supplied safely
 before committing to the adapter design.
 
 ## Proposed Settings
+
+Local EmbeddingGemma and None/keyword-only are the initial release choices. The
+OpenAI API option and runner-based improvement below remain deferred; they are not
+required to ship built-in local search.
 
 ### Knowledge search
 
@@ -53,7 +91,7 @@ before committing to the adapter design.
   or fail the request. Report degraded mode and reason in tool results and UI.
   Never silently switch from local to cloud processing.
 
-Keep the Crew helper's model selector separate from knowledge search and agent
+Keep the future Crew helper's model selector separate from knowledge search and agent
 models. Reuse existing profile configuration and persistent helper conversations;
 model changes must not accidentally reuse an incompatible engine session.
 
@@ -90,9 +128,10 @@ embedded inference path. [QMD model setup](https://github.com/tobi/qmd/blob/main
   concurrency and measure total process/native memory, not just the JS heap.
 - Disk use includes model weights, extracted content, vectors, and SQLite indexes.
   Keep cache cleanup bounded and separate from canonical runtime state.
-- Index new/changed passages incrementally; do not unnecessarily embed an entire
-  corpus after one file edit. Rebuild vectors when model/dimensions/prompt format
-  change, with atomic index activation and no mixed-vector searches.
+- Unchanged source/contract generations reuse vectors. Cross-generation incremental
+  passage reuse is deferred: a changed bounded corpus currently rebuilds in the
+  background to preserve strict source isolation. Model/pipeline fingerprints isolate
+  index generations and completion markers activate only fully embedded indexes.
 - Local embeddings have no provider inference charge. Electricity and hardware
   remain costs. Optional cloud improvement/reranking sends queries or authorized
   excerpts to its provider and needs explicit disclosure and consent.
@@ -166,15 +205,17 @@ Decide before coding:
 - Run opt-in real local embedding and model-runtime checks after owner-approved
   installation. Report skipped cloud/provider tests explicitly.
 
-## Later implementation sequence
+## Remaining work
 
-1. Agree on the local-runtime scope and validate QMD adapter feasibility.
-2. Add private settings and explicit keyword/fallback behavior using existing UI.
-3. Add bounded local model provisioning and incremental embedding-only retrieval.
-4. Add API embeddings with credential isolation, consent, and usage accounting.
-5. Add optional runner-based improvement/reranking and the helper selector.
-6. Verify boundaries, recovery, resource use and UI; update released docs only
-   when behavior is actually implemented and tested.
+1. Package inference/parser prerequisites into the desktop/headless installers;
+   validate Windows isolation separately. Current verified execution is Linux-only.
+2. Evaluate safe incremental passage reuse across changed generations, cache cleanup,
+   larger corpora and hardware-specific resource budgets; do not share role indexes.
+3. Decide local chat runtime independently from the embedded retrieval worker.
+4. Optional later API embeddings, query improvement/reranking and helper selector.
+5. Broaden relevance/performance fixtures beyond the initial document and synonym tests.
 
-No model download, service installation, implementation, activation, commit, or
-push is authorized by this planning document.
+Unit tests exercise consent, hashes, redirects, recovery, concurrent claims, console
+controls and authority rechecks. Opt-in tests perform a real pinned model download,
+sandbox embedding verification and scoped hybrid retrieval over document fixtures.
+No production workspace activation, service restart, commit or push is implied.

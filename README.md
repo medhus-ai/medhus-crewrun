@@ -66,7 +66,10 @@ For a released version: `npm install -g medhus-crewrun`, then
 - Assign outcomes and completion criteria, delegate bounded child tasks, and answer blockers without losing the original task.
 - Write scoped drafts freely while reviewing durable knowledge, skills, and agent configuration changes.
 - Search authorized workspace knowledge with QMD and read Word, Excel and PDF files
-  with Docling through the same scoped tools; see [local setup](docs/workspace-knowledge.md).
+  with Docling through the same scoped tools. **Settings → Knowledge** downloads and
+  verifies local EmbeddingGemma, builds agent indexes in the background, and offers
+  explicit keyword fallback—no embedding API key or Ollama required. See
+  [local setup and Linux prerequisites](docs/workspace-knowledge.md).
 - Propose reusable Skills for approval instead of silently rewriting long-term agent behavior.
 - Connect Slack or Gmail, then review the exact approved outbound action before it is delivered.
 - See task outcomes, artifacts, receipts, approval decisions, audit metadata, and usage in one place.

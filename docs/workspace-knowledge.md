@@ -13,17 +13,20 @@ personal/organization presets already include both tools; existing contracts
 which deliberately omit them remain restricted. The setup helper is not a
 workspace-reading agent and does not gain broad knowledge access.
 
-- `workspace.search({query, mode?, paths?})`: QMD keyword search by default, returning
+- `workspace.search({query, mode?, paths?})`: QMD keyword search before setup, returning
   up to ten matches, original source paths, content revisions and excerpts.
-  `mode: "hybrid"` uses local embeddings, query expansion and reranking after owner
-  setup below. `paths` optionally selects 1–50 specific authorized files.
+  After setup the default combines keyword and local vector
+  retrieval, without query expansion or a separate reranking model. `paths`
+  optionally selects 1–50 specific authorized files. The owner chooses visible
+  keyword fallback (default) or failure when hybrid retrieval is unavailable.
 - `workspace.read({path, offset?, limit?})`: existing text reads remain unchanged.
   PDF, DOCX, XLSX, PPTX and CSV are converted with Docling to paginated Markdown.
   Offsets for converted documents are bytes in the extracted Markdown, not the
   original binary file. Results include source revision and available Docling
   element/page references. A changed source invalidates cached extraction.
 - `workspace.search({query, mode: "literal"})`: basic scoped Markdown search without
-  QMD or Python. This is explicit, never a silent downgrade from hybrid search.
+  QMD or Python. Hybrid fallback returns `degraded: true`, `requestedMode` and a
+  `fallbackReason`; it never sends files to a cloud provider.
 
 Example: search for `launch budget`, then read `knowledge/budget.xlsx` from a
 matching result. Cite its source/revision. Extracted line numbers are **not Excel
@@ -37,6 +40,11 @@ Google Drive, Docs, Sheets or Microsoft files: existing provider tools remain
 separate, and connecting a provider does not start indexing or automation.
 
 ## Host setup
+
+The bundled host exposes **Settings → Knowledge** for model download, verification,
+search preferences and agent index jobs. Packaging QMD/Docling into self-contained
+Windows/Linux installers remains separate work; these checkout prerequisites still
+apply. Unsupported sandbox platforms stay disabled.
 
 Use Linux with Node 22+ for QMD (the core still supports Node 20), Python 3.10+
 and `bubblewrap` plus `util-linux` (`flock`, `prlimit`). Install OS packages using
@@ -64,30 +72,43 @@ system libraries, not arbitrary Conda installations or the host home.
 Restart the host after dependency/environment changes. Missing components produce
 an actionable tool error; ordinary text reads and explicit literal search still work.
 
-### Optional local hybrid search
+### Guided local hybrid search
 
-Keyword search and Office/native-PDF extraction do not download models. For hybrid
-search, the **operator** downloads QMD's default models before enabling it. This
-requires disk space and local CPU/RAM; model downloads are not performed by agents.
+1. Open **Settings → Knowledge**, review the Gemma terms and download/resource
+   guidance, and choose **Download and set up**. No paid plan, API key or Ollama needed.
+2. The host downloads only EmbeddingGemma 300M Q8_0 (333,590,944 bytes) from the pinned
+   Hugging Face revision. HTTPS/CDN destinations, byte count and SHA-256 are checked;
+   the model is published atomically, then tested with a real sandboxed embedding and
+   vector search. Ready is not reported merely because a file exists.
+3. Setup enables local hybrid search. Choose None for keyword-only, or choose whether
+   unavailable embeddings should produce explicitly degraded keyword results or errors.
+4. Select an agent and **Build / rebuild index**. Optional paths narrow the corpus.
+   Settings displays progress and allows cancellation; refresh shows durable status.
+   Incomplete downloads restart on retry rather than trusting partial files.
 
-```sh
-# Choose a private, dedicated cache directory outside the workspace.
-XDG_CACHE_HOME=/absolute/private/crew-knowledge-models ./node_modules/.bin/qmd pull
-```
+Each workspace stores a single immutable model artifact shared by its agents in
+`knowledge-models/` beside its private runtime SQLite store. Credentials are not
+mounted into workers. Separate workspace runtimes currently keep separate copies.
+The setup/lease record lives in the existing SQLite database; concurrent hosts cannot
+own the same job. Interrupted jobs become retryable after their 60-second lease expires.
+Cancellation and shutdown abort active work; an interrupted build is never reported ready.
 
-Set these values in the CrewRun service environment and restart:
+New source/contract generations queue one bounded background embedding job on demand.
+The requesting search uses keyword results until the index is ready (or errors if
+fallback is disabled). Permission, task lease and source revisions are rechecked.
+One setup/index job runs per workspace; a busy workspace defers other generations
+until a later search or explicit build. Failed jobs require owner retry. Unchanged
+generations reuse vectors; changed generations currently rebuild their bounded corpus,
+not a cross-generation incremental vector cache. Very large workspaces need narrower
+path selections; the existing admission limits below remain in effect.
 
-```ini
-CREW_KNOWLEDGE_MODELS=/absolute/private/crew-knowledge-models
-CREW_KNOWLEDGE_SEMANTIC=1
-```
-
-The directory must contain QMD's `qmd/models/` cache. Models are mounted read-only;
-the worker uses CPU mode and cannot fetch missing models. Only the pinned default
-model configuration is used; workspace QMD hooks, YAML, custom model URLs, plugins
-and ambient provider credentials are not loaded. Missing models cause a failure,
-not a network request or silent keyword fallback. Local indexing inference is not
-reported as a provider API charge.
+Model weights are mounted read-only. Workers have no network and use CPU mode with
+one embedding context. Host download is a separate owner-only operation. Workspace
+QMD hooks, YAML, model URLs, plugins and ambient credentials are never loaded. No
+generation/reranking weights are downloaded. Legacy manual QMD cache/environment setup
+is replaced by the private managed artifact; use Settings to provision it. Local
+inference is not reported as a provider API charge. RAM headroom guidance is an
+estimate, not a hard native-memory quota; existing heap, CPU, time and file limits apply.
 
 ## Boundary and private state
 
@@ -132,8 +153,10 @@ quota. Jobs clean up on completion; an abruptly killed host can leave private
 ```sh
 node --test test/workspace-knowledge.test.js
 CREW_LIVE_KNOWLEDGE=1 node --test test/workspace-knowledge.test.js
-# Only after downloading the local models:
-CREW_LIVE_KNOWLEDGE_HYBRID=1 node --test test/workspace-knowledge.test.js
+# Opt-in real download, checksum and sandbox inference (334 MB):
+CREW_LIVE_KNOWLEDGE_INSTALL=1 node --test test/knowledge-models.test.js
+# Reuse an existing verified artifact for scoped hybrid retrieval tests:
+CREW_LIVE_KNOWLEDGE_HYBRID=1 CREW_TEST_EMBEDDING_FILE=/absolute/model.gguf node --test test/workspace-knowledge.test.js
 ```
 
 The first command checks authority, staging, invalidation, caching, schemas and MCP
@@ -141,7 +164,9 @@ registration with controlled adapters. The opt-in command runs real QMD, Docling
 Word/Excel/CSV/PDF fixtures, concurrent searches and active sandbox-denial probes.
 It needs no provider credentials or public HTTPS. Hybrid-model quality/performance
 is separate from these keyword/parser checks; do not interpret passing them as
-verification of model downloads or semantic retrieval quality.
+verification of model downloads or semantic retrieval quality. `knowledge-models.test.js`
+also covers consent, redirects, hashes, cancellation, recovery and concurrent claims;
+the console tests cover setup controls and cross-origin rejection.
 
 QMD and Docling code are MIT-licensed; preserve their notices. Model weights have
 their own licenses. The npm lockfile pins QMD's dependency resolution; the Docling

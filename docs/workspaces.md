@@ -9,6 +9,24 @@ crewrun up ./my-crew --console
 
 The `organization` preset starts with a coordinator, not a compulsory company hierarchy. Add roles through forms or the side helper. `init` refuses existing files; it never replaces a repository. v6 reads only canonical `.crew/agents/*.json`; [migrate old formats](v6-migration.md) before startup.
 
+## A convincing small workspace
+
+`launch-desk` is an installable example for a product launch: a coordinator can create linked
+tasks and make authorized handoffs; a researcher has narrowly allowlisted web research and writes
+only research drafts; a writer can read those notes and write a launch draft but has no web or
+publishing access. It also contains a visible, disabled weekly routine.
+
+```sh
+crewrun init ./launch-desk --preset launch-desk --name "My launch desk" --timezone America/Phoenix
+crewrun up ./launch-desk --console
+```
+
+Ask the coordinator: “Turn our brief into a launch plan. Delegate market evidence to the
+researcher, then have the writer prepare a one-page launch brief for my review.” This exercises
+the normal task, handoff, draft, review, and scheduled-work surfaces without a provider account.
+Replace `knowledge/product-brief.md` and `knowledge/audience.md` with your own context; the
+example never sends or publishes anything.
+
 ## What lives where
 
 `.crew/workspace.json` is a version-1 manifest: stable `id`, display `name`, IANA `timezone`, Markdown `context` entrypoints, draft/output folder policy, execution-chain limits, and explicit lifecycle/integration rules. Agent contracts, memory pointers, skills, and scheduled definitions remain ordinary reviewed workspace files. Knowledge folder names are not hard-coded.

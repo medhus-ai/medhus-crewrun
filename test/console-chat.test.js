@@ -20,8 +20,8 @@ sqlite("console chat resumes one durable thread per agent", async (t) => {
   t.after(() => { db.close(); rmSync(parent, { recursive: true, force: true }); });
   const calls = [];
   const runner = {
-    startAgentTurn({ agent, messages, resumeSessionId, toolContext, modeOverride, onLine, onClose }) {
-      calls.push({ agent, messages, resumeSessionId, toolContext, modeOverride });
+    startAgentTurn({ agent, messages, resumeSessionId, toolContext, modeOverride, context, onLine, onClose }) {
+      calls.push({ agent, messages, resumeSessionId, toolContext, modeOverride, context });
       queueMicrotask(() => { onLine(`Reply ${calls.length}`); onClose({ code: 0, engineSessionId: `session-${calls.length}` }); });
       return { kill() {} };
     },
@@ -37,14 +37,21 @@ sqlite("console chat resumes one durable thread per agent", async (t) => {
   assert.equal(calls[1].resumeSessionId, "session-1");
   assert.deepEqual(calls[0].toolContext, { actor: "ops", runner: "claude-agent-sonnet-high", model: "sonnet", chatId: first.id });
   assert.deepEqual(second.messages.map((message) => message.author), ["user", "ops", "user", "ops"]);
-  const helper = await chats.sendChat({ role: HELPER_ROLE, message: "Help me add an agent" });
+  assert.deepEqual(chats.setTopic({ role: "ops", conversationId: first.id, topic: "  Incident   response plan  " }), { id: first.id, topic: "Incident response plan" });
+  assert.equal(chats.getChat({ role: "ops" }).title, "Incident response plan");
+  assert.equal(chats.listChats().find((entry) => entry.role === "ops").title, "Incident response plan");
+  assert.throws(() => chats.setTopic({ role: "ops", conversationId: first.id + 1, topic: "Wrong thread" }), /own current durable conversation/);
+  const helper = await chats.sendChat({ role: HELPER_ROLE, message: "Help me add an agent", targetRole: "ops", intent: "schedule", cadence: "weekly", time: "09:30" });
   assert.equal(helper.role, HELPER_ROLE);
   assert.equal(calls[2].modeOverride, "propose");
+  assert.match(calls[2].context, /The owner selected target agent: ops/);
+  assert.match(calls[2].context, /The owner began a scheduled task request/);
+  assert.match(calls[2].context, /Preferred repeat: weekly at 09:30 local time/);
   assert.deepEqual(chats.listChats().map((entry) => entry.role).sort(), [HELPER_ROLE, "ops"]);
 
   const helperBridge = createConsoleHelperBridge({ targetRoot: root });
   const tools = helperBridge.toolHandlers({ role: HELPER_ROLE });
-  assert.deepEqual(tools.map((tool) => tool.toolName), ["crew.status"]);
+  assert.deepEqual(tools.map((tool) => tool.toolName), ["crew.status", "skill.propose"]);
   const status = await tools[0].invoke({});
   assert.equal(status.structuredContent.agents[0].role, "ops");
 });

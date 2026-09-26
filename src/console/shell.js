@@ -8,15 +8,19 @@ export function esc(value) {
 
 const NAV_ICONS = Object.freeze({
   arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  arrowDown: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   search: '<circle cx="11" cy="11" r="5.5"/><path d="m15.5 15.5 4 4"/>',
   home: '<path d="m3.5 10 8.5-7 8.5 7"/><path d="M5.5 9v10h13V9M9.5 19v-5h5v5"/>',
   cloud: '<path d="M7 18.5h10.2a3.8 3.8 0 0 0 .5-7.6A5.8 5.8 0 0 0 6.5 9.2 4.7 4.7 0 0 0 7 18.5Z"/>',
+  folder: '<path d="M3.5 6.5h6l1.8 2H20a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V8a1.5 1.5 0 0 1 1-1.5Z"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8 14h.01M12 14h.01M16 14h.01"/>',
   shield: '<path d="M12 3 19 6v5c0 4.6-3 7.7-7 10-4-2.3-7-5.4-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/>',
   list: '<path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
   network: '<circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="m7.7 7.1 2.8 8M16.3 7.1l-2.8 8M8 6h8"/>',
   blocks: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
   chat: '<path d="M5 18.5 3.7 21l4.1-1.3A8.8 8.8 0 1 0 4 16.1"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
+  send: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.35 2.35-.06-.06A1.7 1.7 0 0 0 15.52 19a1.7 1.7 0 0 0-1.02 1.55v.09h-3.32v-.09A1.7 1.7 0 0 0 10.16 19a1.7 1.7 0 0 0-1.87.34l-.06.06-2.35-2.35.06-.06A1.7 1.7 0 0 0 6.28 15a1.7 1.7 0 0 0-1.55-1.02h-.09v-3.32h.09A1.7 1.7 0 0 0 6.28 9.64a1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.35-2.35.06.06a1.7 1.7 0 0 0 1.87.34 1.7 1.7 0 0 0 1.02-1.55v-.09h3.32v.09a1.7 1.7 0 0 0 1.02 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06 2.35 2.35-.06.06a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.55 1.02h.09v3.32h-.09A1.7 1.7 0 0 0 19.4 15Z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M15 6l3 3M13 8l3 3"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
@@ -62,6 +66,14 @@ a { color: inherit; }
 .nav-caption { padding: 4px 10px 2px; color: #8b9098; font-size: 10px; font-weight: 650; letter-spacing: .035em; text-transform: uppercase; }
 .sidebar-link.recent-chat { min-height: 28px; font-size: 12px; }
 .sidebar-account { display: flex; min-height: 48px; align-items: center; gap: 8px; margin-top: auto; padding: 8px 6px; color: #1f2328; }
+.sidebar-account-menu { position: relative; margin-top: auto; }
+.sidebar-account-menu .sidebar-account { width: 100%; margin-top: 0; border: 0; border-radius: 7px; background: transparent; cursor: pointer; font: inherit; text-align: left; }
+.sidebar-account-menu .sidebar-account:hover { background: #e9e9e9; }
+.sidebar-account-menu .sidebar-account:focus-visible { outline: 2px solid #9cb5d9; outline-offset: 2px; }
+.sidebar-settings-menu { position: absolute; right: 0; bottom: calc(100% + 7px); left: 0; z-index: 5; display: grid; gap: 2px; padding: 6px; border: 1px solid #dcdfe3; border-radius: 9px; background: #fff; box-shadow: 0 9px 24px rgba(26, 31, 38, .15); }
+.sidebar-settings-menu[hidden] { display: none; }
+.sidebar-menu-link { display: flex; min-height: 31px; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 6px; color: #252a31; font-size: 12px; text-decoration: none; }
+.sidebar-menu-link:hover, .sidebar-menu-link.active { background: #f0f1f2; }
 .workspace-avatar { display: grid; width: 29px; height: 29px; place-items: center; flex: 0 0 29px; border-radius: 50%; background: #ff5b1f; color: #fff; font-size: 13px; font-weight: 650; }
 .workspace-copy { min-width: 0; flex: 1; }
 .workspace-name { display: block; overflow: hidden; font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
@@ -106,6 +118,15 @@ button.state-toggle:focus-visible { outline: 2px solid var(--blue); outline-offs
 .button.tiny, button.tiny { min-height: 27px; padding: 4px 8px; font-size: 11px; }
 .card { padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: none; }
 .card + .card { margin-top: 12px; }
+.workspace-files { display: grid; grid-template-columns: minmax(190px, .38fr) minmax(0, 1fr); min-height: 540px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.workspace-file-list { overflow: auto; border-right: 1px solid var(--line); padding: 8px; }
+.workspace-file-link { display: block; overflow: hidden; padding: 8px 9px; border-radius: 6px; color: var(--text); font-size: 12px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-file-link:hover, .workspace-file-link.active { background: #e9e9e9; }
+.workspace-preview { min-width: 0; overflow: auto; padding: 22px 25px; }
+.workspace-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+.workspace-preview-markdown { max-width: 820px; }
+.workspace-preview-csv { width: 100%; border-collapse: collapse; font-size: 12px; }
+.workspace-preview-csv th, .workspace-preview-csv td { max-width: 330px; overflow-wrap: anywhere; vertical-align: top; }
 .card.flat { box-shadow: none; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin-top: 0; }
 .metric { min-height: 91px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
@@ -194,26 +215,70 @@ summary { color: var(--muted); cursor: pointer; font-size: 12px; }
 .calendar-event { display: grid; gap: 1px; padding: 7px 9px; border: 1px solid #e2e6eb; border-radius: 7px; background: #fff; color: #242a32; font-size: 12px; text-decoration: none; }
 .calendar-event:hover { border-color: #bdcce0; background: #fafcff; }
 .calendar-event span { color: var(--faint); font-size: 11px; }
-.chat-layout { display: grid; min-height: 520px; grid-template-columns: 220px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.chat-threads { display: grid; align-content: start; gap: 3px; padding: 11px; border-right: 1px solid var(--line); background: #f8f8f8; }
-.chat-threads-heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 6px 8px; color: #303743; font-size: 12px; }
+.chat-layout { display: grid; height: clamp(520px, calc(100vh - 180px), 760px); min-height: 0; grid-template-columns: 220px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); transition: grid-template-columns .16s ease; }
+.chat-layout.threads-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+.chat-threads { display: grid; min-width: 0; align-content: start; gap: 3px; padding: 11px; overflow-y: auto; border-right: 1px solid var(--line); background: #f8f8f8; transition: opacity .12s ease, padding .16s ease; }
+.chat-layout.threads-collapsed .chat-threads { padding-right: 0; padding-left: 0; overflow: hidden; border-right: 0; opacity: 0; pointer-events: none; }
+.chat-threads-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; padding: 5px 6px 8px; color: #303743; font-size: 12px; }
+.chat-threads-title { display: inline-flex; align-items: center; gap: 7px; }
+.chat-threads-copy { min-width: 0; }
+.chat-threads-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .chat-thread { display: grid; min-width: 0; gap: 2px; padding: 8px 9px; border-radius: 7px; color: #2b3139; text-decoration: none; }
 .chat-thread:hover { background: #ededed; }
 .chat-thread.active { background: #e2e2e2; color: #151719; }
 .chat-thread-name { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .chat-thread-meta { overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.chat-workspace { display: flex; min-width: 0; flex-direction: column; }
+.chat-workspace { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
 .chat-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 17px 12px; border-bottom: 1px solid var(--line-soft); }
 .chat-header p { margin-top: 3px; font-size: 11px; }
-.chat-messages { display: grid; align-content: start; gap: 12px; min-height: 300px; padding: 17px; }
+.chat-header-title { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.chat-header-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.chat-background-work { display: grid; gap: 5px; padding: 8px 17px; border-bottom: 1px solid var(--line-soft); background: #fafbfd; }
+.chat-background-work a { display: flex; min-width: 0; align-items: center; gap: 7px; color: #3c4857; font-size: 11px; text-decoration: none; }
+.chat-background-work a:hover { color: #171719; text-decoration: underline; }
+.chat-show-agents { display: none; flex: 0 0 auto; }
+.chat-layout.threads-collapsed .chat-show-agents { display: inline-flex; }
+.chat-icon-control { border-color: transparent; background: transparent; }
+.chat-icon-control:hover { border-color: transparent; background: #eef0f2; }
+.chat-icon-control:focus-visible { outline: 2px solid #9cb5d9; outline-offset: 2px; }
+.chat-manage-icon { stroke-width: 2.2; }
+.chat-message-pane { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+.chat-messages { display: grid; height: 100%; min-height: 0; align-content: start; gap: 12px; padding: 17px; overflow-y: auto; overscroll-behavior: contain; }
+.chat-scroll-latest { position: absolute; right: 13px; bottom: 13px; z-index: 1; border-color: transparent; border-radius: 50%; background: #fff; box-shadow: 0 2px 9px rgba(28, 34, 42, .2); }
+.chat-scroll-latest:hover { border-color: transparent; background: #f4f6f8; }
 .chat-message { max-width: min(700px, 90%); padding: 10px 12px; border: 1px solid #e1e4e8; border-radius: 9px; background: #fff; }
 .chat-message.user { justify-self: end; border-color: #cfd9e9; background: #f3f7fd; }
 .chat-author { display: block; margin-bottom: 4px; color: #57616d; font-size: 10px; font-weight: 650; }
-.chat-copy { overflow-wrap: anywhere; white-space: pre-wrap; color: #28303a; font-size: 12px; }
+.chat-copy { overflow-wrap: anywhere; color: #28303a; font-size: 12px; }
+.chat-copy > :first-child { margin-top: 0; }
+.chat-copy > :last-child { margin-bottom: 0; }
+.chat-copy p { margin: 0 0 8px; }
+.chat-copy h4, .chat-copy h5, .chat-copy h6 { margin: 12px 0 6px; color: #1f2730; font-size: 12px; }
+.chat-copy ul, .chat-copy ol { margin: 6px 0; padding-left: 20px; }
+.chat-copy li + li { margin-top: 3px; }
+.chat-copy blockquote { margin: 8px 0; padding-left: 9px; border-left: 2px solid #c8d4e3; color: #53606d; }
+.chat-copy pre { max-width: 100%; margin: 8px 0; padding: 9px; overflow: auto; border-radius: 7px; background: #f3f5f7; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-copy code { padding: 1px 3px; border-radius: 3px; background: #f0f2f4; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-copy pre code { padding: 0; background: transparent; }
+.chat-copy table { width: 100%; margin: 8px 0; font-size: 11px; }
 .chat-empty { margin: 17px; padding: 18px; border: 1px dashed #d9dde2; border-radius: 8px; color: var(--muted); font-size: 12px; text-align: center; }
-.chat-composer { display: grid; gap: 8px; margin-top: auto; padding: 13px 17px 17px; border-top: 1px solid var(--line-soft); }
-.chat-composer textarea { min-height: 78px; }
-.chat-composer .button-row { justify-content: space-between; }
+.chat-composer { display: grid; gap: 7px; margin-top: auto; padding: 13px 17px 17px; border-top: 1px solid var(--line-soft); }
+.chat-helper-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-helper-fields select, .chat-helper-fields input { width: auto; min-width: 132px; min-height: 29px; padding: 4px 7px; border: 1px solid #d9dde3; border-radius: 7px; background: #fff; color: var(--text); font: inherit; font-size: 11px; }
+.chat-composer-field { position: relative; display: flex; align-items: end; min-height: 46px; border: 1px solid #d9dde3; border-radius: 13px; background: #fff; box-shadow: 0 1px 2px rgba(20, 25, 32, .03); transition: border-color .12s ease, box-shadow .12s ease; }
+.chat-composer-field:focus-within { border-color: #9cb5d9; box-shadow: 0 0 0 3px rgba(63, 111, 190, .12); }
+.chat-composer textarea { min-height: 44px; max-height: 180px; width: 100%; padding: 11px 49px 11px 13px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font: inherit; line-height: 1.45; }
+.chat-send { position: absolute; right: 8px; bottom: 8px; display: inline-flex; width: 29px; height: 29px; align-items: center; justify-content: center; padding: 0; border: 1px solid #1c1d20; border-radius: 50%; background: #1c1d20; color: #fff; }
+.chat-send:hover:not(:disabled) { background: #323338; }
+.chat-send:disabled { border-color: #e1e3e6; background: #e1e3e6; color: #9ba1a9; cursor: not-allowed; }
+.chat-composer-hint { margin: 0; color: var(--faint); font-size: 10px; }
+.chat-message.pending { border-style: dashed; border-color: #c7d4e4; background: #f9fbfd; }
+.chat-message.pending .chat-copy { display: flex; align-items: center; gap: 7px; color: #596777; }
+.chat-message.pending .chat-copy::before { width: 8px; height: 8px; border: 1.5px solid #8393a5; border-right-color: transparent; border-radius: 50%; content: ""; animation: crewrun-spin .75s linear infinite; }
+.chat-message.pending.error { border-color: #dfb6bf; background: #fff8f8; }
+.chat-message.pending.error .chat-copy { color: var(--red); }
+.chat-message.pending.error .chat-copy::before { border-color: currentColor; border-right-color: transparent; animation: none; }
+@keyframes crewrun-spin { to { transform: rotate(360deg); } }
 .helper-launcher { position: fixed; right: 20px; bottom: 20px; z-index: 6; display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid #1c1d20; border-radius: 8px; background: #1c1d20; color: #fff; box-shadow: 0 8px 22px rgba(30, 32, 36, .18); font-size: 12px; font-weight: 600; text-decoration: none; }
 .helper-launcher:hover { background: #323338; }
 .helper-launcher .utility-icon { color: #fff; }
@@ -226,12 +291,13 @@ summary { color: var(--muted); cursor: pointer; font-size: 12px; }
 .helper-choices a { padding: 4px 7px; border: 1px solid #dedede; border-radius: 999px; background: #fff; color: #3d4651; font-size: 11px; text-decoration: none; }
 .helper-choices a:hover { border-color: #c7cdd4; background: #f8f8f8; }
 .helper-note { margin: 12px 17px; color: var(--muted); font-size: 11px; }
-.helper-messages { min-height: 0; flex: 1; overflow-y: auto; }
-.helper-messages .chat-messages { min-height: 0; padding-top: 5px; }
+.helper-messages { display: flex; min-height: 0; flex: 1; }
+.helper-messages .chat-message-pane { flex: 1; }
+.helper-messages .chat-messages { padding-top: 5px; }
 .helper-composer { margin: 0; }
 footer { margin-top: 36px; color: #8b9098; font-size: 11px; }
-@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-resizer { display: none; } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .search-glyph, .sidebar-account, .recent-chats { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } .chat-layout { grid-template-columns: 185px minmax(0, 1fr); } }
-@media (max-width: 560px) { .hero { flex-direction: column; gap: 13px; } .form-grid, .form-grid.three { grid-template-columns: 1fr; } .agent-grid { grid-template-columns: 1fr; } .summary-grid { gap: 8px; } .metric { min-height: 84px; } .connector-card { padding-right: 16px; } .connector-card .card-footer { position: static; margin-top: 13px; } th, td { padding: 9px 10px; } .calendar-day { grid-template-columns: 1fr; } .calendar-date { padding-bottom: 3px; } .calendar-events { padding: 6px 12px 12px; } .chat-layout { grid-template-columns: 1fr; } .chat-threads { grid-template-columns: repeat(2, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); } .chat-threads-heading { grid-column: 1 / -1; } .helper-launcher { right: 12px; bottom: 12px; } }
+@media (max-width: 850px) { body { display: block; } .sidebar { position: static; width: 100%; height: auto; min-height: 0; flex-direction: row; align-items: center; padding: 8px 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sidebar-resizer { display: none; } .sidebar-top { min-height: 0; padding: 0 7px 0 0; } .search-glyph, .sidebar-account, .recent-chats { display: none; } .sidebar-nav { display: flex; min-width: max-content; gap: 8px; } .nav-group { display: flex; gap: 2px; } .nav-group + .nav-group { margin: 0; padding: 0; border: 0; } .sidebar-link { width: 34px; min-height: 34px; justify-content: center; padding: 7px; } .sidebar-link .nav-text { display: none; } main { width: min(1074px, calc(100% - 34px)); padding: 29px 0 45px; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } .chat-layout { height: calc(100vh - 145px); grid-template-columns: 185px minmax(0, 1fr); } }
+@media (max-width: 560px) { .hero { flex-direction: column; gap: 13px; } .form-grid, .form-grid.three { grid-template-columns: 1fr; } .agent-grid { grid-template-columns: 1fr; } .summary-grid { gap: 8px; } .metric { min-height: 84px; } .connector-card { padding-right: 16px; } .connector-card .card-footer { position: static; margin-top: 13px; } th, td { padding: 9px 10px; } .calendar-day { grid-template-columns: 1fr; } .calendar-date { padding-bottom: 3px; } .calendar-events { padding: 6px 12px 12px; } .workspace-files { grid-template-columns: 1fr; } .workspace-file-list { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--line); } .workspace-preview { padding: 17px; } .chat-layout { height: calc(100vh - 165px); grid-template-columns: 1fr; } .chat-layout.threads-collapsed { grid-template-columns: 1fr; } .chat-threads { grid-template-columns: repeat(2, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); } .chat-layout.threads-collapsed .chat-threads { display: none; } .chat-threads-heading { grid-column: 1 / -1; } .chat-header-actions { gap: 4px; } .chat-header-actions .button { padding-right: 7px; padding-left: 7px; } .helper-launcher { right: 12px; bottom: 12px; } }
 `;
 
 const RESIZER_SCRIPT = `
@@ -300,19 +366,116 @@ const RESIZER_SCRIPT = `
 })();
 `;
 
+const CHAT_COMPOSER_SCRIPT = `
+(() => {
+  for (const menu of document.querySelectorAll("[data-sidebar-menu]")) {
+    const toggle = menu.querySelector("[data-sidebar-menu-toggle]");
+    const panel = menu.querySelector("[data-sidebar-settings-menu]");
+    if (!toggle || !panel) continue;
+    const close = () => { panel.hidden = true; toggle.setAttribute("aria-expanded", "false"); };
+    toggle.addEventListener("click", () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (event) => { if (!menu.contains(event.target)) close(); });
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+  }
+  for (const pane of document.querySelectorAll(".chat-message-pane")) {
+    const messages = pane.querySelector(".chat-messages");
+    const latest = pane.querySelector("[data-chat-scroll-latest]");
+    if (!messages || !latest) continue;
+    const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
+    const update = () => { latest.hidden = atBottom(); };
+    const scrollLatest = (behavior) => { messages.scrollTo({ top: messages.scrollHeight, behavior }); update(); };
+    requestAnimationFrame(() => scrollLatest("auto"));
+    messages.addEventListener("scroll", update, { passive: true });
+    latest.addEventListener("click", () => scrollLatest("smooth"));
+    update();
+  }
+  for (const toggle of document.querySelectorAll("[data-chat-threads-toggle]")) {
+    const layout = toggle.closest(".chat-layout");
+    if (!layout) continue;
+    toggle.addEventListener("click", () => {
+      const collapsed = toggle.dataset.chatThreadsToggle === "hide";
+      layout.classList.toggle("threads-collapsed", collapsed);
+      for (const control of layout.querySelectorAll("[data-chat-threads-toggle]")) control.setAttribute("aria-expanded", String(!collapsed));
+    });
+  }
+  for (const form of document.querySelectorAll("form.chat-composer")) {
+    const field = form.querySelector('textarea[name="message"]');
+    const send = form.querySelector('button[type="submit"]');
+    if (!field || !send) continue;
+    let submitting = false;
+    const resize = () => {
+      field.style.height = "auto";
+      field.style.height = Math.min(field.scrollHeight, 180) + "px";
+      field.style.overflowY = field.scrollHeight > 180 ? "auto" : "hidden";
+    };
+    const update = () => { send.disabled = !field.value.trim(); resize(); };
+    field.addEventListener("input", update);
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (!send.disabled) form.requestSubmit();
+      }
+    });
+    const appendMessage = (author, message, pending = false) => {
+      const scope = form.closest(".chat-workspace") || form.closest(".helper-drawer");
+      if (!scope) return null;
+      const pane = scope.querySelector(".chat-message-pane") || scope;
+      let messages = pane.querySelector(".chat-messages");
+      if (!messages) {
+        pane.querySelector(".chat-empty")?.remove();
+        messages = document.createElement("div");
+        messages.className = "chat-messages";
+        pane.append(messages);
+      }
+      const item = document.createElement("article");
+      item.className = "chat-message" + (author === "You" ? " user" : "") + (pending ? " pending" : "");
+      const label = document.createElement("span"); label.className = "chat-author"; label.textContent = author;
+      const copy = document.createElement("div"); copy.className = "chat-copy"; copy.textContent = message;
+      item.append(label, copy); messages.append(item); item.scrollIntoView({ block: "nearest" });
+      return { item, copy };
+    };
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = field.value.trim();
+      if (!message || submitting) { field.focus(); return; }
+      submitting = true;
+      appendMessage("You", message);
+      const pending = appendMessage(form.dataset.responseLabel || "Agent", "Thinking…", true);
+      field.value = ""; field.disabled = true; update();
+      try {
+        const body = new URLSearchParams(new FormData(form));
+        body.set("message", message);
+        const response = await fetch(form.action, { method: "POST", body });
+        if (!response.ok) throw new Error("The message could not be sent.");
+        window.location.assign(response.url || window.location.href);
+      } catch (error) {
+        submitting = false; field.disabled = false; update();
+        if (pending) { pending.item.classList.add("error"); pending.copy.textContent = error?.message || "Connection lost. Reload before trying again."; }
+      }
+    });
+    update();
+  }
+})();
+`;
+
 export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "", recentChats = [], pendingReviews = 0, helperContent = "" } = {}) {
   const sidebarLink = ({ id, label, icon: iconName }) =>
     `<a href="/${id === "dashboard" ? "" : id}" class="sidebar-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span>${id === "reviews" && pendingReviews ? `<span class="pill" aria-label="${esc(pendingReviews)} pending reviews">${esc(pendingReviews)}</span>` : ""}</a>`;
   const chats = Array.isArray(recentChats)
     ? recentChats.filter((chat) => /^[a-z][a-z0-9-]{0,79}$/.test(String(chat?.role || "")) && chat.purpose !== "console-helper").slice(0, 6)
     : [];
-  const groups = ["primary", "operations", "account"].map((group) => {
+  const groups = ["primary", "operations", "communication"].map((group) => {
     const entries = PAGES.filter((entry) => entry.group === group);
-    const links = group === "account"
-      ? `${entries.map(sidebarLink).join("")}${chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat with ${esc(chat.role)}">${icon("chat")}<span class="nav-text">${esc(chat.role)}</span></a>`).join("")}</div>` : ""}`
-      : entries.map(sidebarLink).join("");
+    const links = `${entries.map(sidebarLink).join("")}${group === "communication" && chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat: ${esc(chat.title || chat.role)}"><span class="nav-text">${esc(chat.title || chat.role)}</span></a>`).join("")}</div>` : ""}`;
     return links ? `<div class="nav-group">${links}</div>` : "";
   }).join("");
+  const accountLinks = PAGES.filter((entry) => entry.group === "account").map(({ id, label, icon: iconName }) =>
+    `<a href="/${id}" class="sidebar-menu-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${esc(label)}</span></a>`
+  ).join("");
   const workspace = workspaceName(targetRoot);
   const initial = workspace.slice(0, 1).toUpperCase() || "C";
   const back = backHref
@@ -327,18 +490,20 @@ export function renderPage(page, content, { targetRoot, version = "", backHref =
     <span class="search-glyph" aria-hidden="true">${icon("search", "utility-icon")}</span>
   </div>
   <div class="sidebar-nav">${groups}</div>
-  <div class="sidebar-account" title="${esc(targetRoot)}">
-    <span class="workspace-avatar">${esc(initial)}</span>
-    <span class="workspace-copy"><span class="workspace-name">${esc(workspace)}</span><span class="workspace-plan">Local workspace</span></span>
-    <span class="workspace-more" aria-hidden="true">${icon("more", "utility-icon")}</span>
+  <div class="sidebar-account-menu" data-sidebar-menu>
+    <button class="sidebar-account" type="button" data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu" title="Workspace menu">
+      <span class="workspace-avatar">${esc(initial)}</span>
+      <span class="workspace-copy"><span class="workspace-name">${esc(workspace)}</span><span class="workspace-plan">Local workspace</span></span>
+      <span class="workspace-more" aria-hidden="true">${icon("more", "utility-icon")}</span>
+    </button>
+    <div id="sidebar-settings-menu" class="sidebar-settings-menu" data-sidebar-settings-menu hidden>${accountLinks}</div>
   </div>
 </aside>
 <div class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-controls="sidebar" aria-valuemin="220" aria-valuemax="420" aria-valuenow="278" aria-valuetext="278 pixels wide" tabindex="0" title="Drag to resize the sidebar; double-click to reset"></div>
 <main id="main-content">
 ${content}
-<footer>crewrun console${version ? ` v${esc(version)}` : ""} · Review work and manage your agents.</footer>
 </main>
 ${helperContent}
-<script>${RESIZER_SCRIPT}</script>
+<script>${RESIZER_SCRIPT}${CHAT_COMPOSER_SCRIPT}</script>
 </body></html>`;
 }

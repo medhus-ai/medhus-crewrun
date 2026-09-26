@@ -5,6 +5,7 @@ import { digest } from "./runtime-store.js";
 import { createKnowledgeModels, EMBEDDING_MODEL } from "./knowledge-models.js";
 import { relativeWorkspacePath } from "./workspace-manifest.js";
 import { knowledgeInstallation, KNOWLEDGE_VERSIONS, runKnowledgeProcess } from "./knowledge-process.js";
+import { assertKnowledgePlatform } from "./platform.js";
 
 const DOCUMENTS = new Set([".docx", ".xlsx", ".pptx", ".csv", ".pdf"]);
 export const isKnowledgeDocument = (file) => DOCUMENTS.has(path.extname(file).toLowerCase());
@@ -14,6 +15,7 @@ const contentHash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // Walk through open directory descriptors: a concurrent symlink replacement cannot redirect
 // the read outside the chosen root. Reject hard links and special files too.
 export function readKnowledgeSource(root, relative) {
+  assertKnowledgePlatform();
   relativeWorkspacePath(relative);
   const parts = relative.split("/");
   let fd = openSync(realpathSync(root), constants.O_RDONLY | constants.O_DIRECTORY);
@@ -59,6 +61,7 @@ export function createWorkspaceKnowledge({ targetRoot, store, env = process.env,
     return readKnowledgeSource(targetRoot, file);
   };
   function candidates(role, paths) {
+    assertKnowledgePlatform();
     if (paths != null) {
       if (!Array.isArray(paths) || !paths.length || paths.length > 50 || paths.some((p) => typeof p !== "string" || !supported(p))) throw new Error("Choose 1–50 Markdown, text, PDF, DOCX, XLSX, PPTX or CSV paths.");
       for (const file of paths) { relativeWorkspacePath(file); if (!canRead(contractFor(role), file)) throw new Error("Source is outside this agent's authority."); }

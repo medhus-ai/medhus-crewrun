@@ -18,11 +18,13 @@ import {
   wslInfo
 } from "../src/platform.js";
 
-test("platformInfo treats Linux, macOS, and native Windows as supported", () => {
+test("platformInfo separates verified source runtime from experimental release targets", () => {
   assert.equal(platformInfo({ platform: "linux", arch: "x64" }).supported, true);
-  assert.equal(platformInfo({ platform: "darwin", arch: "arm64" }).supported, true);
-  assert.equal(platformInfo({ platform: "win32", arch: "x64" }).supported, true);
-  assert.equal(platformInfo({ platform: "win32", arch: "x64" }).experimental, false);
+  assert.equal(platformInfo({ platform: "darwin", arch: "arm64" }).supported, false);
+  assert.equal(platformInfo({ platform: "darwin", arch: "arm64" }).experimental, true);
+  assert.equal(platformInfo({ platform: "win32", arch: "x64" }).supported, false);
+  assert.equal(platformInfo({ platform: "win32", arch: "x64" }).experimental, true);
+  assert.equal(platformInfo({ platform: "linux", arch: "riscv64" }).supported, false);
 });
 
 test("nodeVersionInfo enforces Node 20+", () => {

@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,6 +27,15 @@ jobs:
           - name: Windows / Node 20
             os: windows-latest
             node: 20
+          - name: Windows / Node 24
+            os: windows-latest
+            node: 24
+          - name: macOS Apple Silicon / Node 24
+            os: macos-15
+            node: 24
+          - name: macOS Intel / Node 24
+            os: macos-15-intel
+            node: 24
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -43,4 +53,5 @@ jobs:
       - run: npm ci
         shell: bash
       - run: npm test
+      - run: node bin/crewrun.js doctor --json
       - run: npm run pack:check

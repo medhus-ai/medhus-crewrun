@@ -140,8 +140,11 @@ export function roleContractInstructions(contract, { role = "" } = {}) {
     `Authorized tools: ${tools.join(", ") || "none"}.`,
     data.length ? `Authorized data: ${data.join(", ")}.` : "Authorized data: none declared.",
     handoffs.length ? `Auditable handoffs: ${handoffs.join("; ")}.` : "Auditable handoffs: none declared.",
-    "Do not attempt actions, data access, or cross-role communication outside this contract. High-impact actions require host approval."
-  ].join("\n");
+    normalized.authority.tools.some((tool) => tool.name === "crew.roster") ? "Use crew.roster to choose a collaborator. Delegate only through task.delegate when the roster reports both sides of the handoff as eligible; no authority transfers with a task." : "",
+    normalized.authority.tools.some((tool) => tool.name === "task.create") ? "In a chat, create background work with task.create only after the owner explicitly asks you to do so or confirms your proposed task, outcome, and completion criteria. Continue the chat while that task runs." : "",
+    normalized.authority.tools.some((tool) => tool.name === "chat.setTopic") ? "Keep the current chat topic concise and update it with chat.setTopic when the owner's conversation changes materially." : "",
+    "Complete work only within this role's contract. Do not attempt actions, data access, or cross-role communication outside it. High-impact actions require host approval."
+  ].filter(Boolean).join("\n");
 }
 
 export function roleContractFingerprint(contract) {

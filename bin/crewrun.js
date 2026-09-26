@@ -14,6 +14,8 @@ import { createConsole } from "../src/console/server.js";
 import { initializeWorkspace } from "../src/workspace-setup.js";
 import { requireWorkspace, LIFECYCLE_EVENTS } from "../src/workspace-manifest.js";
 import { installIntegrationPlugin, listInstalledPlugins, scaffoldIntegrationPlugin } from "../src/integration-plugins.js";
+import { platformDoctor, formatPlatformDoctor } from "../src/platform-doctor.js";
+import { acquireRunnerLock } from "../src/app/runner-lock.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
@@ -44,7 +46,10 @@ async function commandHost(targetRoot) {
   return createHost({ targetRoot, log, plugins: await loadReferencePlugins() });
 }
 
-if (command === "--version" || command === "-v") {
+if (command === "doctor") {
+  const report = platformDoctor();
+  console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatPlatformDoctor(report));
+} else if (command === "--version" || command === "-v") {
   console.log(JSON.parse(readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version);
 } else if (command === "plugins") {
   if (rest[0] === "list") console.log(JSON.stringify(await listInstalledPlugins(), null, 2));
@@ -55,7 +60,7 @@ if (command === "--version" || command === "-v") {
   } else fail("usage: crewrun plugins list | create <new-directory> [--id slug] | install <package@1.2.3|./directory> --trust");
 } else if (command === "init") {
   const targetRoot = targetArgument(rest, ["--preset", "--name", "--timezone"]);
-  if (!targetRoot) fail("usage: crewrun init <targetRoot> [--preset personal|organization] [--name name] [--timezone UTC]");
+  if (!targetRoot) fail("usage: crewrun init <targetRoot> [--preset personal|organization|launch-desk] [--name name] [--timezone UTC]");
   const workspace = initializeWorkspace(targetRoot, { kind: argValue(rest, "--preset") || "personal", name: argValue(rest, "--name") || path.basename(path.resolve(targetRoot)), timezone: argValue(rest, "--timezone") || "UTC" });
   console.log(`Initialized ${workspace.name}. Start with crewrun up ${targetRoot} --console, then open the side helper to tailor the setup.`);
 } else if (command === "up") {
@@ -65,11 +70,17 @@ if (command === "--version" || command === "-v") {
   const consoleHost = argValue(rest, "--console-host") || "127.0.0.1";
   if (rest.includes("--console") && host.privateConsoleOnly && !isLoopbackHost(consoleHost)) fail("this host requires a loopback-only console; publish only its documented callback ingress");
   const up = createUp({ targetRoot, host, log });
-  await up.start();
-  if (rest.includes("--console")) {
-    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, host: consoleHost, log }).listen();
+  const lock = acquireRunnerLock(targetRoot);
+  try {
+    await up.start();
+    if (rest.includes("--console")) {
+      await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, host: consoleHost, log }).listen();
+    }
+  } catch (error) {
+    try { await up.stop(); } finally { lock.close(); }
+    throw error;
   }
-  const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
+  const shutdown = () => { void up.stop().finally(() => { lock.close(); process.exit(0); }); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30); // keep the process alive; the loop's own timers are unref'd
@@ -81,6 +92,7 @@ if (command === "--version" || command === "-v") {
   if (host.privateConsoleOnly && !isLoopbackHost(consoleHost)) fail("this host requires a loopback-only console; publish only its documented callback ingress");
   const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, host: consoleHost, log });
   let hostStarted = false;
+  const lock = acquireRunnerLock(targetRoot);
   try {
     await host.start?.();
     hostStarted = true;
@@ -89,9 +101,10 @@ if (command === "--version" || command === "-v") {
     if (hostStarted) {
       try { await host.stop?.(); } catch { /* preserve startup error */ }
     }
+    lock.close();
     throw error;
   }
-  const shutdown = () => { void consoleApp.close().finally(async () => { if (hostStarted) await host.stop?.(); process.exit(0); }); };
+  const shutdown = () => { void consoleApp.close().finally(async () => { if (hostStarted) await host.stop?.(); lock.close(); process.exit(0); }); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30);
@@ -147,7 +160,7 @@ if (command === "--version" || command === "-v") {
 } else {
   console.log(`crewrun — run a crew of AI agents on the runtimes you already pay for
 
-  crewrun init <targetRoot> [--preset personal|organization] [--name name] [--timezone UTC]
+  crewrun init <targetRoot> [--preset personal|organization|launch-desk] [--name name] [--timezone UTC]
   crewrun up <targetRoot>  [--console] [--console-host <address>]   run the crew loop on a project (+ console)
   crewrun console <targetRoot> [--port N] [--console-host <address>]                  the operator UI without the loop
   crewrun agents check <targetRoot>   validate agent heartbeat/hook settings
@@ -155,6 +168,7 @@ if (command === "--version" || command === "-v") {
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version
+  crewrun doctor [--json]                            read-only OS and dependency readiness
 
 The bundled one-owner host manages tasks, reviews, schedules, and integration plugins.
 Set up connections in Integrations; outgoing actions require approval. No public listener starts until an HTTPS callback origin is configured.`);

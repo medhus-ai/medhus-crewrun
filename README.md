@@ -38,8 +38,9 @@ node bin/crewrun.js up ../my-crew --console
 Open **http://127.0.0.1:4400**, add an agent, select a configured runner, and create a task.
 You need a supported vendor sign-in or API key to run agent turns.
 
-Use `--preset organization` for a coordinator-led starting point. The side helper can prepare
-editable setup proposals; you approve the changes in **Reviews → Workspace**. All initial
+Use `--preset organization` for a coordinator-led starting point. To see a complete but safe
+three-agent flow immediately, use `--preset launch-desk` (or read the [Launch Desk example](examples/launch-desk/README.md)).
+The side helper can prepare editable setup proposals; you approve the changes in **Reviews → Proposals**. All initial
 routines and event rules are disabled. Your repository holds knowledge and reviewed configuration;
 private SQLite state holds tasks, chats, reviews, and credentials.
 

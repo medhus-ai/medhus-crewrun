@@ -6,12 +6,13 @@ import { fileURLToPath } from "node:url";
 import { readWorkspace, workspaceIdentity } from "../workspace-manifest.js";
 import { loadRoleSpec } from "../role-spec.js";
 
-const sdkEntry = import.meta.resolve("@openai/codex-sdk");
-const require = createRequire(sdkEntry);
 export const VERIFIED_CODEX_VERSION = "0.152.0";
 
 export function assertCodexBoundary() {
   if (process.platform !== "linux") throw new Error("Governed Codex isolation is currently verified on Linux only.");
+  // Optional vendor clients must not prevent an OpenRouter/local-only host from loading.
+  const sdkEntry = import.meta.resolve("@openai/codex-sdk");
+  const require = createRequire(sdkEntry);
   for (const manifest of [path.join(path.dirname(fileURLToPath(sdkEntry)), "..", "package.json"), require.resolve("@openai/codex/package.json")]) {
     if (JSON.parse(readFileSync(manifest, "utf8")).version !== VERIFIED_CODEX_VERSION) {
       throw new Error(`Governed Codex requires verified SDK/CLI ${VERIFIED_CODEX_VERSION}; rerun boundary verification before upgrading.`);

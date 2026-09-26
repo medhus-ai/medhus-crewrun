@@ -13,6 +13,19 @@ personal/organization presets already include both tools; existing contracts
 which deliberately omit them remain restricted. The setup helper is not a
 workspace-reading agent and does not gain broad knowledge access.
 
+## Editable workspace formats
+
+CrewRun's first local authoring surface is intentionally small: agents can write
+only **Markdown (`.md`)** and **CSV (`.csv`)** files in their authorized draft or
+output folders. The owner console previews both under **Workspace**. Markdown is
+rendered safely and CSV is shown as a bounded table.
+
+DOCX, XLSX, PPTX and PDF remain read-only local import formats. Docling can extract
+them for authorized reading and search, but CrewRun does not claim to be an Office
+editor or silently rewrite arbitrary binary documents. Durable Markdown remains
+reviewed; agent-created Markdown/CSV drafts are direct outputs in the agent's
+assigned draft/output boundary.
+
 - `workspace.search({query, mode?, paths?})`: QMD keyword search before setup, returning
   up to ten matches, original source paths, content revisions and excerpts.
   After setup the default combines keyword and local vector

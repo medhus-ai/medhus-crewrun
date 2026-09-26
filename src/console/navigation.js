@@ -6,12 +6,13 @@ export const PAGES = [
   { id: "reviews", label: "Reviews", icon: "shield", group: "primary" },
   { id: "scheduled", label: "Scheduled", icon: "calendar", group: "primary" },
   { id: "agents", label: "Agents", icon: "cloud", group: "operations" },
+  { id: "workspace", label: "Workspace", icon: "folder", group: "operations" },
   { id: "skills", label: "Skills", icon: "blocks", group: "operations" },
-  { id: "integrations", label: "Integrations", icon: "network", group: "operations" },
+  { id: "integrations", label: "Integrations", icon: "network", group: "account" },
   { id: "activity", label: "Activity", icon: "list", group: "operations" },
   { id: "usage", label: "Usage", icon: "chart", group: "account" },
   { id: "settings", label: "Settings", icon: "key", group: "account" },
-  { id: "chats", label: "Chats", icon: "chat", group: "account" }
+  { id: "chats", label: "Chats", icon: "chat", group: "communication" }
 ];
 
 export function pageFromUrl(pathname) {

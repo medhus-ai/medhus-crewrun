@@ -33,13 +33,19 @@ test("knowledge setup uses existing settings forms and owner-only operations", a
   } finally { await console_.close(); await rm(parent, { recursive: true, force: true }); }
 });
 
-test("sidebar places Chats and Recent chats after Usage and Settings", () => {
-  for (const recentChats of [[], [{ role: "ops" }]]) {
+test("sidebar keeps Chats visible and places account pages in the workspace menu", () => {
+  for (const recentChats of [[], [{ role: "ops", title: "Incident response" }]]) {
     const sidebar = renderPage("chats", "", { recentChats }).match(/<aside[\s\S]*?<\/aside>/)[0];
-    const labels = ['aria-label="Usage"', 'aria-label="Settings"', 'aria-label="Chats"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat with ops"'] : [])];
+    const labels = ['aria-label="Chats"', 'data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu"', 'aria-label="Integrations"', 'aria-label="Usage"', 'aria-label="Settings"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat: Incident response"'] : [])];
     const positions = labels.map((label) => sidebar.indexOf(label));
-    assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+    assert.ok(positions.slice(0, 5).every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
     assert.match(sidebar, /aria-label="Chats" aria-current="page"/);
+    assert.match(sidebar, /aria-label="Activity"[\s\S]*?<\/div>\s*<div class="nav-group"><a href="\/chats"/, "Chats has its own section below Activity");
+    assert.match(sidebar, /data-sidebar-settings-menu hidden/);
+    if (recentChats.length) {
+      assert.match(sidebar, /class="sidebar-link recent-chat" aria-label="Open chat: Incident response"><span class="nav-text">Incident response<\/span><\/a>/);
+      assert.doesNotMatch(sidebar, /recent-chat"[^>]*><svg/, "recent chats do not repeat the chat icon");
+    }
     if (!recentChats.length) assert.doesNotMatch(sidebar, /Recent chats/);
   }
 });
@@ -59,6 +65,9 @@ async function project() {
     title: "Operations", hooks: [], memory_pointers: ["docs/ops.md"], scheduled: [{ id: "tick", cron: "0 9 * * 1", prompt: "weekly", enabled: false }]
   }, null, 2), "utf8");
   await writeFile(path.join(root, ".crew", "skills", "file-a-task.md"), "---\nname: file-a-task\ndescription: How to file\n---\n# File\n", "utf8");
+  await mkdir(path.join(root, "drafts", "ops"), { recursive: true });
+  await writeFile(path.join(root, "README.md"), "# Workspace\n\nA **safe** Markdown preview.\n", "utf8");
+  await writeFile(path.join(root, "drafts", "ops", "budget.csv"), "Item,Budget\nLaunch,2400\n", "utf8");
   return { parent, root };
 }
 
@@ -144,6 +153,10 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(updated.reflections, false);
     assert.equal(updated.heartbeat.interval, "2h");
     assert.equal(updated.scheduled.length, 1, "behavior edits preserve scheduled work");
+    const webEnabled = await fetch(base + "/agents/behavior", { method: "POST", redirect: "manual", body: new URLSearchParams({ role: "ops", heartbeat_mode: "inherit", heartbeat: "off", reflections: "inherit", web: "on", web_allow: "" }) });
+    assert.equal(webEnabled.status, 303);
+    const webUpdated = JSON.parse(await readFile(path.join(root, ".crew/agents/ops.json"), "utf8"));
+    assert.deepEqual(webUpdated.contract.authority.tools.filter((tool) => tool.name.startsWith("web.")).map((tool) => tool.name).sort(), ["web.fetch", "web.search"], "explicit Web access grants only governed web read tools");
 
     const defaultsPage = await (await fetch(base + "/agents/ops?tab=defaults")).text();
     assert.match(defaultsPage, /Shared defaults/);
@@ -246,10 +259,23 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(scheduled, /ops:tick/);
     assert.match(scheduled, /role="switch" aria-checked="false"/);
     assert.match(scheduled, /Every Monday at 9:00 AM/);
-    assert.match(scheduled, /New task/);
+    assert.match(scheduled, /New scheduled task/);
+    assert.match(scheduled, /href="\/chats\?agent=crew-helper&amp;intent=schedule/);
     assert.match(scheduled, /Run now/);
     assert.doesNotMatch(scheduled, /Delete task|Disable task|Enable task/);
     assert.doesNotMatch(scheduled, /Task ID/, "the task editor opens only when needed");
+
+    const workspace = await (await fetch(base + "/workspace?file=README.md")).text();
+    assert.match(workspace, /aria-label="Workspace" aria-current="page"/);
+    assert.match(workspace, /<strong>safe<\/strong> Markdown preview/);
+    const csvPreview = await (await fetch(base + "/workspace?file=drafts%2Fops%2Fbudget.csv")).text();
+    assert.match(csvPreview, /<th>Item<\/th>/);
+    assert.match(csvPreview, /<td>2400<\/td>/);
+    assert.equal((await fetch(base + "/workspace?file=.crew%2Fagents%2Fops.json")).status, 400, "workspace preview never exposes configuration");
+
+    const reviews = await (await fetch(base + "/reviews?tab=learning")).text();
+    assert.match(reviews, />Proposals \(/);
+    assert.doesNotMatch(reviews, /href="\/reviews\?tab=workspace"/, "workspace changes share the proposals review surface");
 
     const calendar = await (await fetch(base + "/scheduled")).text();
     assert.match(calendar, /<h1>Scheduled tasks<\/h1>/);
@@ -260,11 +286,11 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.match(defaultScheduled, /<option value="3" selected>/);
 
     const chats = await (await fetch(base + "/chats?agent=ops")).text();
-    assert.match(chats, /one resumed thread/);
+    assert.doesNotMatch(chats, /one resumed thread|Review work and manage your agents/);
     assert.doesNotMatch(chats, /action="\/chats\/send"/);
     const helper = await (await fetch(base + "/?helper=1")).text();
     assert.match(helper, /class="helper-drawer open"/);
-    assert.match(helper, /read-only internal tool/);
+    assert.match(helper, /create reviewable proposals/);
 
     const newTask = await (await fetch(base + "/scheduled?new=1")).text();
     assert.match(newTask, /Runs in your computer’s local time/);
@@ -273,23 +299,20 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.doesNotMatch(newTask, /name="cron"/, "task timing is expressed through friendly controls");
 
     const newSkill = await (await fetch(base + "/skills?new=1")).text();
-    assert.match(newSkill, /<h2>Propose a skill<\/h2>/);
-    assert.match(newSkill, /action="\/skills\/propose"/);
-    const proposedSkill = await fetch(base + "/skills/propose", {
-      method: "POST",
-      redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        skill_id: "incident-summary",
-        description: "Prepare a concise incident summary",
-        content: "1. Gather verified facts.\n2. Identify open decisions.",
-        roles: "ops",
-        scope: "repository",
-        evidence: "The incident review uses this same workflow every time."
-      })
+    assert.match(newSkill, /href="\/chats\?agent=crew-helper&amp;intent=skill/);
+    assert.doesNotMatch(newSkill, /Propose a skill|action="\/skills\/propose"/);
+    const proposedSkill = await fetch(base + "/skills/propose", { method: "POST", redirect: "manual" });
+    assert.equal(proposedSkill.status, 400, "skill proposals enter through an agent or Crew helper chat");
+    proposeSkill({
+      targetRoot: root,
+      id: "incident-summary",
+      description: "Prepare a concise incident summary",
+      content: "1. Gather verified facts.\n2. Identify open decisions.",
+      roles: ["ops"],
+      scope: "repository",
+      evidence: "The incident review uses this same workflow every time.",
+      proposedBy: "ops"
     });
-    assert.equal(proposedSkill.status, 303);
-    assert.equal(proposedSkill.headers.get("location"), "/reviews?tab=learning");
     assert.match(await (await fetch(base + "/reviews?tab=learning")).text(), /incident-summary/);
 
     const legacyScheduled = await (await fetch(base + "/scheduled")).text();
@@ -352,7 +375,10 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal(addedRole.status, 303);
     assert.equal(addedRole.headers.get("location"), "/agents/analyst");
     assert.ok(existsSync(path.join(root, ".crew", "agents", "analyst.json")));
-    assert.equal(JSON.parse(await readFile(path.join(root, ".crew", "agents", "analyst.json"), "utf8")).contract.version, 1, "new roles start with a versioned contract");
+    const newAgent = JSON.parse(await readFile(path.join(root, ".crew", "agents", "analyst.json"), "utf8"));
+    assert.equal(newAgent.contract.version, 1, "new roles start with a versioned contract");
+    assert.equal(newAgent.web, true, "new roles get governed public web access by default");
+    assert.deepEqual(newAgent.contract.authority.tools.filter((tool) => tool.name.startsWith("web.")).map((tool) => tool.name).sort(), ["web.fetch", "web.search"]);
     await fetch(base + "/agents/save", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "role=analyst&json=" + encodeURIComponent(JSON.stringify({ title: "Analyst", heartbeat: "1d" })) });
     const analyst = JSON.parse(await readFile(path.join(root, ".crew", "agents", "analyst.json"), "utf8"));
     assert.equal(analyst.heartbeat, "1d");
@@ -416,7 +442,7 @@ test("console accepts an optional host operations snapshot without exposing secr
       connect: ({ connectorId }) => { calls.push(`connect:${connectorId}`); return { redirect: "/integrations?connected=1" }; },
       disconnect: ({ connectorId }) => { calls.push(`disconnect:${connectorId}`); return { redirect: "/integrations" }; },
       decideApproval: ({ id, action }) => { calls.push(`approval:${id}:${action}`); return { redirect: "/reviews?tab=actions" }; },
-      getChat: ({ role }) => ({ role, title: "Incident handoff", messages: [{ author: "user", content: "What changed?" }, { author: role, content: "I am checking." }] }),
+      getChat: ({ role }) => ({ role, title: "Incident handoff", messages: [{ author: "user", content: "What changed?" }, { author: role, content: "I am **checking**.\n\n- First\n- Second" }] }),
       sendChat: ({ role, message }) => { calls.push(`chat:${role}:${message}`); return { role, messages: [] }; },
       syncCalendarTask: ({ task, previousTask }) => { calls.push(`calendar:${task?.id || "deleted"}:${previousTask?.id || "none"}`); }
     }
@@ -444,9 +470,42 @@ test("console accepts an optional host operations snapshot without exposing secr
 
     const calendar = await (await fetch(base + "/scheduled")).text();
     assert.doesNotMatch(calendar, /Calendar mirroring/, "mirroring configuration belongs under Integrations");
+    const tasks = await (await fetch(base + "/tasks")).text();
+    assert.doesNotMatch(tasks, /Create a task|action="\/tasks\/create"/, "Tasks tracks work; agents create background tasks from chat");
+    assert.match(tasks, /href="\/chats\?agent=crew-helper&amp;intent=task/, "New task starts a contextual Crew helper chat");
     const chats = await (await fetch(base + "/chats?agent=ops")).text();
     assert.match(chats, /Incident handoff/);
+    assert.match(chats, /Crew helper/);
     assert.match(chats, /Recent chats/);
+    const defaultChat = await (await fetch(base + "/chats")).text();
+    assert.match(defaultChat, /Incident handoff/, "Chats opens the first agent when no agent is selected");
+    assert.doesNotMatch(defaultChat, /Choose an agent to open its durable chat/);
+    assert.match(chats, /class="chat-composer-field"/);
+    assert.match(chats, /class="chat-send" type="submit" aria-label="Send message"/);
+    assert.match(chats, /data-chat-scroll-latest aria-label="Scroll to latest message"/);
+    assert.match(chats, /messages\.scrollTo\(\{ top: messages\.scrollHeight, behavior \}\)/);
+    assert.match(chats, /data-chat-threads-toggle="show" aria-expanded="false" aria-controls="chat-agents" aria-label="Show agent list"/);
+    assert.match(chats, /data-chat-threads-toggle="hide" aria-expanded="true" aria-controls="chat-agents" aria-label="Hide agent list"/);
+    assert.match(chats, /aria-label="Manage agent" title="Manage agent"/);
+    assert.doesNotMatch(chats, /href="\/agents\/ops">Manage agent</);
+    assert.match(chats, /height: clamp\(520px, calc\(100vh - 180px\), 760px\)/);
+    assert.match(chats, /threads-collapsed/);
+    assert.match(chats, /Enter to send · Shift\+Enter for a new line/);
+    assert.match(chats, /<strong>checking<\/strong>/, "agent replies render safe Markdown");
+    assert.match(chats, /<li>First<\/li>/);
+    assert.match(chats, /Thinking…/);
+    assert.match(chats, /data-response-label="Operations"/);
+    assert.match(chats, /new URLSearchParams\(new FormData\(form\)\)/);
+    assert.doesNotMatch(chats, />Send<|>Ask helper</);
+    const helperTask = await (await fetch(base + "/chats?agent=crew-helper&intent=schedule&draft=Help%20me%20create%20a%20new%20scheduled%20task.")).text();
+    assert.match(helperTask, /name="target_role"/);
+    assert.match(helperTask, /name="cadence"/);
+    assert.match(helperTask, /name="time"/);
+    assert.match(helperTask, />Help me create a new scheduled task\.<\/textarea>/);
+    const helper = await (await fetch(base + "/?helper=1")).text();
+    assert.match(helper, /placeholder="What would you like to set up\?"/);
+    assert.match(helper, /class="chat-send" type="submit" aria-label="Send message"/);
+    assert.doesNotMatch(helper, />Ask helper</);
     const sentChat = await fetch(base + "/chats/send", {
       method: "POST",
       redirect: "manual",

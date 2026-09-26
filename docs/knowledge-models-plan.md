@@ -36,7 +36,8 @@ do not add OCR, spreadsheet calculation, unsupported parsing or new file permiss
 Do not promise correct reading from retrieval alone.
 
 First release targets Windows/Linux with independently verified runtime boundaries;
-macOS is deferred. Initial chat choices are the separate local-model project or
+macOS is now an app packaging target; knowledge isolation still needs a native implementation.
+Future reduced-profile chat choices are the separate local-model project or
 OpenRouter. The embedding worker does not depend on either. Earlier Claude/Codex
 optional-reranker ideas below are future design options, not bundled launch clients.
 

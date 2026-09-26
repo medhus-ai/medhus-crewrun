@@ -26,6 +26,13 @@ or migration to shared OAuth is authorized by this roadmap.
 
 ## Planned improvements
 
+The [desktop and platform rollout](desktop-and-platforms.md) targets Windows/Linux/macOS,
+a self-contained background runner and optional window reusing the current console.
+The shared launcher and build instructions are in [packaged app](packaged-app.md).
+npm remains a build tool, not the intended end-user install path.
+Unsupported execution boundaries stay disabled; private remote access needs verified
+VPN transport and application authentication, never a public-console option.
+
 | Priority | Intended outcome |
 |---|---|
 | Easier setup | Guided provider checks, browser OAuth consent, maintained examples, and a sample-data trial |

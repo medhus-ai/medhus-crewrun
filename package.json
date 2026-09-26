@@ -39,7 +39,9 @@
   ],
   "scripts": {
     "test": "node --test --test-concurrency=1",
-    "pack:check": "npm pack --dry-run --workspaces"
+    "pack:check": "npm pack --dry-run --workspaces",
+    "app:stage": "node scripts/stage-app.mjs apps/desktop/payload",
+    "app:smoke": "node scripts/smoke-app.mjs apps/desktop/payload"
   },
   "dependencies": {
     "@medhus-ai/crewrun-plugin-sdk": "^0.6.0",

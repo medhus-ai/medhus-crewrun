@@ -22,6 +22,8 @@ Start with [Getting started](getting-started.md). Existing installations should 
 | [Workspace knowledge](workspace-knowledge.md) | Scoped QMD search, Docling document reads, local setup and isolation |
 | [Security and storage](security.md) | Credentials, permissions, isolation, and local state |
 | [Capabilities and limits](state.md) | What is supported today |
+| [Desktop and platforms](desktop-and-platforms.md) | Windows/Linux/macOS rollout, diagnostics, packaging gates and Hermes review |
+| [Packaged app](packaged-app.md) | Shared desktop/headless app for Linux, Windows and macOS; build and private access |
 
 ## Build with Crewrun
 

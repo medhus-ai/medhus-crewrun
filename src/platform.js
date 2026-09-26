@@ -4,23 +4,32 @@ import path from "node:path";
 
 import { crewEnv } from "./crew-dirs.js";
 
-const SUPPORTED_PLATFORMS = new Set(["linux", "darwin", "win32"]);
 const MIN_NODE_MAJOR = 20;
+
+export function assertKnowledgePlatform() {
+  if (process.platform !== "linux") {
+    throw new Error("Workspace knowledge requires verified Linux filesystem isolation. Native Windows support is pending; no unsandboxed fallback.");
+  }
+}
 
 export function platformInfo({ platform = process.platform, arch = process.arch } = {}) {
   const label = platform === "darwin" ? "macOS"
     : platform === "linux" ? "Linux"
       : platform === "win32" ? "Windows"
         : platform;
+  const supported = platform === "linux" && arch === "x64";
+  const experimental = (platform === "win32" && arch === "x64") || (["linux", "darwin"].includes(platform) && ["x64", "arm64"].includes(arch) && !supported);
   return {
     platform,
     arch,
     label,
-    supported: SUPPORTED_PLATFORMS.has(platform),
-    experimental: false,
-    message: SUPPORTED_PLATFORMS.has(platform)
-      ? `${label} ${arch} is supported`
-      : `${label} ${arch} is not a supported platform yet`
+    supported,
+    experimental,
+    message: supported
+      ? `${label} ${arch}: source runtime; packaged builds require target-specific smoke verification`
+      : experimental
+        ? `${label} ${arch}: experimental runtime; target-specific boundaries and standalone packaging still need verification`
+        : `${label} ${arch}: unsupported release target`
   };
 }
 

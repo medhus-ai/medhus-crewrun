@@ -27,7 +27,7 @@ function fixture(t) {
   writeFileSync(path.join(root, "knowledge/brief.md"), "Original knowledge");
   const file = path.join(root, ".crew/agents/assistant.json");
   const spec = JSON.parse(readFileSync(file, "utf8"));
-  spec.contract.authority.tools = Object.keys(WORK_TOOLS).map((name) => ({ name, impact: ["task.get", "task.list", "workspace.read", "workspace.search"].includes(name) ? "read" : "internal-write" }));
+  spec.contract.authority.tools = Object.keys(WORK_TOOLS).map((name) => ({ name, impact: ["crew.roster", "task.get", "task.list", "workspace.read", "workspace.search"].includes(name) ? "read" : "internal-write" }));
   spec.contract.authority.handoffs = { send: ["peer"], receive: ["peer"] };
   writeFileSync(file, JSON.stringify(spec));
   writeFileSync(path.join(root, ".crew/agents/peer.json"), JSON.stringify({ ...spec, contract: { ...spec.contract, authority: { ...spec.contract.authority, handoffs: { send: ["assistant"], receive: ["assistant"] } } } }));
@@ -50,6 +50,37 @@ test("workspace identity survives relocation and never opens legacy path state",
   assert.equal(readWorkspace(next).policy.governed, true);
   assert.throws(() => normalizeWorkspace({ ...readWorkspace(next), policy: { governed: false } }), /cannot be disabled/);
   assert.throws(() => initializeWorkspace(next), /already initialized/);
+});
+
+test("new workspace agents receive governed DuckDuckGo read tools", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "crew-web-default-"));
+  const root = path.join(directory, "repo");
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  initializeWorkspace(root);
+  const agent = JSON.parse(readFileSync(path.join(root, ".crew", "agents", "assistant.json"), "utf8"));
+  assert.equal(agent.web, true);
+  assert.deepEqual(agent.contract.authority.tools.filter((tool) => tool.name.startsWith("web.")).map((tool) => tool.name).sort(), ["web.fetch", "web.search"]);
+  assert.deepEqual(agent.contract.authority.tools.filter((tool) => ["crew.roster", "task.delegate"].includes(tool.name)).map((tool) => [tool.name, tool.impact]).sort(), [["crew.roster", "read"], ["task.delegate", "internal-write"]]);
+});
+
+test("Launch Desk is a runnable, bounded three-agent example", (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "crew-launch-desk-"));
+  const root = path.join(directory, "launch-desk");
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  initializeWorkspace(root, { kind: "launch-desk", name: "Demo desk", timezone: "America/Phoenix" });
+  const workspace = readWorkspace(root);
+  const coordinator = JSON.parse(readFileSync(path.join(root, ".crew/agents/coordinator.json"), "utf8"));
+  const researcher = JSON.parse(readFileSync(path.join(root, ".crew/agents/researcher.json"), "utf8"));
+  const writer = JSON.parse(readFileSync(path.join(root, ".crew/agents/writer.json"), "utf8"));
+  assert.equal(workspace.name, "Demo desk");
+  assert.equal(workspace.timezone, "America/Phoenix");
+  assert.deepEqual(coordinator.contract.authority.handoffs.send, ["researcher", "writer"]);
+  assert.equal(coordinator.scheduled[0].enabled, false, "a copied example never starts an automation");
+  assert.deepEqual(researcher.web.allow, ["github.com", "news.ycombinator.com", "producthunt.com", "g2.com"]);
+  assert.equal(writer.web, false);
+  assert.ok(writer.contract.authority.data.read.includes("workspace:drafts/researcher/*"));
+  assert.ok(!writer.contract.authority.tools.some((tool) => tool.name === "task.delegate"));
+  assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /Turn our brief into a launch plan/);
 });
 
 test("owner question resumes one task even when answered during the finishing turn", async (t) => {
@@ -92,6 +123,16 @@ test("delegation checks both roles, scopes task access, and waits for child acce
   assert.equal(f.store.claimRun(run.id).id, run.id);
 });
 
+test("crew roster exposes safe collaboration facts and handoff eligibility", async (t) => {
+  const f = fixture(t);
+  const roster = await f.call("crew.roster");
+  const peer = roster.agents.find((agent) => agent.role === "peer");
+  assert.equal(peer.name, "Personal assistant");
+  assert.equal(peer.handoff.eligible, true);
+  assert.ok(peer.capabilities.some((tool) => tool.name === "task.delegate"));
+  assert.deepEqual(Object.keys(peer).sort(), ["capabilities", "handoff", "name", "responsibility", "role", "skills"]);
+});
+
 test("workspace tools deny traversal, symlinks, cross-role paths and durable direct writes", async (t) => {
   const f = fixture(t);
   assert.throws(() => resolveWorkspacePath(f.root, "../private"), /relative/);
@@ -100,8 +141,11 @@ test("workspace tools deny traversal, symlinks, cross-role paths and durable dir
   await assert.rejects(f.call("workspace.read", { path: "private.md" }), /authority/);
   await assert.rejects(f.call("workspace.writeDraft", { path: "knowledge/brief.md", content: "overwrite" }), /draft/);
   await assert.rejects(f.call("workspace.writeDraft", { path: "drafts/peer/data.md", content: "overwrite" }), /authority/);
+  await assert.rejects(f.call("workspace.writeDraft", { path: "drafts/assistant/brief.xlsx", content: "not an office editor" }), /Markdown \(.md\) and CSV \(.csv\)/);
   await f.call("workspace.writeDraft", { path: "drafts/assistant/brief.md", content: "Draft" });
+  await f.call("workspace.writeDraft", { path: "drafts/assistant/budget.csv", content: "item,budget\nlaunch,2400\n" });
   assert.equal(readFileSync(path.join(f.root, "drafts/assistant/brief.md"), "utf8"), "Draft");
+  assert.equal(readFileSync(path.join(f.root, "drafts/assistant/budget.csv"), "utf8"), "item,budget\nlaunch,2400\n");
   await assert.rejects(f.call("workspace.proposePatch", { title: "Elevate", changes: [{ path: ".crew/agents/assistant.json", content: "{}" }] }), /setup proposals/);
   assert.deepEqual(loadRoleMemory(f.root, "", { pointers: ["knowledge/brief.md", "README.md"], governed: true, contract: { authority: { data: { read: ["workspace:readme.md"] } } } }).map((m) => m.title), ["README"]);
 });
@@ -158,6 +202,7 @@ test("bundled host works without provider secrets, exposes workspace reviews and
   assert.match(html, /Owner-reviewed guide/);
   const tools = host.runtime.tools.toolHandlers({ role: "assistant", toolContext: { targetRoot: f.root } });
   assert.ok(tools.some((tool) => tool.toolName === "task.list"));
+  assert.ok(tools.some((tool) => tool.toolName === "chat.setTopic"));
 });
 
 test("governed Claude turns expose no native filesystem, shell, web or subagent tools", async () => {

@@ -9,7 +9,7 @@ import { createRoleGovernance, scopeAllows } from "medhus-crewrun/role-contract"
 import { listRoleSpecs, loadRoleSpec } from "medhus-crewrun/role-spec";
 import { createConsoleChatService, createConsoleHelperBridge, HELPER_ROLE } from "medhus-crewrun/console-chat";
 import { resolveRunnerProfile } from "medhus-crewrun/runner-config";
-import { createWorkspaceTools, WORK_TOOLS, workToolSchema } from "medhus-crewrun/workspace-tools";
+import { createWorkspaceTools, WORK_TOOLS, workToolSchema, workToolImpact } from "medhus-crewrun/workspace-tools";
 import { routeLifecycleEvents } from "medhus-crewrun/runtime-lifecycle";
 import { readWorkspace } from "medhus-crewrun/workspace-manifest";
 import { executeLeasedRun } from "medhus-crewrun/runtime-worker";
@@ -87,8 +87,9 @@ export function createIntegrationRuntime({ targetRoot, state, plugins, pluginCon
     describe: (name) => WORK_TOOLS[name] || connectorRegistry().describe(name),
     inputSchema: (name, z) => WORK_TOOLS[name] ? workToolSchema(name, z) : connectorRegistry().inputSchema(name, z),
     validate: (name, input) => WORK_TOOLS[name] ? { ok: true, input } : connectorRegistry().validate(name, input),
-    actionPolicy: (name, context) => WORK_TOOLS[name] ? { impact: ["task.get", "task.list", "workspace.read", "workspace.search"].includes(name) ? "read" : "internal-write" } : connectorRegistry().actionPolicy(name, context),
+    actionPolicy: (name, context) => WORK_TOOLS[name] ? { impact: workToolImpact(name) } : connectorRegistry().actionPolicy(name, context),
     call: async (request) => {
+      if (request.toolName === "chat.setTopic") return chats.setTopic({ role: request.role, conversationId: request.context?.chatId, topic: request.input?.topic });
       if (WORK_TOOLS[request.toolName]) return workspace.call(request);
       try { return await connectorRegistry().call(request); }
       catch (error) {

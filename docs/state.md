@@ -4,6 +4,12 @@ v6 provides one owner per workspace, versioned agents, governed task delegation,
 persistent questions and chats, reviewed durable changes, recurring tasks, and
 installable Slack, Google Workspace, Microsoft 365 and GitHub integrations.
 
+Linux x64 is the current tested source-runtime path. Windows remains experimental;
+native Windows/macOS knowledge isolation is not ready. Desktop/headless packaging
+and three-OS CI are implemented but require native release verification; see the
+[packaged app](packaged-app.md). Use `crewrun doctor --json` for read-only
+prerequisite reporting; see [desktop and platform delivery](desktop-and-platforms.md).
+
 On Linux, agents' existing workspace tools support permission-scoped QMD keyword
 search and Docling Office/native-PDF reads after installing the local dependencies.
 Hybrid search requires separately installed local models and an owner setting.

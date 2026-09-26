@@ -20,6 +20,9 @@ import { esc, icon } from "./shell.js";
 import { renderWorkspaceReviews } from "./workspace.js";
 import { readWorkspace } from "../workspace-manifest.js";
 import { WORK_TOOLS } from "../workspace-tools.js";
+import { renderMarkdown } from "../markdown.js";
+import { HELPER_ROLE } from "../console-chat.js";
+import { parseCsvPreview } from "../workspace-files.js";
 import { tabs, readyForReview, reviewableResult, pendingReviewCount, paginate, pageOptions, pageNumber, upcomingOccurrences } from "./views.js";
 
 
@@ -68,6 +71,7 @@ export function renderPartial(page, models, options = {}) {
   switch (page) {
     case "tasks": return renderTasks(models, options);
     case "agents": return renderRoles(models, options);
+    case "workspace": return renderWorkspaceFiles(options);
     case "scheduled": return options.tab === "list" || options.showTaskEditor || options.selectedTask ? renderScheduledTasks(models, options) : renderCalendar(models, options);
     case "skills": return renderSkills(models, options);
     case "chats": return renderChats(models, options);
@@ -78,6 +82,22 @@ export function renderPartial(page, models, options = {}) {
     case "integrations": return renderConnectors(models, options);
     default: return renderDashboard(models);
   }
+}
+
+function renderWorkspaceFiles(options = {}) {
+  const files = Array.isArray(options.workspaceFiles) ? options.workspaceFiles : [];
+  const selected = options.workspaceFile || null;
+  const fileLinks = files.map((file) => `<a class="workspace-file-link${selected?.path === file.path ? " active" : ""}" href="/workspace?file=${encodeURIComponent(file.path)}"${selected?.path === file.path ? ' aria-current="page"' : ""}><code>${esc(file.path)}</code></a>`).join("");
+  let preview = '<div class="empty">Choose a Markdown or CSV file to preview it here.</div>';
+  if (selected?.type === "md") preview = `<div class="workspace-preview-markdown">${renderMarkdown(selected.content, { headingOffset: 2 })}</div>`;
+  if (selected?.type === "csv") {
+    const csv = parseCsvPreview(selected.content);
+    const header = csv.rows[0] || [];
+    const data = csv.rows.slice(1);
+    preview = csv.rows.length ? `<div class="table-wrap"><table class="workspace-preview-csv"><thead><tr>${Array.from({ length: csv.width }, (_, index) => `<th>${esc(header[index] || `Column ${index + 1}`)}</th>`).join("")}</tr></thead><tbody>${data.map((row) => `<tr>${Array.from({ length: csv.width }, (_, index) => `<td>${esc(row[index] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${csv.truncated ? '<p class="help">Preview is limited to the first 200 rows and 50 columns.</p>' : ""}` : '<div class="empty">This CSV file is empty.</div>';
+  }
+  return `<section class="hero"><div><p class="eyebrow">Workspace</p><h1>Workspace files</h1><p class="sub">Preview agent-readable Markdown and CSV files. Agents can write only authorized draft/output files; durable Markdown changes still require review.</p></div></section>
+<section class="workspace-files"><nav class="workspace-file-list" aria-label="Workspace files">${fileLinks || '<p class="help">No Markdown or CSV files yet.</p>'}</nav><article class="workspace-preview">${selected ? `<div class="workspace-preview-head"><code>${esc(selected.path)}</code><span class="muted">${esc(selected.type.toUpperCase())} · ${esc(selected.bytes)} bytes</span></div>` : ""}${preview}</article></section>`;
 }
 
 function renderDashboard(models) {
@@ -253,7 +273,7 @@ function renderAgentBehavior(spec, own) {
         <div class="field"><label for="heartbeat">Check-in interval</label><input id="heartbeat" name="heartbeat" value="${esc(spec.heartbeat?.interval || "off")}" placeholder="30m, 2h, or off"><span class="help">Runs while crewrun up is active. Use Scheduled for exact times.</span></div>
         <div class="field wide"><label for="heartbeat-prompt">Check-in instructions</label><textarea id="heartbeat-prompt" name="heartbeat_prompt">${esc(spec.heartbeat?.prompt || "")}</textarea></div>
         <div class="field"><label for="agent-web">Web access</label><select id="agent-web" name="web">${options([["inherit", "Use shared defaults"], ["off", "Off"], ["on", "Enabled"]], own.web === undefined ? "inherit" : own.web === false ? "off" : "on")}</select></div>
-        <div class="field"><label for="web-allow">Allowed websites</label><textarea id="web-allow" name="web_allow" placeholder="docs.example.com">${esc((spec.web?.allow || []).join("\n"))}</textarea><span class="help">One domain per line. Empty means open web access when enabled.</span></div>
+        <div class="field"><label for="web-allow">Allowed websites</label><textarea id="web-allow" name="web_allow" placeholder="docs.example.com">${esc((spec.web?.allow || []).join("\n"))}</textarea><span class="help">One domain per line. Empty means open web access when enabled. Enabling this grants governed DuckDuckGo search and public-page fetch read tools.</span></div>
         <div class="field"><label for="agent-reflections">Reflections</label><select id="agent-reflections" name="reflections">${options([["inherit", "Use shared defaults"], ["on", "Allow optional improvement proposals"], ["off", "Off"]], own.reflections === undefined ? "inherit" : own.reflections === false ? "off" : "on")}</select><span class="help">Off by default. Reviewed proposals update saved context or Skills; routine journals are never added to prompts.</span></div>
 
       </div>
@@ -367,7 +387,7 @@ function renderScheduledTasks(models, options = {}) {
   return `
 <section class="hero">
   <div><p class="eyebrow">Scheduled</p><h1>Scheduled tasks</h1><p class="sub">Run tasks on a schedule or whenever you need them.</p></div>
-  <a class="button" href="/scheduled?new=1#task-editor">New task</a>
+  <a class="button" href="/chats?agent=crew-helper&amp;intent=schedule&amp;draft=Help%20me%20create%20a%20new%20scheduled%20task.">New scheduled task</a>
 </section>
 ${tabs("/scheduled", [["calendar", "Calendar"], ["list", "List"]], "list")}
 <section class="section-heading"><h2>Tasks</h2><span class="muted">${enabledTasks} enabled · ${models.schedules.length} total</span></section>
@@ -453,7 +473,7 @@ function renderCalendar(models, options = {}) {
   return `
 <section class="hero">
   <div><h1>Scheduled tasks</h1><p class="sub">Upcoming runs in your computer’s local time.</p></div>
-  <a class="button" href="/scheduled?new=1#task-editor">New task</a>
+  <a class="button" href="/chats?agent=crew-helper&amp;intent=schedule&amp;draft=Help%20me%20create%20a%20new%20scheduled%20task.">New scheduled task</a>
 </section>
 ${tabs("/scheduled", [["calendar", "Calendar"], ["list", "List"]], "calendar")}
 <section class="section-heading"><h2>Upcoming runs</h2><form method="get" action="/scheduled" class="button-row"><input type="hidden" name="tab" value="calendar"><label for="calendar-count" class="muted">Show next</label><select class="compact-select" id="calendar-count" name="count" onchange="this.form.requestSubmit()">${[3, 5, 10, 25].map((value) => `<option value="${value}"${value === count ? " selected" : ""}>${value}</option>`).join("")}</select><noscript><button>Show</button></noscript></form></section>
@@ -461,41 +481,20 @@ ${days.size ? `<div class="calendar-list">${calendar}</div>${paging.html}` : emp
 }
 
 function renderSkills(models, options = {}) {
-  const { showSkillForm = false } = options;
   const rows = models.skills.map((skill) => [
     `<code>${esc(skill.id)}</code>`, esc(skill.description),
     skill.roles.length ? skill.roles.map((role) => `<code>${esc(role)}</code>`).join(" ") : "all",
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents can read approved skills on demand. Review proposed changes under Reviews.</p></div><div class="actions"><a class="button secondary" href="/reviews?tab=learning">Review proposals</a><a class="button" href="/skills?new=1#skill-form">Add skill</a></div></section>
-${showSkillForm ? renderSkillForm(models) : ""}
+<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents propose reusable skills from chat. Review proposed changes under Reviews.</p></div><div class="actions"><a class="button secondary" href="/reviews?tab=learning">Review proposals</a><a class="button" href="/chats?agent=crew-helper&amp;intent=skill&amp;draft=Help%20me%20propose%20a%20new%20skill.">Add skill</a></div></section>
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
 ${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.", pageOptions("/skills", options))}`;
 }
 
-function renderSkillForm(models) {
-  const agentNames = Object.values(models.specs).map((spec) => spec.role).join("\n");
-  return `
-<section id="skill-form" class="card" style="margin-top:16px">
-  <div class="section-heading" style="margin-top:0"><div><h2>Propose a skill</h2><span class="muted">Skills stay reviewable: this creates a proposal for Approvals.</span></div></div>
-  <form method="post" action="/skills/propose">
-    <div class="form-grid three">
-      <div class="field"><label for="skill-id">Skill ID</label><input id="skill-id" name="skill_id" placeholder="weekly-review" pattern="[a-z][a-z0-9-]*" required><span class="help">lowercase letters, digits, hyphens</span></div>
-      <div class="field wide"><label for="skill-description">What reusable outcome does it provide?</label><input id="skill-description" name="description" maxlength="200" placeholder="Prepare a concise, evidence-backed weekly operating review." required></div>
-      <div class="field"><label for="skill-scope">Scope</label><select id="skill-scope" name="scope"><option value="repository" selected>Repository</option><option value="workspace">Workspace</option><option value="user">User</option></select></div>
-      <div class="field wide"><label for="skill-roles">Applicable agents</label><textarea id="skill-roles" name="roles" placeholder="ops&#10;analyst"></textarea><span class="help">One agent slug per line; leave blank when the skill is useful to every agent. Current agents: ${esc(agentNames || "none")}.</span></div>
-      <div class="field wide"><label for="skill-content">Workflow body</label><textarea id="skill-content" name="content" placeholder="## Steps&#10;1. Gather…&#10;2. Check…&#10;3. Return…" required></textarea><span class="help">Write the reusable steps only. Approval adds the skill metadata.</span></div>
-      <div class="field wide"><label for="skill-evidence">Why is this reusable?</label><input id="skill-evidence" name="evidence" maxlength="4000" placeholder="Used for the weekly leadership review; the same inputs and checks recur." required></div>
-    </div>
-    <div class="button-row" style="margin-top:13px"><button>Propose skill</button><a class="button secondary" href="/skills">Cancel</a></div>
-  </form>
-</section>`;
-}
-
 function renderChats(models, options = {}) {
-  const { selectedChat = null, selectedChatRole = "", canChat = false } = options;
-  const agents = Object.values(models.specs);
+  const { selectedChat = null, selectedChatRole = "", canChat = false, chatDraft = "", chatIntent = "" } = options;
+  const agents = [...Object.values(models.specs), { role: HELPER_ROLE, title: "Crew helper", helper: true }];
   const selectedRole = selectedChat?.role || selectedChatRole;
   const selected = agents.find((spec) => spec.role === selectedRole) || null;
   const recent = models.operations.chats.filter((chat) => chat.purpose !== "console-helper");
@@ -505,15 +504,15 @@ function renderChats(models, options = {}) {
     const active = agent.role === selectedRole;
     return `<a class="chat-thread${active ? " active" : ""}" href="/chats?agent=${encodeURIComponent(agent.role)}"${active ? ' aria-current="page"' : ""}><span class="chat-thread-name">${esc(agent.title || agent.role)}</span><span class="chat-thread-meta">${thread ? esc(thread.title || "Resumed thread") : "Start chat"}</span></a>`;
   }).join("");
-  const compose = selected && canChat ? `<form class="chat-composer" method="post" action="/chats/send"><input type="hidden" name="role" value="${esc(selected.role)}"><input type="hidden" name="return_to" value="/chats?agent=${encodeURIComponent(selected.role)}"><textarea name="message" maxlength="20000" placeholder="Message ${esc(selected.title || selected.role)}" required></textarea><div class="button-row"><span class="help">The agent receives this thread and resumes its configured provider session when available.</span><button>Send</button></div></form>` : "";
+  const compose = selected && canChat ? renderChatComposer({ role: selected.role, responseLabel: selected.title || selected.role, returnTo: `/chats?agent=${encodeURIComponent(selected.role)}`, placeholder: `Message ${selected.title || selected.role}`, note: selected.helper ? "The helper has no shell or web access and prepares owner-reviewed changes." : "The agent resumes this configured provider thread when available.", draft: selected.helper ? chatDraft : "", helperIntent: selected.helper ? chatIntent : "", agents: selected.helper ? Object.values(models.specs) : [] }) : "";
+  const background = selected && !selected.helper ? models.operations.runs.filter((run) => run.agent === selected.role && run.desired === "active" && ["queued", "running"].includes(run.status)).slice(0, 3) : [];
   const workspace = selected
-    ? `<div class="chat-header"><div><h2>${esc(selected.title || selected.role)}</h2><p class="muted"><code>${esc(selected.role)}</code> · one resumed thread</p></div><a class="button secondary tiny" href="/agents/${encodeURIComponent(selected.role)}">Manage agent</a></div>${renderChatMessages(selectedChat, selected.title || selected.role)}${compose}`
+    ? `<div class="chat-header"><div class="chat-header-title"><button class="icon-button chat-icon-control chat-show-agents" type="button" data-chat-threads-toggle="show" aria-expanded="false" aria-controls="chat-agents" aria-label="Show agent list" title="Show agent list">${icon("list", "utility-icon")}</button><h2>${esc(selected.title || selected.role)}</h2></div><div class="chat-header-actions">${selected.helper ? "" : `<a class="icon-button chat-icon-control" href="/agents/${encodeURIComponent(selected.role)}" aria-label="Manage agent" title="Manage agent">${icon("settings", "utility-icon chat-manage-icon")}</a>`}</div></div>${background.length ? `<div class="chat-background-work">${background.map((run) => `<a href="/tasks?run=${encodeURIComponent(run.id)}"><span class="pill info">${esc(run.status)}</span>${esc(run.title || run.prompt.slice(0, 90))}</a>`).join("")}</div>` : ""}${renderChatMessages(selectedChat, selected.title || selected.role)}${compose}`
     : empty("Choose an agent to open its durable chat.", agents.length ? "Open first agent" : "Add agent", agents.length ? `/chats?agent=${encodeURIComponent(agents[0].role)}` : "/agents/new");
   return `
-<section class="hero"><div><p class="eyebrow">Chats</p><h1>Agent chats</h1><p class="sub">Each agent keeps one resumed, durable conversation for this workspace.</p></div></section>
 ${canChat ? "" : notice("Chat needs a running CrewRun host with an agent runner. You can still review agent settings and scheduled tasks.", "warn")}
 <section class="chat-layout" aria-label="Agent chats">
-  <nav class="chat-threads" aria-label="Agents"><div class="chat-threads-heading"><strong>Agents</strong><span class="muted">${agents.length}</span></div>${agents.length ? agentLinks + paging.html : `<p class="help">Add an agent to begin a chat.</p>`}</nav>
+  <nav id="chat-agents" class="chat-threads" aria-label="Agents"><div class="chat-threads-heading"><div class="chat-threads-copy"><span class="chat-threads-title"><strong>Agent chats</strong><span class="muted">${agents.length}</span></span><p>Each agent keeps one durable conversation.</p></div><button class="icon-button chat-icon-control" type="button" data-chat-threads-toggle="hide" aria-expanded="true" aria-controls="chat-agents" aria-label="Hide agent list" title="Hide agent list">${icon("arrowLeft", "utility-icon")}</button></div>${agents.length ? agentLinks + paging.html : `<p class="help">Add an agent to begin a chat.</p>`}</nav>
   <div class="chat-workspace">${workspace}</div>
 </section>`;
 }
@@ -523,29 +522,39 @@ export function renderHelperDrawer(models, { helperOpen = false, helperChat = nu
 <a class="helper-launcher" href="${esc(openHref)}" aria-label="Open Crew helper" title="Open Crew helper">${icon("chat", "utility-icon")}<span>Crew helper</span></a>
 <aside class="helper-drawer${helperOpen ? " open" : ""}" aria-label="Crew helper" aria-hidden="${helperOpen ? "false" : "true"}"${helperOpen ? "" : " inert"}>
   <div class="helper-drawer-head"><div><strong>Crew helper</strong><p>Guided setup</p></div><a class="icon-button" href="${esc(closeHref)}" aria-label="Close Crew helper" title="Close">×</a></div>
-  <div class="helper-choices"><a href="/agents/new">Add agent</a><a href="/agents">Manage agent</a><a href="/skills?new=1#skill-form">Add skill</a><a href="/scheduled?new=1">Schedule task</a></div>
-  <p class="helper-note">The helper can inspect agents, skills, and tasks through its read-only internal tool. It drafts changes for the normal reviewed forms; it never writes configuration itself.</p>
+  <div class="helper-choices"><a href="/agents/new">Add agent</a><a href="/agents">Manage agent</a><a href="/chats?agent=crew-helper&amp;intent=skill&amp;draft=Help%20me%20propose%20a%20new%20skill.">Add skill</a><a href="/chats?agent=crew-helper&amp;intent=schedule&amp;draft=Help%20me%20create%20a%20new%20scheduled%20task.">Schedule task</a></div>
+  <p class="helper-note">The helper can inspect agents, skills, and tasks, then create reviewable proposals. It never applies configuration or approves its own proposal.</p>
   <div class="helper-messages">${renderChatMessages(helperChat, "Crew helper")}</div>
-  ${canChat ? `<form class="chat-composer helper-composer" method="post" action="/chats/send"><input type="hidden" name="role" value="crew-helper"><input type="hidden" name="return_to" value="${esc(openHref)}"><textarea name="message" maxlength="20000" placeholder="What would you like to set up?" required></textarea><button>Ask helper</button></form>` : `<p class="help">Start the local CrewRun host and configure a runner to chat with the helper.</p>`}
+  ${canChat ? renderChatComposer({ role: "crew-helper", responseLabel: "Crew helper", returnTo: openHref, placeholder: "What would you like to set up?", note: "The helper prepares reviewed changes; it never receives credentials.", agents: Object.values(models.specs) }) : `<p class="help">Start the local CrewRun host and configure a runner to chat with the helper.</p>`}
 </aside>`;
+}
+
+function renderChatComposer({ role, responseLabel, returnTo, placeholder, note, draft = "", helperIntent = "", agents = [] }) {
+  const target = agents.length === 1 ? `<input type="hidden" name="target_role" value="${esc(agents[0].role)}">` : agents.length > 1 ? `<select name="target_role" aria-label="Agent for this work"><option value="">Choose an agent</option>${agents.map((agent) => `<option value="${esc(agent.role)}">${esc(agent.title || agent.role)}</option>`).join("")}</select>` : "";
+  const timing = helperIntent === "schedule" ? `<select name="cadence" aria-label="Repeat"><option value="">Choose repeat</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select><input type="time" name="time" aria-label="Preferred local time">` : "";
+  const helperFields = role === HELPER_ROLE ? `<div class="chat-helper-fields">${target}${timing}<input type="hidden" name="intent" value="${esc(helperIntent)}"></div>` : "";
+  return `<form class="chat-composer" method="post" action="/chats/send" data-response-label="${esc(responseLabel)}"><input type="hidden" name="role" value="${esc(role)}"><input type="hidden" name="return_to" value="${esc(returnTo)}">${helperFields}<div class="chat-composer-field"><textarea name="message" maxlength="20000" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" required>${esc(draft)}</textarea><button class="chat-send" type="submit" aria-label="Send message" title="Send message">${icon("send", "utility-icon")}</button></div><p class="chat-composer-hint">Enter to send · Shift+Enter for a new line · ${esc(note)}</p></form>`;
 }
 
 function renderChatMessages(chat, label) {
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-  if (!messages.length) return '<div class="chat-empty">Start the conversation. This thread will be reused for the next message.</div>';
-  return `<div class="chat-messages">${messages.map((message) => `<article class="chat-message${message.author === "user" ? " user" : ""}"><span class="chat-author">${esc(message.author === "user" ? "You" : label)}</span><div class="chat-copy">${esc(message.content)}</div></article>`).join("")}</div>`;
+  const body = messages.length
+    ? `<div class="chat-messages">${messages.map((message) => `<article class="chat-message${message.author === "user" ? " user" : ""}"><span class="chat-author">${esc(message.author === "user" ? "You" : label)}</span><div class="chat-copy">${renderMarkdown(message.content, { headingOffset: 3 })}</div></article>`).join("")}</div>`
+    : '<div class="chat-empty">Start the conversation. This thread will be reused for the next message.</div>';
+  return `<div class="chat-message-pane">${body}<button class="icon-button chat-scroll-latest" type="button" data-chat-scroll-latest aria-label="Scroll to latest message" title="Scroll to latest message" hidden>${icon("arrowDown", "utility-icon")}</button></div>`;
 }
 
 function renderApprovals(models, options = {}) {
   const { canDecideApprovals = false, selectedReview = "" } = options;
-  const tab = ["actions", "results", "learning", "workspace", "history"].includes(options.tab) ? options.tab : "actions";
+  // Old deep links remain useful, but Workspace is no longer a separate review tab.
+  const tab = options.tab === "workspace" ? "learning" : ["actions", "results", "learning", "history"].includes(options.tab) ? options.tab : "actions";
   const pending = models.operations.approvals.filter((entry) => entry.status === "pending");
+  const workspacePending = (models.operations.workspaceProposals || []).filter((p) => ["pending", "applying"].includes(p.status)).length;
   const header = `<section class="hero"><div><h1>Reviews</h1><p class="sub">Decide what can be sent, accept finished work, and review proposed learning.</p></div></section>${tabs("/reviews", [
     ["actions", `Actions (${pending.length})`], ["results", `Results (${models.operations.runs.filter(reviewableResult).length})`],
-    ["learning", `Memory & skills (${models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length})`], ["workspace", `Workspace (${(models.operations.workspaceProposals || []).filter((p) => ["pending", "applying"].includes(p.status)).length})`], ["history", "History"]
+    ["learning", `Proposals (${models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length + workspacePending})`], ["history", "History"]
   ], tab)}`;
   if (tab === "results") return header + renderTasks(models, { ...options, reviewMode: true });
-  if (tab === "workspace") return header + renderWorkspaceReviews(models, options);
   if (tab === "history") return header + renderReviewHistory(models, options);
   const hostRows = pending.filter((entry) => !selectedReview || entry.id === selectedReview).map((entry) => [
     pill(entry.kind || "host", toneFor(entry.risk || entry.status)),
@@ -571,7 +580,8 @@ function renderApprovals(models, options = {}) {
 ${selectedReview ? '<p><a href="/reviews?tab=actions">Back to pending actions</a> · Approval permits this action; it does not accept the task result.</p>' : ""}
 ${table(["kind", "links", "request", "requested by", "decision"], hostRows, selectedReview ? "This action is no longer pending. Check review history or the task for its outcome." : "No external actions are awaiting approval.", pageOptions("/reviews", options, { tab }))}` : `
 <section class="section-heading"><h2>Memory and skill proposals</h2><span class="muted">${proposalRows.length} pending</span></section>
-${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.", pageOptions("/reviews", options, { tab }))}`);
+${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.", pageOptions("/reviews", options, { tab }))}
+${renderWorkspaceReviews(models, { ...options, tab: "learning" })}`);
 }
 
 function renderReviewHistory(models, options) {

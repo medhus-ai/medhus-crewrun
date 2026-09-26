@@ -4,6 +4,7 @@ import { createConversationStore } from "./conversations.js";
 import { listRoleSpecs, loadRoleSpec } from "./role-spec.js";
 import { listSchedules } from "./schedules.js";
 import { listSkills } from "./skills.js";
+import { proposeSkill } from "./skill-proposals.js";
 import { createMcpBridge } from "./mcp.js";
 import { createRoleGovernance } from "./role-contract.js";
 import { readWorkspace, workspaceIdentity } from "./workspace-manifest.js";
@@ -58,11 +59,26 @@ export function createConsoleChatService({ targetRoot, getDb, createRunner, crea
       .map((row) => ({ id: row.id, role: row.role, title: row.title || chatTitle(row.role), updatedAt: row.updated_at, purpose: row.purpose }));
   }
 
-  async function sendChat({ role, message } = {}) {
+  function setTopic({ role, conversationId, topic } = {}) {
+    const agent = assertRole(role);
+    if (agent === HELPER_ROLE) throw new Error("The setup helper does not rename chats.");
+    const thread = existing(agent);
+    if (!thread || Number(conversationId) !== Number(thread.id)) throw new Error("A chat can rename only its own current durable conversation.");
+    const title = String(topic || "").replace(/\s+/g, " ").trim().slice(0, 96);
+    if (!title) throw new Error("Choose a concise chat topic.");
+    conversations.setConversationTitle(thread.id, title);
+    return { id: thread.id, topic: title };
+  }
+
+  async function sendChat({ role, message, targetRole = "", intent = "", cadence = "", time = "" } = {}) {
     const agent = assertRole(role);
     const input = String(message || "").trim();
     if (!input) throw new Error("Write a message before sending it.");
     if (input.length > 20_000) throw new Error("A chat message must be at most 20000 characters.");
+    const requestedTarget = agent === HELPER_ROLE && listRoleSpecs(root)[String(targetRole || "")] ? String(targetRole) : "";
+    const requestedIntent = agent === HELPER_ROLE && ["task", "schedule", "skill"].includes(String(intent || "")) ? String(intent) : "";
+    const requestedCadence = agent === HELPER_ROLE && ["daily", "weekdays", "weekly", "monthly"].includes(String(cadence || "")) ? String(cadence) : "";
+    const requestedTime = agent === HELPER_ROLE && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time || "")) ? String(time) : "";
     await beforeTurn({ role: agent });
     const startedAt = Date.now();
     const conversationId = conversations.getOrCreateConsoleConversation({
@@ -96,7 +112,7 @@ export function createConsoleChatService({ targetRoot, getDb, createRunner, crea
       messages: boundary == null ? messages : messages.filter((m) => m.id >= boundary),
       resumeSessionId: changed ? null : thread?.engine_session_id || null,
       worktree: thread?.worktree_dir ? { dir: thread.worktree_dir, branch: thread.worktree_branch } : null,
-      context: agent === HELPER_ROLE ? helperInstructions(root) : "",
+      context: agent === HELPER_ROLE ? helperInstructions(root, { targetRole: requestedTarget, intent: requestedIntent, cadence: requestedCadence, time: requestedTime }) : "",
       toolContext,
       modeOverride: agent === HELPER_ROLE ? "propose" : undefined,
       log
@@ -110,7 +126,7 @@ export function createConsoleChatService({ targetRoot, getDb, createRunner, crea
     return getChat({ role: agent });
   }
 
-  return { getChat, listChats, sendChat, conversations };
+  return { getChat, listChats, sendChat, setTopic, conversations };
 }
 
 export function createConsoleHelperBridge({ targetRoot, workspace, extraStatus = () => ({}) } = {}) {
@@ -120,20 +136,21 @@ export function createConsoleHelperBridge({ targetRoot, workspace, extraStatus =
     serverName: "crew-helper",
     governance: createRoleGovernance({ contracts: { [HELPER_ROLE]: {
       version: 1, revision: 1, mandate: "Inspect safe setup metadata and propose changes for owner review.",
-      authority: { tools: ["crew.status", "crew.preset", "crew.proposeSetup"].map((name) => ({ name, impact: name === "crew.proposeSetup" ? "internal-write" : "read" })) }
+      authority: { tools: ["crew.status", "crew.preset", "crew.proposeSetup", "skill.propose"].map((name) => ({ name, impact: ["crew.proposeSetup", "skill.propose"].includes(name) ? "internal-write" : "read" })) }
     } } }),
-    actionPolicy: (name) => ({ impact: name === "crew.proposeSetup" ? "internal-write" : "read" }),
+    actionPolicy: (name) => ({ impact: ["crew.proposeSetup", "skill.propose"].includes(name) ? "internal-write" : "read" }),
     label: "Crew helper",
     crewTools: false,
     instructions: "Inspect the current crew. Ask for goals, responsibility, context, model, timezone, allowed actions, and routines. Present short questions with suggested answers and free text. Propose concrete changes for owner review; never apply or approve them and never request credentials.",
-    toolsForRole: (role) => role === HELPER_ROLE ? ["crew.status", ...(workspace ? ["crew.preset", "crew.proposeSetup"] : [])] : [],
-    describe: (name) => ({ "crew.status": "Inspect safe workspace setup metadata.", "crew.preset": "Get an editable personal or organization starting preset; does not save it.", "crew.proposeSetup": "Save a concrete setup proposal for owner review. No proposed changes are applied." })[name],
-    inputSchema: (name, z) => name === "crew.proposeSetup" ? { title: z.string(), changes: z.array(z.object({ path: z.string(), content: z.string() })) } : name === "crew.preset" ? { kind: z.enum(["personal", "organization"]), name: z.string(), goal: z.string(), timezone: z.string(), runner: z.string().optional() } : {},
+    toolsForRole: (role) => role === HELPER_ROLE ? ["crew.status", "skill.propose", ...(workspace ? ["crew.preset", "crew.proposeSetup"] : [])] : [],
+    describe: (name) => ({ "crew.status": "Inspect safe workspace setup metadata.", "crew.preset": "Get an editable personal or organization starting preset; does not save it.", "crew.proposeSetup": "Save a concrete setup proposal for owner review. No proposed changes are applied.", "skill.propose": "Save a reusable skill proposal for operator review; it does not install the skill." })[name],
+    inputSchema: (name, z) => name === "crew.proposeSetup" ? { title: z.string(), changes: z.array(z.object({ path: z.string(), content: z.string() })) } : name === "crew.preset" ? { kind: z.enum(["personal", "organization"]), name: z.string(), goal: z.string(), timezone: z.string(), runner: z.string().optional() } : name === "skill.propose" ? { id: z.string(), description: z.string(), content: z.string(), evidence: z.string(), roles: z.string().optional(), scope: z.enum(["user", "workspace", "repository"]).optional() } : {},
     call: ({ role, toolName, input }) => {
       if (role !== HELPER_ROLE) throw new Error("Setup tools are reserved for the owner helper.");
       if (toolName === "crew.status") return { ...helperStatus(root), ...extraStatus() };
       if (toolName === "crew.preset") return { changes: workspacePreset(input).filter((change) => !readWorkspace(root) || change.path !== ".crew/workspace.json") };
       if (toolName === "crew.proposeSetup" && workspace) return workspace.propose({ role, ...input, setup: true });
+      if (toolName === "skill.propose") return proposeSkill({ targetRoot: root, id: input.id, description: input.description, content: input.content, evidence: input.evidence, roles: String(input.roles || "").split(",").map((entry) => entry.trim()).filter(Boolean), scope: input.scope || "repository", proposedBy: HELPER_ROLE });
       throw new Error("Setup tool is unavailable.");
     }
   });
@@ -148,7 +165,7 @@ export function helperStatus(targetRoot) {
   return { workspace: readWorkspace(targetRoot), agents, skills, scheduled };
 }
 
-function helperInstructions(targetRoot) {
+function helperInstructions(targetRoot, { targetRole = "", intent = "", cadence = "", time = "" } = {}) {
   const status = helperStatus(targetRoot);
   return [
     "## Crew helper",
@@ -156,14 +173,18 @@ function helperInstructions(targetRoot) {
     "",
     "For a new agent, collect: slug, responsibility, a concise instruction, model/default preference, and the authority or data boundary.",
     "For an agent change, collect: which agent, what should change, and whether the current contract must change.",
-    "For a skill, collect: reusable purpose, steps/body, applicable agents, scope, and why it is repeatable. Explain that skills are proposed first and approved in Approvals.",
-    "For a scheduled task, collect: agent, task title, instruction, repeat rule, time, local timezone, and enabled state. CrewRun schedules remain the source of truth.",
+    "For a skill, collect: reusable purpose, steps/body, applicable agents, scope, and why it is repeatable. When skill.propose is available, use it only after the owner confirms the complete proposal. Explain that skills are proposed first and approved in Approvals.",
+    "For a new task, collect: agent, title, expected outcome, completion criteria, and priority. Confirm before creating background work; explain that the work will appear in Tasks while chat remains available.",
+    "For a scheduled task, collect: agent, task title, instruction, repeat rule, time, local timezone, and enabled state. Use crew.proposeSetup only after the owner confirms the complete proposed change. New schedules must remain disabled until the owner enables them. CrewRun schedules remain the source of truth.",
     "For integrations, never ask for credentials in chat. Direct the operator to Integrations and explain that outgoing actions stay approval-gated.",
     "",
     `Current agents: ${status.agents.map((entry) => entry.role).join(", ") || "none"}.`,
     `Current skills: ${status.skills.map((entry) => entry.id).join(", ") || "none"}.`,
-    `Current scheduled tasks: ${status.scheduled.map((entry) => `${entry.role}:${entry.id}`).join(", ") || "none"}.`
-  ].join("\n");
+    `Current scheduled tasks: ${status.scheduled.map((entry) => `${entry.role}:${entry.id}`).join(", ") || "none"}.`,
+    targetRole ? `The owner selected target agent: ${targetRole}.` : "",
+    intent ? `The owner began a ${intent === "schedule" ? "scheduled task" : intent === "skill" ? "skill" : "task"} request.` : "",
+    cadence ? `Preferred repeat: ${cadence}${time ? ` at ${time} local time` : ""}.` : time ? `Preferred local time: ${time}.` : ""
+  ].filter(Boolean).join("\n");
 }
 
 function chatTitle(role) {

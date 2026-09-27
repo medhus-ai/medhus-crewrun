@@ -57,7 +57,7 @@ async function importPackage(root, name) {
   if (!/^(@[a-z0-9-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error("Invalid plugin package name.");
   const require = createRequire(path.join(root, "package.json"));
   const entry = require.resolve(name);
-  if (!(await realpath(entry)).startsWith(root + path.sep)) throw new Error("Plugin entry is outside its installation.");
+  if (!(await realpath(entry)).startsWith(await realpath(root) + path.sep)) throw new Error("Plugin entry is outside its installation.");
   const module = await import(pathToFileURL(entry).href);
   return validateIntegrationPlugin(module.default);
 }

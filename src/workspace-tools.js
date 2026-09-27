@@ -55,9 +55,9 @@ export function scopeMatches(scopes, scope) {
 }
 export function canReadWorkspace(contract, relative) { return scopeMatches(contract?.authority.data.read, fileScope(relative)); }
 
-export function createWorkspaceTools({ targetRoot, store, governance, env = process.env, now = Date.now, knowledgeProcess }) {
+export function createWorkspaceTools({ targetRoot, store, governance, env = process.env, now = Date.now, knowledgeProcess, knowledgeInstallation }) {
   const { db, tx } = store;
-  const knowledge = createWorkspaceKnowledge({ targetRoot, store, env, canRead: canReadWorkspace, contractFor: (role) => governance.contractFor(role), processRunner: knowledgeProcess });
+  const knowledge = createWorkspaceKnowledge({ targetRoot, store, env, canRead: canReadWorkspace, contractFor: (role) => governance.contractFor(role), processRunner: knowledgeProcess, ...(knowledgeInstallation ? { installation: knowledgeInstallation } : {}) });
   db.exec(`CREATE TABLE IF NOT EXISTS workspace_proposals (
     id TEXT PRIMARY KEY, role TEXT NOT NULL, title TEXT NOT NULL, changes TEXT NOT NULL,
     authorization TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL,

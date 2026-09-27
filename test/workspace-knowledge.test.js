@@ -43,7 +43,9 @@ function fixture(t, processRunner, extraEnv = {}) {
     if (options.kind === "docling") return { content: "# Extracted\nOffice budget", references: [{ ref: "#/tables/0", pages: [1] }] };
     return { matches: readdirSync(path.join(options.job, "sources")).slice(0, 10).map((id) => ({ id, excerpt: readFileSync(path.join(options.job, "sources", id), "utf8"), line: 1, score: 1 })) };
   };
-  const workspace = createWorkspaceTools({ targetRoot: root, store, governance, env, knowledgeProcess: processRunner === null ? undefined : mock });
+  // A mocked worker describes governance logic on any Linux host; the real worker keeps host detection.
+  const workspace = createWorkspaceTools({ targetRoot: root, store, governance, env, knowledgeProcess: processRunner === null ? undefined : mock,
+    knowledgeInstallation: processRunner === null ? undefined : { sandbox: true, qmd: true, docling: true, modules: "", venv: "" } });
   t.after(async () => { await workspace.knowledge.close(); store.close(); rmSync(directory, { recursive: true, force: true }); });
   const call = (toolName, input, role = "assistant", context = {}) => workspace.call({ role, toolName, input, context });
   return { directory, root, store, governance, contracts, workspace, calls, call };

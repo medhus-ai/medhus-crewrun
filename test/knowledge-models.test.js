@@ -9,10 +9,12 @@ import { createKnowledgeModels, downloadModel, verifyModel, EMBEDDING_MODEL } fr
 
 const bytes = Buffer.from("GGUF fixture data");
 const tiny = { ...EMBEDDING_MODEL, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+// The worker is mocked, so these tests describe setup logic on any host.
+const installation = { sandbox: true, qmd: true, docling: true, modules: "", venv: "" };
 function fixture(t, options = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "crew-model-"));
   const store = { file: path.join(dir, "state.sqlite"), db: new Database(path.join(dir, "state.sqlite")) };
-  const manager = createKnowledgeModels({ store, model: tiny, processRunner: async () => ({ matches: [{ score: 0.5 }] }),
+  const manager = createKnowledgeModels({ store, model: tiny, installation, processRunner: async () => ({ matches: [{ score: 0.5 }] }),
     fetchImpl: async () => new Response(bytes), ...options });
   t.after(async () => { await manager.close(); store.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return { manager, dir, store };
@@ -45,7 +47,7 @@ test("setup requires consent and publishes ready only after a real-worker verifi
   while (!release) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(manager.snapshot().ready, false);
   assert.equal(manager.snapshot().status, "verifying");
-  const second = createKnowledgeModels({ store, model: tiny });
+  const second = createKnowledgeModels({ store, model: tiny, installation });
   assert.throws(() => second.install({ consent: true }), /already running/);
   assert.throws(() => manager.configure({ enabled: false }), /cancel/);
   release({ matches: [{ score: 0.7 }] }); await manager.idle();

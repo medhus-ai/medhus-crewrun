@@ -35,10 +35,9 @@ export function readKnowledgeSource(root, relative) {
   } finally { closeSync(fd); }
 }
 
-export function createWorkspaceKnowledge({ targetRoot, store, env = process.env, canRead, contractFor, processRunner = runKnowledgeProcess }) {
-  const installation = knowledgeInstallation(env);
+export function createWorkspaceKnowledge({ targetRoot, store, env = process.env, canRead, contractFor, processRunner = runKnowledgeProcess, installation = knowledgeInstallation(env) }) {
   const base = path.join(path.dirname(store.file), "knowledge");
-  const setup = createKnowledgeModels({ store, env, processRunner });
+  const setup = createKnowledgeModels({ store, env, processRunner, installation });
   const models = setup.directory;
   const fingerprint = digest([KNOWLEDGE_VERSIONS, EMBEDDING_MODEL.sha256, "lex-vec-no-rerank"]);
   const privateDir = (directory) => { mkdirSync(directory, { recursive: true, mode: 0o700 }); return directory; };

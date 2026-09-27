@@ -52,10 +52,11 @@ export async function downloadModel({ file, model = EMBEDDING_MODEL, signal, pro
   } finally { await handle.close(); }
 }
 
-export function createKnowledgeModels({ store, env = process.env, processRunner = runKnowledgeProcess, fetchImpl = fetch, model = EMBEDDING_MODEL, now = Date.now }) {
+// `installation` is injectable only so unit tests with a mocked worker do not depend on the host;
+// production callers use the real detection, and a real worker still requires bubblewrap.
+export function createKnowledgeModels({ store, env = process.env, processRunner = runKnowledgeProcess, fetchImpl = fetch, model = EMBEDDING_MODEL, now = Date.now, installation = knowledgeInstallation(env) }) {
   const directory = path.join(path.dirname(store.file), "knowledge-models");
   const file = path.join(directory, model.file);
-  const installation = knowledgeInstallation(env);
   const { db } = store;
   db.exec(`CREATE TABLE IF NOT EXISTS knowledge_setup (
     id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,

@@ -8,7 +8,7 @@ Start with [Getting started](getting-started.md). Existing installations should 
 | Guide | What it covers |
 |---|---|
 | [Getting started](getting-started.md) | Install, choose a runner, and complete your first task |
-| [Console](console.md) | Tasks, reviews, scheduled work, integrations, and activity |
+| [Console](console.md) | Inbox, workspace files, scheduled work, integrations and skills, and activity |
 | [Personal and organization workspaces](workspaces.md) | Guided setup, scoped tools, accountable work, migration, and enforced limits |
 | [Agents](agents.md) | Jobs, instructions, permissions, web access, and project files |
 | [Providers](providers.md) | Runner profiles, local sign-ins, and API keys |

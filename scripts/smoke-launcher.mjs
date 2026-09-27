@@ -27,7 +27,7 @@ try {
   const response = await fetch(new URL("/_crew/login", url), { method: "POST", body: new URLSearchParams({ code }), redirect: "manual" });
   assert.equal(response.status, 303);
   const cookie = response.headers.get("set-cookie").split(";")[0];
-  assert.match(await (await fetch(url, { headers: { cookie } })).text(), /Dashboard/);
+  assert.match(await (await fetch(url, { headers: { cookie } })).text(), /Inbox/);
   await run("--stop");
   let timer;
   try {

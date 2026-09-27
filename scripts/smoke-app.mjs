@@ -21,7 +21,7 @@ try {
   const first = await run("ensure"), second = await run("ensure");
   assert.equal(first.url, second.url);
   const response = await fetch(first.url, { headers: { cookie: `${first.cookie.name}=${first.cookie.value}` } });
-  assert.match(await response.text(), /Dashboard/);
+  assert.match(await response.text(), /Inbox/);
   await run("stop");
   for (let i = 0; i < 100; i++) {
     try { await run("status"); } catch { break; }

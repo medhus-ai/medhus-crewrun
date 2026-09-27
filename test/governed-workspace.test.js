@@ -197,7 +197,7 @@ test("bundled host works without provider secrets, exposes workspace reviews and
   assert.equal(snapshot.workspaceProposals[0].id, proposal.id);
   assert.ok(snapshot.connectors.every((c) => !c.configured));
   assert.doesNotMatch(JSON.stringify(snapshot), /host\.key|CREWRUN_INTEGRATIONS_KEY/);
-  const html = renderPartial("reviews", collectModels(f.root, { operations: snapshot }), { tab: "workspace", selectedReview: proposal.id });
+  const html = renderPartial("inbox", collectModels(f.root, { operations: snapshot }), { tab: "approvals", selectedReview: proposal.id });
   assert.match(html, /Edit proposal before approval/);
   assert.match(html, /Owner-reviewed guide/);
   const tools = host.runtime.tools.toolHandlers({ role: "assistant", toolContext: { targetRoot: f.root } });

@@ -12,15 +12,15 @@ import { normalizeRoleContract } from "../role-contract.js";
 import { readAgentSpecForEditing, roleScheduledEntries } from "../role-spec.js";
 import { parseInterval, validateRoleSettings, loadRoleSettings } from "../pulse.js";
 import { renderPage } from "./shell.js";
-import { pageFromUrl } from "./navigation.js";
-import { pendingReviewCount } from "./views.js";
+import { legacyInboxRedirect, pageFromUrl } from "./navigation.js";
+import { inboxCount } from "./views.js";
 import { collectModels, renderHelperDrawer, renderPartial } from "./pages.js";
 import { HELPER_ROLE } from "../console-chat.js";
 import { validateWorkspaceChange } from "../workspace-tools.js";
 import { setShellAgent } from "../shell-access.js";
 import { runnerIdForRole } from "../runner.js";
 import { resolveRunnerProfile } from "../runner-config.js";
-import { listWorkspaceFiles, readWorkspaceFilePreview } from "../workspace-files.js";
+import { listWorkspaceTree, readWorkspaceFilePreview } from "../workspace-files.js";
 import { createSecretStore, KNOWN_SECRETS, listSecretNames, lock as lockSecrets, removeSecret, setSecret, unlock as unlockSecrets } from "../secret-store.js";
 import { checkLocalServer, detectLocalHardware, detectLocalRuntime, listLocalRunners, localRunnerId, recommendLocalModels, removeLocalRunner, saveLocalRunner } from "../local-models.js";
 
@@ -491,10 +491,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const fn = handlers[kind];
       if (!fn) throw new Error("proposal kind must be skill, pref, or reflection");
       fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator", target: form.target, key: form.key, description: form.description, env });
-      return "/reviews?tab=learning";
+      return "/inbox?tab=approvals";
     }
     if (pathname === "/reviews/decide") {
-      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=actions");
+      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/inbox?tab=approvals");
     }
     if (pathname === "/integrations/connect") {
       return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), capabilities: Array.isArray(form.capabilities) ? form.capabilities : [], credentials: form }, "/integrations");
@@ -531,7 +531,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       await send({ targetRoot: root, role, message: String(form.message || ""), targetRole: String(form.target_role || ""), intent: String(form.intent || ""), cadence: String(form.cadence || ""), time: String(form.time || "") });
       return localRedirect(form.return_to, `/chats?agent=${encodeURIComponent(role)}`);
     }
-    if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=learning");
+    if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/inbox?tab=approvals");
     if (pathname === "/workspace/lifecycle") return callOperation(["toggleLifecycle"], { id: String(form.id || ""), enabled: form.enabled === "1" }, "/settings?tab=host");
     if (pathname.startsWith("/settings/secrets/")) return secretAction(pathname.slice("/settings/secrets/".length), form);
     if (pathname.startsWith("/settings/local/")) return localModelAction(pathname.slice("/settings/local/".length), form);
@@ -542,16 +542,16 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }, "/settings?tab=knowledge");
     if (pathname === "/workspace/revise") {
       const changes = Object.keys(form).filter((key) => /^path_\d+$/.test(key)).map((key) => ({ path: form[key], content: form[key.replace("path_", "content_")] }));
-      return callOperation(["reviseWorkspace"], { id: form.id, title: form.title, changes }, "/reviews?tab=learning");
+      return callOperation(["reviseWorkspace"], { id: form.id, title: form.title, changes }, "/inbox?tab=approvals");
     }
-    if (pathname === "/tasks/answer") return callOperation(["answerQuestion"], { id: String(form.id || ""), answer: String(form.answer || "") }, "/tasks");
-    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), title: String(form.title || ""), priority: String(form.priority || "normal"), outcome: String(form.outcome || ""), criteria: String(form.criteria || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
+    if (pathname === "/tasks/answer") return callOperation(["answerQuestion"], { id: String(form.id || ""), answer: String(form.answer || "") }, "/inbox");
+    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), title: String(form.title || ""), priority: String(form.priority || "normal"), outcome: String(form.outcome || ""), criteria: String(form.criteria || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/inbox?tab=progress");
     if (pathname === "/tasks/control") {
-      const redirect = await callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || ""), feedback: String(form.feedback || "") }, "/tasks");
-      return form.action === "accept" ? "/reviews?tab=results" : redirect;
+      const redirect = await callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || ""), feedback: String(form.feedback || "") }, "/inbox");
+      return form.action === "accept" ? "/inbox" : redirect;
     }
-    if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/tasks");
-    if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/tasks");
+    if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/inbox");
+    if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/inbox");
     throw new Error("unknown action");
   }
 
@@ -583,6 +583,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         if (!artifact) { response.writeHead(404).end("Artifact not found"); return; }
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8", "content-disposition": 'attachment; filename="crewrun-result.txt"' }).end(artifact.content); return;
       }
+      const legacy = legacyInboxRedirect(url);
+      if (legacy) { response.writeHead(302, { location: legacy }).end(); return; }
       const page = pageFromUrl(url.pathname);
       if (!page) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const roles = page === "agents" ? roleRoute(url) : null;
@@ -600,7 +602,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const helperChat = helperOpen && getChat
         ? await getChat({ targetRoot: root, role: HELPER_ROLE })
         : null;
-      const workspaceFiles = page === "workspace" ? listWorkspaceFiles(root) : [];
+      const workspaceTree = page === "workspace" ? listWorkspaceTree(root) : null;
       const requestedWorkspaceFile = page === "workspace" ? String(url.searchParams.get("file") || "") : "";
       const workspaceFile = requestedWorkspaceFile ? readWorkspaceFilePreview(root, requestedWorkspaceFile) : null;
       const helperUrl = new URL(url);
@@ -635,7 +637,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         showTaskEditor: url.searchParams.get("new") === "1",
         selectedChat,
         selectedChatRole,
-        workspaceFiles,
+        workspaceTree,
         workspaceFile,
         chatDraft: String(url.searchParams.get("draft") || "").slice(0, 20_000),
         chatIntent: ["task", "schedule", "skill"].includes(String(url.searchParams.get("intent") || "")) ? String(url.searchParams.get("intent")) : "",
@@ -651,10 +653,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       }), {
         targetRoot: root,
         version: VERSION,
-        backHref: roleSubpage ? "/agents" : page === "dashboard" ? "" : "/",
-        backLabel: roleSubpage ? "Back to agents" : "Back to dashboard",
+        backHref: roleSubpage ? "/agents" : page === "inbox" ? "" : "/",
+        backLabel: roleSubpage ? "Back to agents" : "Back to inbox",
         recentChats: models.operations.chats,
-        pendingReviews: pendingReviewCount(models),
+        inboxCount: inboxCount(models),
         helperContent: renderHelperDrawer(models, {
           helperOpen,
           helperChat,

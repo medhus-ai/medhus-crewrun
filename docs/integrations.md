@@ -6,12 +6,12 @@ then use **Integrations → Connect** to select capabilities and complete browse
 Disconnect revokes authorization where supported and clears the local credentials.
 
 Tokens remain in encrypted host state. Agents see curated tools and safe connection
-metadata, never raw provider APIs or credentials. External writes enter Reviews;
+metadata, never raw provider APIs or credentials. External writes enter Inbox → Approvals;
 the delivery worker rechecks authority and connection revision before sending.
 
 A connection alone starts no automation. Enable a permitted event rule explicitly.
 Verified but unrouted events appear in **Activity → Events**. Rules belong in
-Integrations; tasks created by authorized routes appear in Tasks.
+Integrations; tasks created by authorized routes appear in the Inbox.
 
 See [provider setup, callbacks and plugin authoring](reference-host.md) for exact
 scopes, provider limitations, renewal, and explicit HTTPS/Funnel setup.

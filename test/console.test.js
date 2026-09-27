@@ -33,12 +33,14 @@ test("knowledge setup uses existing settings forms and owner-only operations", a
   } finally { await console_.close(); await rm(parent, { recursive: true, force: true }); }
 });
 
-test("sidebar keeps Chats visible and places account pages in the workspace menu", () => {
+test("sidebar orders Inbox, Workspace, combined Integrations & Skills, Chats, then the account menu", () => {
   for (const recentChats of [[], [{ role: "ops", title: "Incident response" }]]) {
     const sidebar = renderPage("chats", "", { recentChats }).match(/<aside[\s\S]*?<\/aside>/)[0];
-    const labels = ['aria-label="Chats"', 'data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu"', 'aria-label="Integrations"', 'aria-label="Usage"', 'aria-label="Settings"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat: Incident response"'] : [])];
+    const labels = ['aria-label="Inbox"', 'aria-label="Workspace"', 'aria-label="Integrations &amp; Skills"', 'aria-label="Chats"', 'data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu"', 'aria-label="Usage"', 'aria-label="Settings"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat: Incident response"'] : [])];
     const positions = labels.map((label) => sidebar.indexOf(label));
-    assert.ok(positions.slice(0, 5).every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+    assert.ok(positions.slice(0, 7).every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+    assert.match(sidebar, /aria-label="Inbox"[^<]*>(?:<svg[\s\S]*?<\/svg>)<span class="nav-text">Inbox<\/span><\/a><a href="\/workspace"/, "Workspace sits directly below Inbox");
+    for (const retired of ["Dashboard", "Tasks", "Reviews", "Skills"]) assert.doesNotMatch(sidebar, new RegExp(`aria-label="${retired}"`));
     assert.match(sidebar, /aria-label="Chats" aria-current="page"/);
     assert.match(sidebar, /aria-label="Activity"[\s\S]*?<\/div>\s*<div class="nav-group"><a href="\/chats"/, "Chats has its own section below Activity");
     assert.match(sidebar, /data-sidebar-settings-menu hidden/);
@@ -92,11 +94,12 @@ test("console renders pages and performs actions over the project's .crew", asyn
   const base = `http://127.0.0.1:${port}`;
   try {
     const dashboard = await (await fetch(base + "/")).text();
-    assert.match(dashboard, /1 agents/);
-    assert.match(dashboard, /1 pending/);
+    assert.match(dashboard, /<h1>Inbox<\/h1>/, "the console opens on the Inbox");
+    assert.match(dashboard, /Approvals \(1\)/);
+    assert.doesNotMatch(dashboard, /This month|usage and subscription estimate/, "spending appears only under Usage");
     assert.doesNotMatch(dashboard, /skill\.read/, "tool configuration belongs in Settings");
     assert.match(dashboard, /class="sidebar"/, "console uses the persistent workspace rail");
-    assert.match(dashboard, /aria-label="Dashboard"/, "the dashboard link remains named for assistive technology");
+    assert.match(dashboard, /aria-label="Inbox" aria-current="page"/, "the Inbox link is named and current");
     assert.match(dashboard, /class="nav-icon"/, "menu icons are inline and dependency-free");
     assert.match(dashboard, /class="sidebar-resizer"/, "the sidebar has a mouse resize handle");
     assert.match(dashboard, /role="separator" aria-orientation="vertical" aria-label="Resize sidebar"/, "the resize handle is announced correctly");
@@ -109,8 +112,13 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.doesNotMatch(dashboard, /Manage agents/, "the dashboard does not duplicate the role directory");
     assert.doesNotMatch(dashboard, /Scheduled work/, "the dashboard does not duplicate the schedules page");
     const sidebar = dashboard.match(/<aside[\s\S]*?<\/aside>/)[0];
-    for (const label of ["Reviews", "Scheduled", "Integrations", "Activity", "Settings"]) assert.match(sidebar, new RegExp(`aria-label="${label}"`));
-    for (const label of ["Approvals", "Calendar", "Event inbox", "Audit", "Providers"]) assert.doesNotMatch(sidebar, new RegExp(`aria-label="${label}"`));
+    for (const label of ["Inbox", "Workspace", "Scheduled", "Integrations &amp; Skills", "Activity", "Settings"]) assert.match(sidebar, new RegExp(`aria-label="${label}"`));
+    for (const label of ["Dashboard", "Tasks", "Reviews", "Approvals", "Calendar", "Event inbox", "Audit", "Providers"]) assert.doesNotMatch(sidebar, new RegExp(`aria-label="${label}"`));
+    for (const [legacy, target] of [["/dashboard", "/inbox"], ["/tasks", "/inbox?tab=attention"], ["/tasks?tab=active", "/inbox?tab=progress"], ["/tasks?run=abc", "/inbox?run=abc"], ["/reviews", "/inbox?tab=approvals"], ["/reviews?tab=results&run=abc", "/inbox?run=abc"], ["/reviews?tab=history", "/inbox?tab=done"]]) {
+      const moved = await fetch(base + legacy, { redirect: "manual" });
+      assert.equal(moved.status, 302, legacy);
+      assert.equal(moved.headers.get("location"), target, legacy);
+    }
     for (const retired of ["/roles", "/schedules", "/calendar", "/events", "/audit", "/approvals", "/proposals", "/providers", "/connectors"]) {
       assert.equal((await fetch(base + retired, { redirect: "manual" })).status, 404);
     }
@@ -274,8 +282,13 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.equal((await fetch(base + "/workspace?file=.crew%2Fagents%2Fops.json")).status, 400, "workspace preview never exposes configuration");
 
     const reviews = await (await fetch(base + "/reviews?tab=learning")).text();
-    assert.match(reviews, />Proposals \(/);
-    assert.doesNotMatch(reviews, /href="\/reviews\?tab=workspace"/, "workspace changes share the proposals review surface");
+    assert.match(reviews, /aria-current="page" href="\/inbox\?tab=approvals"/, "old review links land on Inbox approvals");
+    assert.match(reviews, /Proposed skills and memory/);
+    assert.match(reviews, /Workspace changes/, "workspace changes share the approvals surface");
+    // Workspace shows folders and subfolders, with the selected file's folders open.
+    assert.match(csvPreview, /<details class="tree-folder" open><summary title="drafts">/);
+    assert.match(csvPreview, /<details class="tree-folder" open><summary title="drafts\/ops">/);
+    assert.match(csvPreview, /class="workspace-file-link active"[^>]*title="drafts\/ops\/budget\.csv"/);
 
     const calendar = await (await fetch(base + "/scheduled")).text();
     assert.match(calendar, /<h1>Scheduled tasks<\/h1>/);
@@ -525,7 +538,7 @@ test("console accepts an optional host operations snapshot without exposing secr
 
     const approvals = await (await fetch(base + "/reviews?tab=actions")).text();
     assert.match(approvals, /Post launch note/);
-    assert.match(approvals, /Actions requiring review/);
+    assert.match(approvals, /Outgoing actions/);
 
     const audit = await (await fetch(base + "/activity?tab=actions")).text();
     assert.match(audit, /<h1>Activity<\/h1>/);

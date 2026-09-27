@@ -14,7 +14,7 @@ import { agentRunnerProfiles, detectRunnerTools, runnerProfileLabel } from "../r
 import { customSecretNames, knownSecretStatus, isUnlocked, MIN_PASSWORD_LENGTH, secretsFileExists } from "../secret-store.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
-import { renderTasks } from "./tasks.js";
+import { renderTaskDetail, renderTaskList } from "./tasks.js";
 import { renderKnowledge } from "./knowledge.js";
 import { renderLocalModels } from "./local-models.js";
 import { esc, icon } from "./shell.js";
@@ -23,8 +23,8 @@ import { readWorkspace } from "../workspace-manifest.js";
 import { WORK_TOOLS } from "../workspace-tools.js";
 import { renderMarkdown } from "../markdown.js";
 import { HELPER_ROLE } from "../console-chat.js";
-import { parseCsvPreview } from "../workspace-files.js";
-import { tabs, readyForReview, reviewableResult, pendingReviewCount, paginate, pageOptions, pageNumber, upcomingOccurrences } from "./views.js";
+import { countTreeFiles, parseCsvPreview } from "../workspace-files.js";
+import { tabs, inboxState, setupAttention, pendingApprovalCount, paginate, pageOptions, pageNumber, upcomingOccurrences } from "./views.js";
 
 
 // `operations` is an optional host snapshot. Keeping it data-only makes this
@@ -70,25 +70,34 @@ export function collectModels(targetRoot, { knownEvents = [], operations = {} } 
 
 export function renderPartial(page, models, options = {}) {
   switch (page) {
-    case "tasks": return renderTasks(models, options);
     case "agents": return renderRoles(models, options);
     case "workspace": return renderWorkspaceFiles(options);
     case "scheduled": return options.tab === "list" || options.showTaskEditor || options.selectedTask ? renderScheduledTasks(models, options) : renderCalendar(models, options);
     case "skills": return renderSkills(models, options);
     case "chats": return renderChats(models, options);
-    case "reviews": return renderApprovals(models, options);
     case "activity": return renderActivity(models, options);
     case "usage": return renderUsage(models, options);
     case "settings": return renderSettings(models, options);
     case "integrations": return renderConnectors(models, options);
-    default: return renderDashboard(models);
+    default: return renderInbox(models, options);
   }
 }
 
+function renderWorkspaceTree(node, selectedPath, depth = 0) {
+  const files = node.files.map((file) => `<a class="workspace-file-link${selectedPath === file.path ? " active" : ""}" href="/workspace?file=${encodeURIComponent(file.path)}"${selectedPath === file.path ? ' aria-current="page"' : ""} title="${esc(file.path)}">${icon("file", "tree-icon")}<span>${esc(file.name)}</span></a>`).join("");
+  const folders = node.folders.map((folder) => {
+    const count = countTreeFiles(folder);
+    // Open the path to the selected file, and the top level when nothing is selected.
+    const open = selectedPath ? selectedPath.startsWith(`${folder.path}/`) : depth === 0 && count > 0;
+    return `<details class="tree-folder"${open ? " open" : ""}><summary title="${esc(folder.path)}">${icon("chevron", "tree-chevron")}${icon("folder", "tree-icon")}<span>${esc(folder.name)}</span>${count ? `<span class="tree-count">${count}</span>` : ""}</summary><div class="tree-children">${renderWorkspaceTree(folder, selectedPath, depth + 1) || '<p class="tree-empty">No Markdown or CSV files</p>'}</div></details>`;
+  }).join("");
+  return folders + files;
+}
+
 function renderWorkspaceFiles(options = {}) {
-  const files = Array.isArray(options.workspaceFiles) ? options.workspaceFiles : [];
+  const tree = options.workspaceTree || { folders: [], files: [] };
   const selected = options.workspaceFile || null;
-  const fileLinks = files.map((file) => `<a class="workspace-file-link${selected?.path === file.path ? " active" : ""}" href="/workspace?file=${encodeURIComponent(file.path)}"${selected?.path === file.path ? ' aria-current="page"' : ""}><code>${esc(file.path)}</code></a>`).join("");
+  const treeHtml = renderWorkspaceTree(tree, selected?.path || "");
   let preview = '<div class="empty">Choose a Markdown or CSV file to preview it here.</div>';
   if (selected?.type === "md") preview = `<div class="workspace-preview-markdown">${renderMarkdown(selected.content, { headingOffset: 2 })}</div>`;
   if (selected?.type === "csv") {
@@ -97,47 +106,51 @@ function renderWorkspaceFiles(options = {}) {
     const data = csv.rows.slice(1);
     preview = csv.rows.length ? `<div class="table-wrap"><table class="workspace-preview-csv"><thead><tr>${Array.from({ length: csv.width }, (_, index) => `<th>${esc(header[index] || `Column ${index + 1}`)}</th>`).join("")}</tr></thead><tbody>${data.map((row) => `<tr>${Array.from({ length: csv.width }, (_, index) => `<td>${esc(row[index] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${csv.truncated ? '<p class="help">Preview is limited to the first 200 rows and 50 columns.</p>' : ""}` : '<div class="empty">This CSV file is empty.</div>';
   }
-  return `<section class="hero"><div><p class="eyebrow">Workspace</p><h1>Workspace files</h1><p class="sub">Preview agent-readable Markdown and CSV files. Agents can write only authorized draft/output files; durable Markdown changes still require review.</p></div></section>
-<section class="workspace-files"><nav class="workspace-file-list" aria-label="Workspace files">${fileLinks || '<p class="help">No Markdown or CSV files yet.</p>'}</nav><article class="workspace-preview">${selected ? `<div class="workspace-preview-head"><code>${esc(selected.path)}</code><span class="muted">${esc(selected.type.toUpperCase())} · ${esc(selected.bytes)} bytes</span></div>` : ""}${preview}</article></section>`;
+  const crumbs = selected ? selected.path.split("/").map((part) => `<span>${esc(part)}</span>`).join('<span class="crumb-sep">/</span>') : "";
+  return `<section class="hero"><div><p class="eyebrow">Workspace</p><h1>Workspace files</h1><p class="sub">Browse folders and preview agent-readable Markdown and CSV files. Agents can write only authorized draft/output files; durable Markdown changes still require review.</p></div></section>
+<section class="workspace-files"><nav class="workspace-file-list workspace-tree" aria-label="Workspace folders">${treeHtml || '<p class="help">No Markdown or CSV files yet.</p>'}</nav><article class="workspace-preview">${selected ? `<div class="workspace-preview-head"><code class="workspace-crumbs">${crumbs}</code><span class="muted">${esc(selected.type.toUpperCase())} · ${esc(selected.bytes)} bytes</span></div>` : ""}${preview}</article></section>`;
 }
 
-function renderDashboard(models) {
-  const { problems, warnings } = models.validation;
-  const roles = Object.values(models.specs);
-  const pending = pendingReviewCount(models);
-  const usage = currentUsage(models.operations.usage) || (models.operations.usage?.months ? { month: "Current month", totals: {} } : null);
-  const spend = usage ? spendFor(usage.totals) : null;
-  const connected = models.operations.connectors.filter((connector) => connector.connected).length;
-  const health = problems.length ? "needs review" : warnings.length ? "warnings" : "healthy";
-  return `
-<section class="hero">
-  <div>
-    <p class="eyebrow">CrewRun</p>
-    <h1>Dashboard</h1>
-    <p class="sub">Run and govern your agents from one local control plane.</p>
-  </div>
-  <div class="actions">
-    <a class="button" href="/reviews">Open reviews${pending ? ` (${pending})` : ""}</a>
-  </div>
-</section>
-<section class="summary-grid" aria-label="Crew summary">
-  <a href="/tasks?tab=active">${metric("Running", models.operations.runs.filter((run) => run.status === "running").length, "agent executions", "Open active tasks")}</a>
-  <a href="/reviews">${metric("Reviews", pending, `${pending} pending`, "Your decisions", pending ? "warn" : "success")}</a>
-  <a href="/tasks?tab=attention">${metric("Failures", models.operations.runs.filter((run) => run.desired !== "cancelled" && (["failed", "interrupted"].includes(run.status) || (run.actions || []).some((action) => ["failed", "uncertain"].includes(action.status)))).length, "tasks to check", "Open work needing attention")}</a>
-  ${metric("This month", spend === null ? "—" : formatCurrency(spend), "usage and subscription estimate", usage ? `${usage.totals?.runs || 0} recorded runs` : "no ledger attached", usage ? "info" : "")}
-</section>
-<section>
-    <div class="section-heading"><h2>Workspace health</h2><a class="button secondary tiny" href="/settings?tab=host">Host details</a></div>
-    <div class="card flat">
-      <div class="list">
-        ${listRow("Agent configuration", health, problems.length ? "danger" : warnings.length ? "warn" : "success")}
-        ${listRow("Agents", `${roles.length} agents`, "info")}
-        <a href="/integrations">${listRow("Integrations", `${connected} connected`, connected ? "success" : "")}</a>
-      </div>
-    </div>
-</section>
-${problems.length || warnings.length ? `<section><div class="section-heading"><h2>Configuration review</h2></div>${[...problems.map((entry) => notice(entry, "warn")), ...warnings.map((entry) => notice(entry, "warn"))].join("")}</section>` : ""}
-`;
+// Inbox replaces the old Dashboard, Tasks and Reviews pages: one place for
+// everything that needs the owner, plus work in progress and finished work.
+// Spending lives only under Usage.
+const INBOX_TABS = ["attention", "approvals", "progress", "done"];
+
+function renderInbox(models, options = {}) {
+  const runs = models.operations.runs || [];
+  if (options.selectedRun) {
+    const run = runs.find((entry) => entry.id === options.selectedRun);
+    return run ? renderTaskDetail(run, options) : empty("This task is no longer available.", "Back to inbox", "/inbox");
+  }
+  const tab = INBOX_TABS.includes(options.tab) ? options.tab : "attention";
+  const byState = (state) => runs.filter((run) => inboxState(run) === state);
+  const answer = byState("answer"), accept = byState("accept"), problems = byState("problem");
+  const progress = byState("progress");
+  const done = byState("done").sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
+  const setup = setupAttention(models);
+  const attentionCount = answer.length + accept.length + problems.length + setup.length;
+  const approvalCount = pendingApprovalCount(models);
+  const header = `<section class="hero"><div><h1>Inbox</h1><p class="sub">Everything that needs you, work in progress, and finished work.</p></div><div class="actions"><a class="button" href="/chats?agent=crew-helper&amp;intent=task&amp;draft=Help%20me%20create%20a%20new%20task.">New task</a></div></section>
+${tabs("/inbox", [["attention", `Needs attention (${attentionCount})`], ["approvals", `Approvals (${approvalCount})`], ["progress", `In progress (${progress.length})`], ["done", "Done"]], tab)}`;
+  if (tab === "approvals") return header + renderApprovalsBody(models, options);
+  if (tab === "progress") {
+    return `${header}<section class="section-heading"><h2>In progress</h2><span class="muted">Queued, running, or waiting on an approval</span></section>
+${renderTaskList(progress, options, { params: { tab: "progress" }, emptyText: "No work in progress. Start a task from a chat or with New task." })}`;
+  }
+  if (tab === "done") {
+    return `${header}<section class="section-heading"><h2>Finished work</h2><span class="muted">${done.length} tasks</span></section>
+${renderTaskList(done, options, { params: { tab: "done" }, emptyText: "No finished tasks yet." })}
+${renderReviewHistory(models, options)}`;
+  }
+  if (!attentionCount) return `${header}${empty("Nothing needs you right now.")}`;
+  const section = (title, list, emptyText, key) => list.length
+    ? `<section class="section-heading"><h2>${esc(title)}</h2><span class="muted">${list.length}</span></section>${renderTaskList(list, options, { params: { tab: "attention" }, key, emptyText })}`
+    : "";
+  return `${header}
+${section("Questions for you", answer, "", "questions_page")}
+${section("Ready to accept", accept, "", "accept_page")}
+${section("Problems to resolve", problems, "", "problems_page")}
+${setup.length ? `<section class="section-heading"><h2>Setup</h2><span class="muted">${setup.length}</span></section><div class="card flat"><div class="list">${setup.map((item) => `<a class="list-row" href="${esc(item.href)}"><div><div class="primary">${esc(item.text)}</div></div>${pill(item.kind, "warn")}</a>`).join("")}</div></div>` : ""}`;
 }
 
 function renderRoles(models, options = {}) {
@@ -442,7 +455,7 @@ function renderTaskTable(tasks, { compact = false, canRunNow = false, actions = 
       `<strong>${esc(task.title || task.id)}</strong><div class="faint"><code>${esc(task.role)}:${esc(task.id)}</code></div>`,
       `${esc(describeScheduleRecurrence(task.cron))}<div class="faint">local time</div>`,
       actions ? `<form class="inline" method="post" action="/scheduled/toggle"><input type="hidden" name="role" value="${esc(task.role)}"><input type="hidden" name="id" value="${esc(task.id)}"><input type="hidden" name="enabled" value="${task.enabled ? "" : "1"}"><input type="hidden" name="return_to" value="${esc(returnTo)}"><button class="state-toggle" role="switch" aria-checked="${task.enabled}" aria-label="Enable ${esc(task.title || task.id)}" title="${task.enabled ? "Enabled" : "Disabled"}"></button></form>` : pill(task.enabled ? "enabled" : "disabled", task.enabled ? "success" : ""),
-      compact ? when(task.nextRunAt) : `${task.runId ? `<a href="/tasks?run=${esc(task.runId)}">${esc(task.lastStatus)}</a>` : esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
+      compact ? when(task.nextRunAt) : `${task.runId ? `<a href="/inbox?run=${esc(task.runId)}">${esc(task.lastStatus)}</a>` : esc(task.lastStatus || "never ran")}<div class="faint">${when(task.lastRunAt)}</div>`,
       compact ? "" : when(task.nextRunAt),
       manage
     ];
@@ -488,7 +501,7 @@ function renderSkills(models, options = {}) {
     esc(skill.scope)
   ]);
   return `
-<section class="hero"><div><p class="eyebrow">Skills</p><h1>Skills</h1><p class="sub">Agents propose reusable skills from chat. Review proposed changes under Reviews.</p></div><div class="actions"><a class="button secondary" href="/reviews?tab=learning">Review proposals</a><a class="button" href="/chats?agent=crew-helper&amp;intent=skill&amp;draft=Help%20me%20propose%20a%20new%20skill.">Add skill</a></div></section>
+${capabilitiesHeader("skills", '<a class="button secondary" href="/inbox?tab=approvals">Review proposals</a><a class="button" href="/chats?agent=crew-helper&amp;intent=skill&amp;draft=Help%20me%20propose%20a%20new%20skill.">Add skill</a>')}
 <section class="section-heading"><h2>Installed skills</h2><span class="muted">${models.skills.length} indexed</span></section>
 ${table(["skill", "description", "agents", "scope"], rows, "No skills yet — agents can propose reusable workflows for your review.", pageOptions("/skills", options))}`;
 }
@@ -508,7 +521,7 @@ function renderChats(models, options = {}) {
   const compose = selected && canChat ? renderChatComposer({ role: selected.role, responseLabel: selected.title || selected.role, returnTo: `/chats?agent=${encodeURIComponent(selected.role)}`, placeholder: `Message ${selected.title || selected.role}`, note: selected.helper ? "The helper has no shell or web access and prepares owner-reviewed changes." : "The agent resumes this configured provider thread when available.", draft: selected.helper ? chatDraft : "", helperIntent: selected.helper ? chatIntent : "", agents: selected.helper ? Object.values(models.specs) : [] }) : "";
   const background = selected && !selected.helper ? models.operations.runs.filter((run) => run.agent === selected.role && run.desired === "active" && ["queued", "running"].includes(run.status)).slice(0, 3) : [];
   const workspace = selected
-    ? `<div class="chat-header"><div class="chat-header-title"><button class="icon-button chat-icon-control chat-show-agents" type="button" data-chat-threads-toggle="show" aria-expanded="false" aria-controls="chat-agents" aria-label="Show agent list" title="Show agent list">${icon("list", "utility-icon")}</button><h2>${esc(selected.title || selected.role)}</h2></div><div class="chat-header-actions">${selected.helper ? "" : `<a class="icon-button chat-icon-control" href="/agents/${encodeURIComponent(selected.role)}" aria-label="Manage agent" title="Manage agent">${icon("settings", "utility-icon chat-manage-icon")}</a>`}</div></div>${background.length ? `<div class="chat-background-work">${background.map((run) => `<a href="/tasks?run=${encodeURIComponent(run.id)}"><span class="pill info">${esc(run.status)}</span>${esc(run.title || run.prompt.slice(0, 90))}</a>`).join("")}</div>` : ""}${renderChatMessages(selectedChat, selected.title || selected.role)}${compose}`
+    ? `<div class="chat-header"><div class="chat-header-title"><button class="icon-button chat-icon-control chat-show-agents" type="button" data-chat-threads-toggle="show" aria-expanded="false" aria-controls="chat-agents" aria-label="Show agent list" title="Show agent list">${icon("list", "utility-icon")}</button><h2>${esc(selected.title || selected.role)}</h2></div><div class="chat-header-actions">${selected.helper ? "" : `<a class="icon-button chat-icon-control" href="/agents/${encodeURIComponent(selected.role)}" aria-label="Manage agent" title="Manage agent">${icon("settings", "utility-icon chat-manage-icon")}</a>`}</div></div>${background.length ? `<div class="chat-background-work">${background.map((run) => `<a href="/inbox?run=${encodeURIComponent(run.id)}"><span class="pill info">${esc(run.status)}</span>${esc(run.title || run.prompt.slice(0, 90))}</a>`).join("")}</div>` : ""}${renderChatMessages(selectedChat, selected.title || selected.role)}${compose}`
     : empty("Choose an agent to open its durable chat.", agents.length ? "Open first agent" : "Add agent", agents.length ? `/chats?agent=${encodeURIComponent(agents[0].role)}` : "/agents/new");
   return `
 ${canChat ? "" : notice("Chat needs a running CrewRun host with an agent runner. You can still review agent settings and scheduled tasks.", "warn")}
@@ -545,25 +558,23 @@ function renderChatMessages(chat, label) {
   return `<div class="chat-message-pane">${body}<button class="icon-button chat-scroll-latest" type="button" data-chat-scroll-latest aria-label="Scroll to latest message" title="Scroll to latest message" hidden>${icon("arrowDown", "utility-icon")}</button></div>`;
 }
 
-function renderApprovals(models, options = {}) {
+function renderApprovalsBody(models, options = {}) {
   const { canDecideApprovals = false, selectedReview = "" } = options;
-  // Old deep links remain useful, but Workspace is no longer a separate review tab.
-  const tab = options.tab === "workspace" ? "learning" : ["actions", "results", "learning", "history"].includes(options.tab) ? options.tab : "actions";
   const pending = models.operations.approvals.filter((entry) => entry.status === "pending");
-  const workspacePending = (models.operations.workspaceProposals || []).filter((p) => ["pending", "applying"].includes(p.status)).length;
-  const header = `<section class="hero"><div><h1>Reviews</h1><p class="sub">Decide what can be sent, accept finished work, and review proposed learning.</p></div></section>${tabs("/reviews", [
-    ["actions", `Actions (${pending.length})`], ["results", `Results (${models.operations.runs.filter(reviewableResult).length})`],
-    ["learning", `Proposals (${models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length + workspacePending})`], ["history", "History"]
-  ], tab)}`;
-  if (tab === "results") return header + renderTasks(models, { ...options, reviewMode: true });
-  if (tab === "history") return header + renderReviewHistory(models, options);
+  const workspaceProposals = models.operations.workspaceProposals || [];
+  const selectedWorkspace = selectedReview && workspaceProposals.some((proposal) => proposal.id === selectedReview);
+  if (selectedWorkspace) return renderWorkspaceReviews(models, options);
   const hostRows = pending.filter((entry) => !selectedReview || entry.id === selectedReview).map((entry) => [
     pill(entry.kind || "host", toneFor(entry.risk || entry.status)),
-    `<a href="/reviews?tab=actions&review=${encodeURIComponent(entry.id)}">Open review</a>${entry.runId ? `<div><a href="/tasks?run=${encodeURIComponent(entry.runId)}">Open task</a></div>` : ""}`,
+    `<a href="/inbox?tab=approvals&review=${encodeURIComponent(entry.id)}">Open review</a>${entry.runId ? `<div><a href="/inbox?run=${encodeURIComponent(entry.runId)}">Open task</a></div>` : ""}`,
     `${esc(entry.title || "Approval requested")}${selectedReview && entry.description ? `<div class="approval-preview">${esc(entry.description)}</div>` : ""}`,
     esc(entry.requestedBy || entry.role || "host"),
     selectedReview && (entry.source === "crewrun" || canDecideApprovals) ? approvalButtons(entry.id) : '<span class="muted">Open the review to inspect the proposed action.</span>'
   ]);
+  const actions = `<section class="section-heading"><h2>Outgoing actions</h2><span class="muted">${selectedReview ? "" : `${hostRows.length} pending`}</span></section>
+${selectedReview ? '<p><a href="/inbox?tab=approvals">Back to approvals</a> · Approval permits this action; it does not accept the task result.</p>' : ""}
+${table(["kind", "links", "request", "requested by", "decision"], hostRows, selectedReview ? "This action is no longer pending. Check the task for its outcome." : "No outgoing actions are waiting for approval.", pageOptions("/inbox", options, { tab: "approvals" }, "actions_page"))}`;
+  if (selectedReview) return actions;
   const proposalRows = [
     ...models.skillProposals.map((proposal) => ["skill", proposal]),
     ...models.prefProposals.map((proposal) => ["memory", proposal]),
@@ -576,13 +587,10 @@ function renderApprovals(models, options = {}) {
     `<form class="inline" method="post" action="/reviews/learning/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="approve">${kind === "reflection" && !proposal.target ? `<label>Save as<select name="target"><option value="preference">Context / preference</option><option value="skill">Skill</option></select></label><label>Stable key<input name="key" required></label><label>Skill description (if needed)<input name="description"></label>` : ""}<button class="tiny">Approve</button></form>
      <form class="inline" method="post" action="/reviews/learning/decide"><input type="hidden" name="id" value="${esc(proposal.id)}"><input type="hidden" name="kind" value="${kind === "skill" ? "skill" : kind === "reflection" ? "reflection" : "pref"}"><input type="hidden" name="action" value="reject"><button class="danger tiny">Reject</button></form>`
   ]);
-  return header + (tab === "actions" ? `
-<section class="section-heading"><h2>Actions requiring review</h2><span class="muted">${hostRows.length} pending</span></section>
-${selectedReview ? '<p><a href="/reviews?tab=actions">Back to pending actions</a> · Approval permits this action; it does not accept the task result.</p>' : ""}
-${table(["kind", "links", "request", "requested by", "decision"], hostRows, selectedReview ? "This action is no longer pending. Check review history or the task for its outcome." : "No external actions are awaiting approval.", pageOptions("/reviews", options, { tab }))}` : `
-<section class="section-heading"><h2>Memory and skill proposals</h2><span class="muted">${proposalRows.length} pending</span></section>
-${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.", pageOptions("/reviews", options, { tab }))}
-${renderWorkspaceReviews(models, { ...options, tab: "learning" })}`);
+  return `${actions}
+<section class="section-heading"><h2>Proposed skills and memory</h2><span class="muted">${proposalRows.length} pending</span></section>
+${table(["kind", "id", "proposal", "by", "decision"], proposalRows, "No proposed skills, preferences, or reflections.", pageOptions("/inbox", options, { tab: "approvals" }, "proposals_page"))}
+${renderWorkspaceReviews(models, options)}`;
 }
 
 function renderReviewHistory(models, options) {
@@ -595,8 +603,8 @@ function renderReviewHistory(models, options) {
   decisions.push(...(models.operations.workspaceProposals || []).filter((p) => !["pending", "applying"].includes(p.status)).map((p) => ({ ...p, kind: "workspace", at: p.decided_at, runId: p.run_id })));
   decisions.sort((a, b) => (new Date(b.at).getTime() || 0) - (new Date(a.at).getTime() || 0));
   return `<section class="section-heading"><h2>Decision history</h2></section>${table(["time", "kind", "review", "decision", "task"], decisions.map((entry) => [
-    when(entry.at), esc(entry.kind), esc(entry.title), pill(entry.status, toneFor(entry.status)), entry.runId ? `<a href="/tasks?run=${encodeURIComponent(entry.runId)}">Open task</a>` : "—"
-  ]), "No retained decisions yet.", pageOptions("/reviews", options, { tab: "history" }))}`;
+    when(entry.at), esc(entry.kind), esc(entry.title), pill(entry.status, toneFor(entry.status)), entry.runId ? `<a href="/inbox?run=${encodeURIComponent(entry.runId)}">Open task</a>` : "—"
+  ]), "No retained decisions yet.", pageOptions("/inbox", options, { tab: "done" }, "history_page"))}`;
 }
 
 function renderActivity(models, options = {}) {
@@ -635,7 +643,7 @@ function renderAuditLinks(entry, models) {
   const run = models.operations.runs.find((candidate) => entry.approvalId && (candidate.actions || []).some((action) => action.id === entry.approvalId));
   if (!run) return "—";
   const pending = models.operations.approvals.some((approval) => approval.id === entry.approvalId && approval.status === "pending");
-  return `<a href="/tasks?run=${encodeURIComponent(run.id)}">Task</a><br><a href="${pending ? `/reviews?tab=actions&review=${encodeURIComponent(entry.approvalId)}` : "/reviews?tab=history"}">${pending ? "Review" : "Decision history"}</a>`;
+  return `<a href="/inbox?run=${encodeURIComponent(run.id)}">Task</a><br><a href="${pending ? `/inbox?tab=approvals&review=${encodeURIComponent(entry.approvalId)}` : "/inbox?tab=done"}">${pending ? "Review" : "Decision history"}</a>`;
 }
 
 function renderAuditAuthority(authority = {}) {
@@ -748,7 +756,7 @@ function renderProviders(models, options) {
     : secretsLocked
       ? `<p class="usage-amount">Locked</p><p class="muted" style="margin-top:8px">Unlock to add keys and let agents that use API-key profiles run. The store locks again when CrewRun restarts.</p>
 <form method="post" action="/settings/secrets/unlock" autocomplete="off"><div class="field"><label for="store-unlock">Store password</label><input id="store-unlock" name="password" type="password" autocomplete="current-password" required></div><button>Unlock</button></form>`
-      : `<p class="usage-amount">Unlocked</p><p class="muted" style="margin-top:8px">Keys are kept out of agent prompts and this dashboard. Only the last four characters are shown.</p><form method="post" action="/settings/secrets/lock"><button class="secondary tiny">Lock now</button></form>`;
+      : `<p class="usage-amount">Unlocked</p><p class="muted" style="margin-top:8px">Keys are kept out of agent prompts and this console. Only the last four characters are shown.</p><form method="post" action="/settings/secrets/lock"><button class="secondary tiny">Lock now</button></form>`;
   return `
 ${statusNotice}${detached}
 <section class="section-heading"><h2>Providers & credentials</h2></section>
@@ -768,6 +776,13 @@ ${table(["provider", "profiles", "count"], providerRows, "No runner profiles fou
 ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</h2></section>${table(["provider", "detail", "state"], hostRows, "", pageOptions("/settings", options, { tab: "providers" }, "host_page"))}` : ""}`;
 }
 
+// Integrations and Skills share one sidebar item with two tabs.
+function capabilitiesHeader(active, actions = "") {
+  const link = (id, label) => `<a class="agent-tab${active === id ? " active" : ""}"${active === id ? ' aria-current="page"' : ""} href="/${id}">${label}</a>`;
+  return `<section class="hero"><div><h1>Integrations &amp; Skills</h1><p class="sub">${active === "skills" ? "Reusable procedures agents can follow. Agents propose new skills from chat; you approve them in the Inbox." : "Service connections, permissions, and event rules."}</p></div>${actions ? `<div class="actions">${actions}</div>` : ""}</section>
+<nav class="agent-tabs" aria-label="Integrations and skills">${link("integrations", "Integrations")}${link("skills", "Skills")}</nav>`;
+}
+
 function renderConnectors(models, options = {}) {
   const { selectedIntegration = "" } = options;
   const connector = models.operations.connectors.find((entry) => entry.id === selectedIntegration);
@@ -781,7 +796,7 @@ ${tab === "rules" ? renderEvents(scoped, { ...options, rulesOnly: true }) : `<se
   }
   const paging = paginate(models.operations.connectors, pageOptions("/integrations", options));
   return `
-<section class="hero"><div><h1>Integrations</h1><p class="sub">Manage service connections, permissions, and event rules.</p></div></section>
+${capabilitiesHeader("integrations")}
 <section class="connector-grid" style="margin-top:16px">${paging.items.map((connector) => renderConnectorCard(connector, options)).join("")}</section>${paging.html}`;
 }
 
@@ -838,19 +853,19 @@ function renderHttpsSetup(connector) {
   try { origin = new URL(connector.callbackUrl).origin; } catch { /* Not configured yet. */ }
   return `<details class="connector-setup" id="https-setup"${origin ? "" : " open"}>
     <summary>Tailscale HTTPS — recommended default</summary>
-    <p>Set this up once per host, then reuse it for every integration. This publishes only callbacks and verified webhooks. Your dashboard and app credentials stay private.</p>
+    <p>Set this up once per host, then reuse it for every integration. This publishes only callbacks and verified webhooks. Your console and app credentials stay private.</p>
     <ol>
       <li><a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Install Tailscale</a> on the CrewRun host and sign in. Enable MagicDNS, HTTPS certificates and Funnel permission in your tailnet.</li>
       <li>Find this device’s full <code>machine.tailnet.ts.net</code> hostname in Tailscale. In the environment of the service that launches CrewRun, set <code>CREWRUN_PUBLIC_BASE_URL=https://YOUR-MACHINE.YOUR-TAILNET.ts.net</code>, then restart CrewRun. Do not use another user’s hostname or put secrets in workspace files.</li>
       <li>Inspect <code>tailscale serve status</code> and <code>tailscale funnel status</code> first. If HTTPS port 443 is already in use, resolve the conflict without resetting unrelated routes.</li>
-      <li>When ready to make the callback listener public, run this on the host:<pre><code>tailscale funnel --bg --https=443 http://127.0.0.1:${target}</code></pre>Complete any Tailscale permission prompt. If access is denied on Linux, run the same command with <code>sudo</code> in your own terminal. Never enter a sudo password in CrewRun or grant the agent administrator access. Never substitute the dashboard port.</li>
+      <li>When ready to make the callback listener public, run this on the host:<pre><code>tailscale funnel --bg --https=443 http://127.0.0.1:${target}</code></pre>Complete any Tailscale permission prompt. If access is denied on Linux, run the same command with <code>sudo</code> in your own terminal. Never enter a sudo password in CrewRun or grant the agent administrator access. Never substitute the console port.</li>
       <li>Confirm <code>tailscale funnel status</code> points only to <code>127.0.0.1:${target}</code>, then use the exact callback and webhook URLs below when creating your provider apps.</li>
     </ol>
     <p>Configured origin: <code>${esc(origin || "Not configured")}</code>. A configured URL does not prove public reachability or provider event delivery.</p>
     <p class="help">Anyone on the internet can reach Funnel; provider verification and one-time OAuth state still protect the callback routes. No event rules are enabled by publishing them.</p>
     <p>To stop this mapping after checking it is still CrewRun’s: <code>tailscale funnel --https=443 off</code>. This does not revoke provider grants.</p>
     <p><a href="https://tailscale.com/docs/features/tailscale-funnel" target="_blank" rel="noopener noreferrer">Funnel prerequisites</a> · <a href="https://tailscale.com/docs/reference/tailscale-cli/funnel" target="_blank" rel="noopener noreferrer">Commands and troubleshooting</a></p>
-    <details><summary>Already have an HTTPS reverse proxy?</summary><p>Use its HTTPS origin instead and forward only to <code>127.0.0.1:${target}</code>. Tailscale is recommended, not required. Keep the dashboard on localhost; private Tailscale Serve needs separate trusted-origin support and must never share Funnel’s external port.</p></details>
+    <details><summary>Already have an HTTPS reverse proxy?</summary><p>Use its HTTPS origin instead and forward only to <code>127.0.0.1:${target}</code>. Tailscale is recommended, not required. Keep the console on localhost; private Tailscale Serve needs separate trusted-origin support and must never share Funnel’s external port.</p></details>
   </details>`;
 }
 
@@ -897,7 +912,7 @@ function renderEvents(models, options = {}) {
     `${pill(event.status || "received", toneFor(event.status))}${event.error ? `<div class="faint">${esc(event.error)}</div>` : ""}`,
     event.providerEventId ? `<code>${esc(event.providerEventId)}</code>` : "—",
     models.operations.runs.filter((run) => run.dedupe_key === `integration:${event.connectionId}:${event.providerEventId}:${run.agent}`)
-      .map((run) => `<a href="/tasks?run=${encodeURIComponent(run.id)}">${esc(run.agent)} task</a>`).join("<br>") || "—"
+      .map((run) => `<a href="/inbox?run=${encodeURIComponent(run.id)}">${esc(run.agent)} task</a>`).join("<br>") || "—"
   ]);
   const routeRows = models.operations.eventRoutes.map((route) => [
     `<code>${esc(route.connectionId)}</code>`,

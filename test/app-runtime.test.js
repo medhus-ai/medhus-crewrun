@@ -38,7 +38,7 @@ test("app reuses the console but requires sessions, rejects spoofed requests and
     http.get(d.url, { headers: { host: "evil.example" } }, (response) => { response.resume(); resolve(response.statusCode); }).on("error", reject);
   }), 403);
   const { cookie } = await runnerRequest(d, "session");
-  assert.match(await (await fetch(d.url, { headers: { cookie: `${cookie.name}=${cookie.value}` } })).text(), /Dashboard/);
+  assert.match(await (await fetch(d.url, { headers: { cookie: `${cookie.name}=${cookie.value}` } })).text(), /Inbox/);
   const { code } = await runnerRequest(d, "login-code");
   const login = () => fetch(new URL("/_crew/login", d.url), { method: "POST", headers: { origin: new URL(d.url).origin, "sec-fetch-site": "same-origin" }, body: new URLSearchParams({ code }), redirect: "manual" });
   assert.equal((await fetch(new URL("/_crew/login", d.url), { method: "POST", headers: { origin: "null" }, body: new URLSearchParams({ code }) })).status, 403);

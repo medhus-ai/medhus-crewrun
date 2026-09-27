@@ -11,6 +11,9 @@ const NAV_ICONS = Object.freeze({
   arrowDown: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   search: '<circle cx="11" cy="11" r="5.5"/><path d="m15.5 15.5 4 4"/>',
   home: '<path d="m3.5 10 8.5-7 8.5 7"/><path d="M5.5 9v10h13V9M9.5 19v-5h5v5"/>',
+  inbox: '<path d="M3.5 13.5 6 5.5h12l2.5 8"/><path d="M3.5 13.5v5h17v-5h-5l-1.5 2.5h-4l-1.5-2.5Z"/>',
+  file: '<path d="M6.5 3.5h7l4 4v13h-11Z"/><path d="M13.5 3.5v4h4"/>',
+  chevron: '<path d="m9 6 6 6-6 6"/>',
   cloud: '<path d="M7 18.5h10.2a3.8 3.8 0 0 0 .5-7.6A5.8 5.8 0 0 0 6.5 9.2 4.7 4.7 0 0 0 7 18.5Z"/>',
   folder: '<path d="M3.5 6.5h6l1.8 2H20a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V8a1.5 1.5 0 0 1 1-1.5Z"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8 14h.01M12 14h.01M16 14h.01"/>',
@@ -82,6 +85,7 @@ a { color: inherit; }
 main { width: min(1074px, calc(100% - 56px)); min-width: 0; margin: 0 auto; padding: 41px 28px 64px; }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 0 0 28px; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .hero .eyebrow { display: none; }
+.hero > .actions { flex: 0 0 auto; }
 h1 { margin: 0; color: #111214; font-size: 21px; font-weight: 580; line-height: 1.24; letter-spacing: -.018em; }
 h2 { margin: 0; color: #15171a; font-size: 14px; font-weight: 570; letter-spacing: -.01em; }
 h3 { margin: 0; color: #15171a; font-size: 13px; font-weight: 570; }
@@ -122,6 +126,21 @@ button.state-toggle:focus-visible { outline: 2px solid var(--blue); outline-offs
 .workspace-file-list { overflow: auto; border-right: 1px solid var(--line); padding: 8px; }
 .workspace-file-link { display: block; overflow: hidden; padding: 8px 9px; border-radius: 6px; color: var(--text); font-size: 12px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-file-link:hover, .workspace-file-link.active { background: #e9e9e9; }
+.workspace-tree { font-size: 12px; }
+.workspace-tree .workspace-file-link { display: flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.workspace-tree .workspace-file-link span { overflow: hidden; text-overflow: ellipsis; }
+.tree-folder { margin: 0; padding: 0; border: 0; }
+.tree-folder > summary { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: 6px; color: var(--text); cursor: pointer; list-style: none; user-select: none; }
+.tree-folder > summary::-webkit-details-marker { display: none; }
+.tree-folder > summary:hover { background: #e9e9e9; }
+.tree-folder > summary span:first-of-type { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.tree-folder[open] > summary .tree-chevron { transform: rotate(90deg); }
+.tree-chevron { width: 12px; height: 12px; flex: 0 0 12px; color: var(--faint); transition: transform .12s ease; }
+.tree-icon { width: 15px; height: 15px; flex: 0 0 15px; color: var(--muted); }
+.tree-count { margin-left: auto; color: var(--faint); font-size: 10px; }
+.tree-children { margin-left: 11px; padding-left: 7px; border-left: 1px solid var(--line-soft); }
+.tree-empty { margin: 3px 8px 6px; color: var(--faint); font-size: 11px; }
+.workspace-crumbs .crumb-sep { margin: 0 4px; color: var(--faint); }
 .workspace-preview { min-width: 0; overflow: auto; padding: 22px 25px; }
 .workspace-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
 .workspace-preview-markdown { max-width: 820px; }
@@ -464,14 +483,16 @@ const CHAT_COMPOSER_SCRIPT = `
 })();
 `;
 
-export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "", recentChats = [], pendingReviews = 0, helperContent = "" } = {}) {
+export function renderPage(page, content, { targetRoot, version = "", backHref = "", backLabel = "", recentChats = [], inboxCount = 0, helperContent = "" } = {}) {
+  // Pages without their own sidebar entry highlight the item whose tabs contain them.
+  const activeId = PAGES.find((entry) => entry.id === page)?.navParent || page;
   const sidebarLink = ({ id, label, icon: iconName }) =>
-    `<a href="/${id === "dashboard" ? "" : id}" class="sidebar-link${id === page ? " active" : ""}" aria-label="${esc(label)}"${id === page ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span>${id === "reviews" && pendingReviews ? `<span class="pill" aria-label="${esc(pendingReviews)} pending reviews">${esc(pendingReviews)}</span>` : ""}</a>`;
+    `<a href="/${id}" class="sidebar-link${id === activeId ? " active" : ""}" aria-label="${esc(label)}"${id === activeId ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-text">${esc(label)}</span>${id === "inbox" && inboxCount ? `<span class="pill" aria-label="${esc(inboxCount)} items need you">${esc(inboxCount)}</span>` : ""}</a>`;
   const chats = Array.isArray(recentChats)
     ? recentChats.filter((chat) => /^[a-z][a-z0-9-]{0,79}$/.test(String(chat?.role || "")) && chat.purpose !== "console-helper").slice(0, 6)
     : [];
   const groups = ["primary", "operations", "communication"].map((group) => {
-    const entries = PAGES.filter((entry) => entry.group === group);
+    const entries = PAGES.filter((entry) => entry.group === group && entry.nav !== false);
     const links = `${entries.map(sidebarLink).join("")}${group === "communication" && chats.length ? `<div class="recent-chats"><span class="nav-caption">Recent chats</span>${chats.map((chat) => `<a href="/chats?agent=${encodeURIComponent(chat.role)}" class="sidebar-link recent-chat" aria-label="Open chat: ${esc(chat.title || chat.role)}"><span class="nav-text">${esc(chat.title || chat.role)}</span></a>`).join("")}</div>` : ""}`;
     return links ? `<div class="nav-group">${links}</div>` : "";
   }).join("");

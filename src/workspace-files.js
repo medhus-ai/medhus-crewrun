@@ -36,6 +36,46 @@ export function listWorkspaceFiles(targetRoot) {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+// Folder tree for the Workspace page: every visible folder (so the structure is
+// recognizable even where nothing is previewable yet) and the previewable files
+// inside them. Bounded like the flat listing; hidden folders and node_modules are skipped.
+const MAX_FOLDERS = 500;
+
+export function listWorkspaceTree(targetRoot) {
+  const root = path.resolve(targetRoot);
+  const tree = { name: "", path: "", folders: [], files: [] };
+  let folderCount = 0, fileCount = 0;
+  const visit = (node, depth) => {
+    if (depth > 20) return;
+    const directory = node.path ? resolveWorkspacePath(root, node.path) : root;
+    let entries;
+    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const child = node.path ? `${node.path}/${entry.name}` : entry.name;
+      let stats;
+      try { stats = lstatSync(resolveWorkspacePath(root, child)); } catch { continue; }
+      if (stats.isSymbolicLink()) continue;
+      if (stats.isDirectory() && folderCount < MAX_FOLDERS) {
+        folderCount += 1;
+        const folder = { name: entry.name, path: child, folders: [], files: [] };
+        node.folders.push(folder);
+        visit(folder, depth + 1);
+      } else if (stats.isFile() && fileCount < MAX_FILES && isEditableWorkspaceFile(child)) {
+        fileCount += 1;
+        node.files.push({ name: entry.name, path: child, type: path.extname(child).slice(1), bytes: stats.size });
+      }
+    }
+  };
+  if (existsSync(root)) visit(tree, 0);
+  return tree;
+}
+
+export function countTreeFiles(node) {
+  return node.files.length + node.folders.reduce((sum, folder) => sum + countTreeFiles(folder), 0);
+}
+
 export function readWorkspaceFilePreview(targetRoot, relative) {
   if (!isEditableWorkspaceFile(relative)) throw new Error("Workspace preview supports Markdown and CSV files only.");
   const file = resolveWorkspacePath(targetRoot, relative);

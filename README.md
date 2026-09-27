@@ -40,7 +40,7 @@ You need a supported vendor sign-in or API key to run agent turns.
 
 Use `--preset organization` for a coordinator-led starting point. To see a complete but safe
 three-agent flow immediately, use `--preset launch-desk` (or read the [Launch Desk example](examples/launch-desk/README.md)).
-The side helper can prepare editable setup proposals; you approve the changes in **Reviews → Proposals**. All initial
+The side helper can prepare editable setup proposals; you approve the changes in **Inbox → Approvals**. All initial
 routines and event rules are disabled. Your repository holds knowledge and reviewed configuration;
 private SQLite state holds tasks, chats, reviews, and credentials.
 
@@ -49,7 +49,7 @@ private SQLite state holds tasks, chats, reviews, and credentials.
 actions go through CrewRun's internal bridge; native file access, shell, web, and subagents are
 disabled or denied by default. An owner may explicitly select one privileged shell agent using
 the red **Allow shell** setting; this exception currently uses direct Claude native auto mode,
-with flagged commands in Reviews. It is not an OS isolation boundary. Both vendor subscription sign-ins remain supported. v6 has no legacy CLI or custom-host execution mode.
+with flagged commands in Inbox → Approvals. It is not an OS isolation boundary. Both vendor subscription sign-ins remain supported. v6 has no legacy CLI or custom-host execution mode.
 See [workspaces and limits](docs/workspaces.md) before choosing a runner or budget policy.
 
 Start with one useful role, then add schedules, Skills, and governed integrations as the work

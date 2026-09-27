@@ -48,21 +48,31 @@ export function tabs(base, entries, active, params = {}) {
   }).join("")}</nav>`;
 }
 
-export function readyForReview(run) {
-  return !run.accepted_at && run.desired === "active" && run.status === "completed"
-    && (run.actions || []).every((action) => action.status === "delivered" || action.superseded_at);
-}
-
 export function reviewableResult(run) {
   return !run.accepted_at && run.desired === "active" && run.status === "completed"
     && (run.actions || []).every((action) => ["delivered", "rejected"].includes(action.status));
 }
 
-export function needsAttention(run) {
-  return !run.accepted_at && run.desired !== "cancelled" && (
-    run.desired === "paused" || run.blocked || ["failed", "interrupted"].includes(run.status)
-    || readyForReview(run) || (run.actions || []).some((action) => !action.superseded_at && ["uncertain", "failed", "rejected", "awaiting_approval"].includes(action.status))
-  );
+// Where a task belongs in the Inbox. Approvals themselves are listed under the
+// Approvals tab; their tasks stay "in progress" until the owner decides.
+//   answer   — the agent asked the owner a question
+//   accept   — finished work waits for the owner to accept it
+//   problem  — paused, blocked, failed, interrupted, or a delivery to reconcile
+//   progress — queued, running, or waiting on an approval
+//   done     — accepted, cancelled, or completed with nothing left to decide
+export function inboxState(run) {
+  if (run.accepted_at || run.desired === "cancelled") return "done";
+  if ((run.questions || []).some((question) => !question.answered_at)) return "answer";
+  if (reviewableResult(run)) return "accept";
+  const actions = (run.actions || []).filter((action) => !action.superseded_at);
+  if (run.desired === "paused" || run.blocked || ["failed", "interrupted"].includes(run.status)
+    || actions.some((action) => ["uncertain", "failed", "rejected"].includes(action.status))) return "problem";
+  if (run.status === "completed" && !actions.some((action) => action.status !== "delivered")) return "done";
+  return "progress";
+}
+
+export function needsOwner(run) {
+  return ["answer", "accept", "problem"].includes(inboxState(run));
 }
 
 export function taskOrigin(run) {
@@ -74,9 +84,26 @@ export function taskOrigin(run) {
   return "Manual";
 }
 
-export function pendingReviewCount(models) {
+export function pendingApprovalCount(models) {
   return models.operations.approvals.filter((entry) => entry.status === "pending").length
     + (models.operations.workspaceProposals || []).filter((p) => ["pending", "applying"].includes(p.status)).length
-    + models.operations.runs.filter(reviewableResult).length
     + models.skillProposals.length + models.prefProposals.length + models.reflectionProposals.length;
+}
+
+// Setup items that need the owner: agent configuration problems and broken connections.
+export function setupAttention(models) {
+  const items = [
+    ...(models.validation?.problems || []).map((text) => ({ kind: "configuration", text, href: "/agents" })),
+    ...(models.validation?.warnings || []).map((text) => ({ kind: "configuration", text, href: "/agents" }))
+  ];
+  for (const connector of models.operations.connectors || []) {
+    if (connector.status === "needs_reconnect" || connector.state === "needs_reconnect") {
+      items.push({ kind: "integration", text: `${connector.label || connector.id} needs to be reconnected.`, href: `/integrations?integration=${encodeURIComponent(connector.id)}` });
+    }
+  }
+  return items;
+}
+
+export function inboxCount(models) {
+  return models.operations.runs.filter(needsOwner).length + setupAttention(models).length + pendingApprovalCount(models);
 }

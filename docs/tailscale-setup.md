@@ -67,7 +67,7 @@ Publishing callbacks does not enable event routes or authorize agent actions.
 
 From a device outside your tailnet, check that HTTPS reaches the callback listener:
 
-- `/`, `/integrations`, `/reviews` and `/settings` should return 404, never console HTML.
+- `/`, `/inbox`, `/integrations` and `/settings` should return 404, never console HTML.
 - An OAuth callback with missing/invalid state should return 400.
 - An unsigned webhook should be rejected.
 - Provider consent and signed events still need their own live tests; an HTTP response alone

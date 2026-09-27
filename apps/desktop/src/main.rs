@@ -168,8 +168,8 @@ fn desktop(attachment: serde_json::Value, smoke: bool) -> Result<(), Box<dyn Err
                 {
                     let handle = window.app_handle().clone();
                     let _ = window.eval_with_callback("document.body.innerText", move |text| {
-                        if text.contains("Dashboard") {
-                            println!("CrewRun desktop rendered authenticated Dashboard");
+                        if text.contains("Inbox") {
+                            println!("CrewRun desktop rendered authenticated Inbox");
                             handle.exit(0);
                         } else {
                             eprintln!("Desktop did not render the authenticated console");

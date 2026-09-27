@@ -50,7 +50,7 @@ async function probePrivateConsoleIsNotPublic(base) {
   const response = await fetch(new URL("/", base), { signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "manual" });
   const body = await response.text();
   assert.equal(response.status, 404, "the Funnel endpoint must expose only integration callback routes");
-  assert.doesNotMatch(body, /CrewRun|Dashboard|role management/i, "a private CrewRun console was exposed through Funnel");
+  assert.doesNotMatch(body, /CrewRun|Dashboard|Inbox|role management/i, "a private CrewRun console was exposed through Funnel");
 }
 
 async function authenticatedRead(url, token, expected) {

@@ -30,8 +30,8 @@ for scheduled work and queued deliveries to execute. Changes on GitHub main reac
 
 1. Open **Settings → Providers** and check that a runner is available. See [provider setup](providers.md).
 2. Open **Agents → Add agent**. Describe its job and choose its runner.
-3. Open **Tasks → Create a task**. Describe the result you need and how you will judge it.
-4. Review saved results on the task page. Outgoing Slack or Gmail actions appear in **Reviews**.
+3. Open **Inbox → New task**. Describe the result you need and how you will judge it.
+4. Review saved results on the task page. Outgoing Slack or Gmail actions appear in **Inbox → Approvals**.
 5. Select **Accept deliverable** when the result meets your requirements. **Usage** shows recorded
    spend and cost per accepted deliverable.
 

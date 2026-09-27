@@ -25,7 +25,7 @@ Create recurring work under **Scheduled**, or add entries to an agent's `schedul
 
 Cron uses five numeric fields in the workspace manifest's timezone: minute, hour, day of month, month,
 and day of week. Wildcards, lists, ranges, and steps are supported. Missed windows coalesce into
-one task. Open its result from **Tasks** or the status link in **Scheduled**.
+one task. Open its result from the **Inbox** or the status link in **Scheduled**.
 
 Durable schedules persist their trigger cursor and queued task together. Processes sharing
 the same local database share claims. Interrupted or paused work for a trigger needs attention

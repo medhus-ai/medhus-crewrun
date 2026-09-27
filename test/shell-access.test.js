@@ -197,7 +197,7 @@ test("Claude native auto review is not shadowed by Bash allow rules; denied acti
   assert.equal(actions.length, 1);
   assert.equal(actions[0].status, "awaiting_approval");
   const reviewModels = collectModels(f.root, { operations: { approvals: [{ ...actions[0], status: "pending", summary: actions[0].summary, source: "runtime" }] } });
-  assert.match(renderPartial("reviews", reviewModels, { selectedReview: actions[0].id, canDecideApprovals: true }), /uname -s/);
+  assert.match(renderPartial("inbox", reviewModels, { tab: "approvals", selectedReview: actions[0].id, canDecideApprovals: true }), /uname -s/);
 });
 
 test("Claude permission fallback, missing shell host, and detached requests fail closed", async (t) => {

@@ -60,7 +60,7 @@ Manifest `integrationRules` entries have `{connectionId,eventType,role,enabled}`
 
 `workspace.writeDraft` requires write authority and a path beneath a configured draft/output folder. It cannot write `.crew/`. Durable Markdown changes use `workspace.proposePatch` and require appropriate read/write authority. Agent and skill configuration uses setup proposals. The helper can inspect safe setup/connection metadata, get a preset, and propose a bundle—not apply or approve it. It never receives credentials.
 
-Reviews → Workspace shows before/after content, supports editing into a new superseding proposal, and applies only owner-approved content. Base hashes reject stale files. Approved intent is durable before atomic per-file replacement; recovery recognizes already-applied files and stops on conflicts instead of overwriting operator edits. This is recoverable multi-file application, not a filesystem-wide atomic transaction. New routines and routes proposed by the helper start disabled.
+Inbox → Approvals → Workspace changes shows before/after content, supports editing into a new superseding proposal, and applies only owner-approved content. Base hashes reject stale files. Approved intent is durable before atomic per-file replacement; recovery recognizes already-applied files and stops on conflicts instead of overwriting operator edits. This is recoverable multi-file application, not a filesystem-wide atomic transaction. New routines and routes proposed by the helper start disabled.
 
 Manual forms and helper proposals share configuration validation. Existing owner forms are explicit owner changes, not agent bypasses. Knowledge remains ordinary Markdown; the runtime does not reinterpret old document text as current approval.
 
@@ -104,7 +104,7 @@ access are also unsupported. See [Claude's native permission modes](https://code
 and [Codex auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review).
 
 Flagged commands are private `shell.native` records in the existing runtime action outbox,
-shown in **Reviews → Actions**. Provider workers cannot claim these records. Approval permits
+shown in **Inbox → Approvals**. Provider workers cannot claim these records. Approval permits
 one exact command, timeout, working directory, agent policy revision, and task/chat context.
 For task work it queues one continuation of the same task; for chat work, ask the same agent
 chat to retry the reviewed command. Native hard restrictions still apply. Rejection never

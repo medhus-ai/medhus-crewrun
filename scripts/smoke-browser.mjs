@@ -52,11 +52,11 @@ try {
   let body = "";
   for (let i = 0; i < 100; i++) {
     body = await evaluate("document.body?.innerText || ''");
-    if (/Dashboard|Open the console directly/.test(body)) break;
+    if (/Inbox|Open the console directly/.test(body)) break;
     await delay(50);
   }
-  assert.match(body, /Dashboard/, "real browser form login reaches the authenticated dashboard");
-  console.log("Chromium: actual login form submission reached authenticated Dashboard.");
+  assert.match(body, /Inbox/, "real browser form login reaches the authenticated Inbox");
+  console.log("Chromium: actual login form submission reached authenticated Inbox.");
 } finally {
   socket?.close();
   browser.kill();

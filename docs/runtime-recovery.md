@@ -18,7 +18,7 @@ Trigger advancement and internal enqueue happen in one transaction.
 | Approved external write | Worker rechecks authority and connection before delivery |
 | Uncertain delivery | Manually reconcile with evidence; never silently resend |
 
-Reviews are decisions; Activity is read-only history; Tasks contains work and
+Inbox → Approvals holds decisions; Activity is read-only history; the Inbox contains work and
 questions. Result completion is distinct from human acceptance. Rejecting an
 external action never sends it or creates an automatic retry.
 

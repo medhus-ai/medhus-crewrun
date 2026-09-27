@@ -304,14 +304,14 @@ export function createIntegrationHost({
       } else route = state.upsertRoute(input);
       return { route, redirect: "/events" };
     },
-    async decideApproval({ id, action }) { runtime.decideApproval(id, action); await runtime.deliver(id); return "/reviews?tab=actions"; },
-    async afterApproval({ id, action }) { runtime.decideApproval(id, action); await runtime.deliver(id); return "/tasks"; },
-    enqueueTask(input) { if (!loadRoleSettings(targetRoot)[input.agent]) throw new Error("Choose an existing agent."); const run = runtime.store.enqueue(input); return { ...run, redirect: `/tasks?run=${run.id}` }; },
-    controlTask({ id, action, feedback }) { runtime.store.controlRun(id, action, { feedback }); return `/tasks?run=${id}`; },
-    answerQuestion({ id, answer }) { const run = runtime.store.answerQuestion(id, answer); return `/tasks?run=${run.id}`; },
+    async decideApproval({ id, action }) { runtime.decideApproval(id, action); await runtime.deliver(id); return "/inbox?tab=approvals"; },
+    async afterApproval({ id, action }) { runtime.decideApproval(id, action); await runtime.deliver(id); return "/inbox"; },
+    enqueueTask(input) { if (!loadRoleSettings(targetRoot)[input.agent]) throw new Error("Choose an existing agent."); const run = runtime.store.enqueue(input); return { ...run, redirect: `/inbox?run=${run.id}` }; },
+    controlTask({ id, action, feedback }) { runtime.store.controlRun(id, action, { feedback }); return `/inbox?run=${id}`; },
+    answerQuestion({ id, answer }) { const run = runtime.store.answerQuestion(id, answer); return `/inbox?run=${run.id}`; },
     proposeSetup({ title, changes }) { return runtime.workspace.propose({ role: "crew-helper", title, changes, setup: true }); },
-    decideWorkspace(input) { runtime.workspace.decide(input); return "/reviews?tab=workspace"; },
-    reviseWorkspace(input) { const proposal = runtime.workspace.revise(input); return `/reviews?tab=workspace&review=${proposal.id}`; },
+    decideWorkspace(input) { runtime.workspace.decide(input); return "/inbox?tab=approvals"; },
+    reviseWorkspace(input) { const proposal = runtime.workspace.revise(input); return `/inbox?tab=approvals&review=${proposal.id}`; },
     toggleLifecycle({ id, enabled }) {
       runtime.workspace.saveManifest((manifest) => {
         const rule = manifest.rules.find((r) => r.id === id);
@@ -321,7 +321,7 @@ export function createIntegrationHost({
       });
       return "/settings?tab=host";
     },
-    reconcileAction({ id, outcome, evidence, receipt }) { const action = runtime.reconcileAction(id, { outcome, evidence, receipt }); return `/tasks?run=${action.run_id}`; },
+    reconcileAction({ id, outcome, evidence, receipt }) { const action = runtime.reconcileAction(id, { outcome, evidence, receipt }); return `/inbox?run=${action.run_id}`; },
     getChat({ role }) { return runtime.chats.getChat({ role }); },
     sendChat({ role, message }) { return runtime.chats.sendChat({ role, message }); }
   };

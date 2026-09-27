@@ -76,7 +76,7 @@ append-only, hash-chained audit record containing at least:
 - actor who approved it.
 
 The **Activity** page shows the actor, agent, runner/model, authority decision, data scopes,
-budget, action, and outcome. It excludes raw payloads and credentials. The private **Reviews**
+budget, action, and outcome. It excludes raw payloads and credentials. The private **Inbox**
 page shows the exact outgoing message for review, and the task timeline retains results and receipts.
 
 Read actions can proceed only when the agent contract permits them. Keep credentials out of

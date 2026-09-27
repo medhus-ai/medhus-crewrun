@@ -49,9 +49,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
-          # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, which
-          # WebKitGTK's web-process sandbox needs. Allow them rather than disabling the sandbox.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm ci
       - run: node --test test/app-runtime.test.js test/platform.test.js test/platform-doctor.test.js
       - name: Test actual browser login form
@@ -79,11 +76,6 @@ jobs:
         run: node scripts/archive-app.mjs desktop
       - name: Test real Linux webview
         if: runner.os == 'Linux'
-        # GPU-less runners: WebKitGTK's DMA-BUF renderer and compositing can hang under Xvfb.
-        env:
-          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
-          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
-          NO_AT_BRIDGE: '1'
         run: xvfb-run -a node scripts/smoke-window.mjs apps/desktop/CrewRun
       - name: Test real Windows webview
         if: runner.os == 'Windows'

@@ -11,7 +11,7 @@ files sent to a local model stay on the machine that serves it.
 | macOS on Apple Silicon | [oMLX](https://github.com/jundot/omlx) (MLX, macOS 15+) | `http://127.0.0.1:8000` |
 | Linux and Windows | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (GGUF) | `http://127.0.0.1:8080` |
 
-Intel Macs are not supported for local models. Both runtimes serve the Anthropic Messages API
+Intel Macs cannot run local models but can connect to a llama.cpp or oMLX server on another computer. Both runtimes serve the Anthropic Messages API
 (`/v1/messages`) and `/v1/models`, so a connected server becomes an ordinary runner profile on the
 Claude engine and uses the same governed tool bridge as cloud models. Other local servers are not
 supported.

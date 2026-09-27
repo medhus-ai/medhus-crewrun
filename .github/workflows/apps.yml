@@ -76,6 +76,11 @@ jobs:
         run: node scripts/archive-app.mjs desktop
       - name: Test real Linux webview
         if: runner.os == 'Linux'
+        # GPU-less runners: WebKitGTK's DMA-BUF renderer and compositing can hang under Xvfb.
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+          NO_AT_BRIDGE: '1'
         run: xvfb-run -a node scripts/smoke-window.mjs apps/desktop/CrewRun
       - name: Test real Windows webview
         if: runner.os == 'Windows'

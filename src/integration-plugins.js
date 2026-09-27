@@ -79,7 +79,9 @@ export async function loadInstalledPlugins({ env = process.env } = {}) {
 export async function installIntegrationPlugin(source, { trust = false, env = process.env } = {}) {
   if (!trust) throw new Error("Review the package and dependencies, then pass --trust. Plugins execute with host privileges.");
   const pinned = String(source || "").match(PINNED);
-  const local = !pinned && /^(\/|\.\.?\/)/.test(String(source || "")) ? await realpath(source) : "";
+  // Absolute paths on every OS (including C:\ on Windows) and ./ or .\ relative paths.
+  const text = String(source || "");
+  const local = !pinned && (path.isAbsolute(text) || /^\.\.?[\\/]/.test(text)) ? await realpath(text) : "";
   if (!pinned && !local) throw new Error("Use an exact npm package@1.2.3 version or an explicit local directory.");
   const metadata = local ? await readJson(path.join(local, "package.json")) : { name: pinned[1], version: pinned[2] };
   if (!PINNED.test(`${metadata.name}@${metadata.version}`)) throw new Error("Plugin package needs a valid name and exact version.");

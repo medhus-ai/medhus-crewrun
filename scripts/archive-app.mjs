@@ -19,7 +19,9 @@ if (existsSync(archive)) throw new Error("Refusing to replace an existing releas
 const partial = `${archive}.partial`;
 if (existsSync(partial)) throw new Error("Previous incomplete archive exists; inspect and remove it before retrying");
 try {
-  execFileSync("tar", ["-czf", partial, "-C", base, binary, "payload"], { stdio: "inherit" });
+  // Relative paths: GNU tar on Windows reads "D:\\..." as a remote host ("D") and fails.
+  const cwd = process.cwd();
+  execFileSync("tar", ["-czf", path.relative(cwd, partial), "-C", path.relative(cwd, base), binary, "payload"], { stdio: "inherit", cwd });
   renameSync(partial, archive);
 } catch (error) { rmSync(partial, { force: true }); throw error; }
 const hash = createHash("sha256");

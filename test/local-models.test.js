@@ -223,8 +223,14 @@ test("Settings → Local models checks a running server and connects it", async 
     const base = `http://127.0.0.1:${await console_.listen()}`;
     let page = await (await fetch(base + "/settings?tab=local")).text();
     assert.match(page, /This computer/);
-    assert.match(page, /Supported models/);
-    assert.match(page, /Connect the running server/);
+    if (local.runtimeForPlatform()) {
+      assert.match(page, /Supported models/);
+      assert.match(page, /Connect the running server/);
+    } else {
+      // Unsupported hosts (Intel Macs) can still connect a server on another computer.
+      assert.match(page, /cannot run local models/);
+      assert.match(page, /Connect a server on another computer/);
+    }
 
     const response = await post(base, "/settings/local/connect", { base_url: serverUrl, model: "qwen3.6-35b-a3b", runtime: "llama-cpp" });
     assert.match(message(response), /messages and tool use work/);

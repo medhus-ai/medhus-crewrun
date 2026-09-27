@@ -11,16 +11,19 @@ const home = mkdtempSync(path.join(os.tmpdir(), "crew-browser-"));
 const env = { ...process.env, CREW_HOME: path.join(home, "state"), CREWRUN_PUBLIC_BASE_URL: "" };
 const app = await serveApp(appWorkspace(undefined, env), { env });
 const profile = path.join(home, "browser");
-const browser = spawn(process.argv[2], ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "about:blank"], { stdio: "ignore" });
+const browser = spawn(process.argv[2], ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+let browserErrors = "";
+browser.stderr.on("data", (chunk) => { browserErrors = (browserErrors + chunk).slice(-4000); });
 const closed = new Promise((resolve) => browser.once("exit", resolve));
 let socket;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
   let port;
-  for (let i = 0; i < 100; i++) {
+  // Cold starts on shared CI runners can take well over ten seconds.
+  for (let i = 0; i < 300; i++) {
     try { port = Number(readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]); break; } catch { await delay(100); }
   }
-  assert.ok(port, "browser started with its sandbox enabled");
+  assert.ok(port, `browser did not start with its sandbox enabled within 30 s:\n${browserErrors}`);
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   socket = new WebSocket(pages.find((p) => p.type === "page").webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });

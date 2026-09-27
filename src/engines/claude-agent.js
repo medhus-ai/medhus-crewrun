@@ -18,7 +18,16 @@ const HEALTHCHECK_TIMEOUT_MS = 60_000;
 // or API-key (inject the stored key, failing loudly when none exists).
 function claudeAuthEnv(profile) {
   const routeEnv = anthropicRouteEnv(profile);
-  if (routeEnv.ANTHROPIC_BASE_URL) return { env: { ...process.env, ...routeEnv } };
+  if (routeEnv.ANTHROPIC_BASE_URL) {
+    // Never let a routed profile fall back to the owner's Claude subscription login:
+    // the runtime would send that login token to the third-party or local endpoint.
+    if (!routeEnv.ANTHROPIC_AUTH_TOKEN) {
+      throw new Error(`runner ${profile.id} needs a ${profile.provider} API key. Save it in Settings → Providers & credentials, and unlock the key store after each restart`);
+    }
+    const env = { ...process.env, ...routeEnv };
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    return { env };
+  }
   if (profile.auth === "subscription") {
     const env = { ...process.env };
     delete env.ANTHROPIC_API_KEY;
@@ -227,9 +236,11 @@ export function createClaudeAgentEngine({ loadQuery, loadSdk } = {}) {
             : `runner ${profile.id} healthcheck failed: ${resultMessage?.subtype || "no result"}`
         };
       } catch (error) {
-        const hint = profile.base_url
-          ? `Check the ${profile.provider} key in Settings → API Keys and that ${profile.base_url} is reachable.`
-          : "Sign in with `claude` (Pro/Max) or set ANTHROPIC_API_KEY.";
+        const hint = profile.provider === "local"
+          ? `Check that the local model server at ${profile.base_url} is running (Settings → Local models).`
+          : profile.base_url
+            ? `Check the ${profile.provider} key in Settings → Providers & credentials (unlock the key store after each restart) and that ${profile.base_url} is reachable.`
+            : "Sign in with `claude` (Pro/Max), or save an Anthropic key in Settings → Providers & credentials.";
         return {
           ok: false,
           status: "fail",

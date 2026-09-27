@@ -11,11 +11,12 @@ import { listPreferenceProposals, listPreferences } from "../preference-memory.j
 import { listReflectionProposals } from "../reflection-proposals.js";
 import { runnerIdForRole } from "../runner.js";
 import { agentRunnerProfiles, detectRunnerTools, runnerProfileLabel } from "../runner-config.js";
-import { knownSecretStatus, isUnlocked, secretsFileExists } from "../secret-store.js";
+import { customSecretNames, knownSecretStatus, isUnlocked, MIN_PASSWORD_LENGTH, secretsFileExists } from "../secret-store.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import { LEARNING_TOOL_NAMES, WEB_TOOL_NAMES } from "../crew-tools.js";
 import { renderTasks } from "./tasks.js";
 import { renderKnowledge } from "./knowledge.js";
+import { renderLocalModels } from "./local-models.js";
 import { esc, icon } from "./shell.js";
 import { renderWorkspaceReviews } from "./workspace.js";
 import { readWorkspace } from "../workspace-manifest.js";
@@ -701,9 +702,10 @@ ${table(["engine", "runs", "spend", "failed"], engineRows, "No engine totals ava
 }
 
 function renderSettings(models, options = {}) {
-  const tab = ["host", "knowledge"].includes(options.tab) ? options.tab : "providers";
-  const header = `<section class="hero"><div><h1>Settings</h1><p class="sub">Model providers, local knowledge, and host configuration.</p></div></section>${tabs("/settings", [["providers", "Providers & credentials"], ["knowledge", "Knowledge"], ["host", "Host"]], tab)}`;
+  const tab = ["host", "knowledge", "local"].includes(options.tab) ? options.tab : "providers";
+  const header = `<section class="hero"><div><h1>Settings</h1><p class="sub">Model providers, local models, local knowledge, and host configuration.</p></div></section>${tabs("/settings", [["providers", "Providers & credentials"], ["local", "Local models"], ["knowledge", "Knowledge"], ["host", "Host"]], tab)}`;
   if (tab === "knowledge") return header + renderKnowledge(models);
+  if (tab === "local") return header + renderLocalModels(options.localModels);
   const boundary = models.workspace ? notice("Governed workspace: Claude-compatible runners and the verified Codex SDK on Linux use the internal tool bridge. Native tools are disabled or denied by default. The owner may opt one direct-Claude agent into privileged native shell auto mode from agent settings; this exception is not filesystem isolation. Generic CLI runners fail closed. Daily run limits are supported; hard per-run USD is Claude-only, and hard token/monthly-dollar limits require a reservation-capable host.", "info") : "";
   if (tab === "providers") return header + boundary + renderProviders(models, options);
   const lifecycle = models.workspace ? `<section class="section-heading"><h2>Lifecycle follow-ups</h2></section><p class="help">The helper can propose rules for review. Enable them here only after the agent's hook and authority are configured.</p>${table(["rule", "event", "agent", "enabled"], models.workspace.rules.map((rule) => [esc(rule.id), esc(rule.event), esc(rule.agent), `<form method="post" action="/workspace/lifecycle"><input type="hidden" name="id" value="${esc(rule.id)}"><input type="hidden" name="enabled" value="${rule.enabled ? "" : "1"}"><button class="state-toggle" role="switch" aria-checked="${rule.enabled}" aria-label="Enable ${esc(rule.id)}"></button></form>`]), "No lifecycle follow-ups are configured.", pageOptions("/settings", options, { tab: "host" }))}` : "";
@@ -714,12 +716,18 @@ ${[...models.validation.problems, ...models.validation.warnings].map((entry) => 
 }
 
 function renderProviders(models, options) {
-  const secretsLocked = secretsFileExists() && !isUnlocked();
+  const storeExists = secretsFileExists();
+  const unlocked = isUnlocked();
+  const secretsLocked = storeExists && !unlocked;
   const keyRows = knownSecretStatus().map((entry) => {
-    const ambient = Boolean(process.env[entry.env]);
-    const state = secretsLocked ? "locked" : entry.set || ambient ? "configured" : "not configured";
-    return [esc(entry.label), `<code>${esc(entry.env)}</code>`, pill(state, toneFor(state))];
+    const ambient = Boolean(process.env[entry.env]) && !entry.set;
+    const state = secretsLocked ? "locked" : entry.set ? `saved ${entry.masked}` : ambient ? "from environment" : "not configured";
+    const actions = unlocked
+      ? `<form method="post" action="/settings/secrets/set" autocomplete="off" class="inline-form"><input type="hidden" name="name" value="${esc(entry.env)}"><input type="password" name="value" autocomplete="off" spellcheck="false" placeholder="${esc(entry.hint)}" aria-label="${esc(entry.label)} key" required><button class="secondary tiny">${entry.set ? "Replace" : "Save"}</button></form>${entry.set ? `<form method="post" action="/settings/secrets/remove" class="inline-form"><input type="hidden" name="name" value="${esc(entry.env)}"><button class="secondary tiny">Remove</button></form>` : ""}`
+      : "";
+    return [esc(entry.label), `<code>${esc(entry.env)}</code>`, pill(state, entry.set || ambient ? "success" : toneFor(state)), actions];
   });
+  const customRows = unlocked ? customSecretNames().map((name) => [esc(name), `<code>${esc(name)}</code>`, pill("saved", "success"), `<form method="post" action="/settings/secrets/remove" class="inline-form"><input type="hidden" name="name" value="${esc(name)}"><button class="secondary tiny">Remove</button></form>`]) : [];
   const groups = providerGroups(models.runnerOptions);
   const providerRows = groups.map((group) => [
     esc(group.label),
@@ -730,18 +738,31 @@ function renderProviders(models, options) {
     esc(provider.label || provider.id), esc(provider.detail || provider.description || ""), pill(provider.status || "available", toneFor(provider.status || "available"))
   ]);
   const tools = models.providerRuntime;
+  const statusNotice = options.status ? notice(options.message || (options.status === "ok" ? "Saved." : "Something went wrong."), options.status === "ok" ? "" : "warn") : "";
+  const detached = options.runnerAttached === false
+    ? notice("This console is not running your crew. Keys you save here are stored encrypted, but running agents only use them after the store is unlocked in the console started by `crewrun up --console` or the CrewRun app.", "warn")
+    : "";
+  const storeCard = !storeExists
+    ? `<p class="usage-amount">Not created</p><p class="muted" style="margin-top:8px">Create an encrypted store to keep API keys on this computer. You unlock it after each restart; CrewRun never shows saved keys again.</p>
+<form method="post" action="/settings/secrets/create" autocomplete="off"><div class="field"><label for="store-password">Store password</label><input id="store-password" name="password" type="password" minlength="${MIN_PASSWORD_LENGTH}" autocomplete="new-password" required></div><div class="field"><label for="store-confirm">Repeat password</label><input id="store-confirm" name="confirm" type="password" minlength="${MIN_PASSWORD_LENGTH}" autocomplete="new-password" required></div><button>Create key store</button></form>`
+    : secretsLocked
+      ? `<p class="usage-amount">Locked</p><p class="muted" style="margin-top:8px">Unlock to add keys and let agents that use API-key profiles run. The store locks again when CrewRun restarts.</p>
+<form method="post" action="/settings/secrets/unlock" autocomplete="off"><div class="field"><label for="store-unlock">Store password</label><input id="store-unlock" name="password" type="password" autocomplete="current-password" required></div><button>Unlock</button></form>`
+      : `<p class="usage-amount">Unlocked</p><p class="muted" style="margin-top:8px">Keys are kept out of agent prompts and this dashboard. Only the last four characters are shown.</p><form method="post" action="/settings/secrets/lock"><button class="secondary tiny">Lock now</button></form>`;
   return `
+${statusNotice}${detached}
 <section class="section-heading"><h2>Providers & credentials</h2></section>
 <section class="split">
   <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Installed runtimes</h2></div><div class="list">
     ${listRow("Claude runtime", tools.claude.available ? "available" : "not found", tools.claude.available ? "success" : "warn")}
     ${listRow("Codex runtime", tools.codex.available ? "available" : "not found", tools.codex.available ? "success" : "warn")}
     ${listRow("Model catalog", models.catalog?.updated_at ? `updated ${when(models.catalog.updated_at)}` : "not refreshed", models.catalog?.updated_at ? "info" : "")}
-  </div></div>
-  <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Encrypted secret store</h2></div><p class="usage-amount">${secretsFileExists() ? isUnlocked() ? "Unlocked" : "Locked" : "Not created"}</p><p class="muted" style="margin-top:8px">${secretsLocked ? "Unlock it in the operator process to inspect configured key names." : "Keys are kept out of agent prompts and this dashboard."}</p></div>
+  </div><p class="help">Subscription profiles use your own signed-in <code>claude</code> or <code>codex</code> login. Local models are set up under <a href="/settings?tab=local">Local models</a>.</p></div>
+  <div class="card flat"><div class="section-heading" style="margin-top:0"><h2>Encrypted key store</h2></div>${storeCard}</div>
 </section>
-<section class="section-heading"><h2>Credential availability</h2><span class="muted">names and state only</span></section>
-${table(["provider", "environment name", "state"], keyRows, "No known provider credentials.", pageOptions("/settings", options, { tab: "providers" }, "credentials_page"))}
+<section class="section-heading"><h2>API keys</h2><span class="muted">${unlocked ? "enter a key to save or replace it" : "unlock the store to add or change keys"}</span></section>
+${table(["provider", "environment name", "state", ""], [...keyRows, ...customRows], "No known provider credentials.", pageOptions("/settings", options, { tab: "providers" }, "credentials_page"))}
+<p class="help">A key set in CrewRun's environment is used when no stored key exists. Stored keys take precedence.</p>
 <section class="section-heading"><h2>Assignable model profiles</h2><span class="muted">${models.runnerOptions.length} available</span></section>
 ${table(["provider", "profiles", "count"], providerRows, "No runner profiles found.", pageOptions("/settings", options, { tab: "providers" }, "providers_page"))}
 ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</h2></section>${table(["provider", "detail", "state"], hostRows, "", pageOptions("/settings", options, { tab: "providers" }, "host_page"))}` : ""}`;

@@ -14,7 +14,7 @@ Each page owns a distinct part of the workflow:
 | Activity | Read-only Agent actions and Integration events; search the retained safe metadata. |
 | Chats | Resumed agent conversations, also accessible from recent chats in the sidebar. |
 | Usage | Recorded costs, estimates, and accepted outcomes. |
-| Settings | Providers, credential availability, runtimes, and host configuration status. |
+| Settings | Providers & credentials (encrypted key store: create, unlock, add or remove API keys), Local models (hardware check, recommended model, connect a llama.cpp or oMLX server), Knowledge, and host configuration status. |
 
 A scheduled task is a definition; its executions appear in Tasks. A verified integration
 event becomes work only when an enabled, authorized event rule routes it. Activity links

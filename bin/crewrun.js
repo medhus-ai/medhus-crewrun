@@ -16,6 +16,7 @@ import { requireWorkspace, LIFECYCLE_EVENTS } from "../src/workspace-manifest.js
 import { installIntegrationPlugin, listInstalledPlugins, scaffoldIntegrationPlugin } from "../src/integration-plugins.js";
 import { platformDoctor, formatPlatformDoctor } from "../src/platform-doctor.js";
 import { acquireRunnerLock } from "../src/app/runner-lock.js";
+import { checkLocalServer, detectLocalHardware, detectLocalRuntime, fitLabel, listLocalRunners, recommendLocalModels, removeLocalRunner, saveLocalRunner, setupSteps } from "../src/local-models.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
@@ -49,6 +50,35 @@ async function commandHost(targetRoot) {
 if (command === "doctor") {
   const report = platformDoctor();
   console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatPlatformDoctor(report));
+} else if (command === "models") {
+  const sub = rest[0];
+  if (sub === "recommend") {
+    const result = recommendLocalModels(detectLocalHardware());
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify({ ...result, runtimeInstalled: detectLocalRuntime(result.runtime).available }, null, 2));
+    } else {
+      const { hardware, runtime } = result;
+      console.log(`Memory ${hardware.memoryGb} GB · ${hardware.gpus.length ? hardware.gpus.map((gpu) => `${gpu.name} ${gpu.memoryGb} GB`).join(", ") : hardware.unifiedMemory ? "Apple Silicon" : "no NVIDIA GPU"} · free disk ${hardware.freeDiskGb ?? "?"} GB`);
+      if (!runtime) fail("Local models need Apple Silicon (oMLX) or Linux/Windows (llama.cpp).");
+      console.log(`Runtime: ${runtime.label} (${detectLocalRuntime(runtime).available ? "installed" : "not installed"})\n`);
+      for (const option of result.options) console.log(`${option.model.id === result.recommended ? "*" : " "} ${option.model.id.padEnd(18)} ${option.diskOk ? fitLabel(option.fit) : "not enough free disk"}`);
+      const pick = result.options.find((option) => option.model.id === result.recommended);
+      if (!pick) fail("\nNo supported model fits this computer. Use a cloud model profile.");
+      console.log(`\nSet up ${pick.model.label}:`);
+      for (const step of setupSteps(runtime, pick.model, { fit: pick.fit })) console.log(`  # ${step.title}\n  ${step.command}`);
+      console.log(`\nThen: crewrun models connect ${runtime.defaultBaseUrl}${runtime.id === "llama-cpp" ? ` --model ${pick.model.id}` : ""}`);
+    }
+  } else if (sub === "connect" && rest[1]) {
+    const result = await checkLocalServer({ baseUrl: rest[1], model: argValue(rest, "--model") || "" });
+    if (!result.ok) fail(result.detail);
+    const runner = saveLocalRunner({ baseUrl: result.baseUrl, model: result.model, check: result });
+    console.log(`${result.detail}\nSaved runner ${runner.id} (${runner.display_name}). Assign it to an agent from the console.`);
+  } else if (sub === "list") {
+    for (const runner of listLocalRunners()) console.log(`${runner.id.padEnd(28)} ${runner.base_url.padEnd(26)} ${runner.last_check ? runner.last_check.ok ? runner.last_check.tools ? "ready" : "no tool use" : "failed" : "not checked"}`);
+  } else if (sub === "remove" && rest[1]) {
+    if (!removeLocalRunner(rest[1])) fail(`no local model runner named ${rest[1]}`);
+    console.log(`removed ${rest[1]}`);
+  } else fail("usage: crewrun models recommend [--json] | connect <server-url> [--model id] | list | remove <runner-id>");
 } else if (command === "--version" || command === "-v") {
   console.log(JSON.parse(readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version);
 } else if (command === "plugins") {
@@ -169,6 +199,7 @@ if (command === "doctor") {
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version
   crewrun doctor [--json]                            read-only OS and dependency readiness
+  crewrun models recommend [--json] | connect <url> [--model id] | list | remove <id>   local models (llama.cpp / oMLX)
 
 The bundled one-owner host manages tasks, reviews, schedules, and integration plugins.
 Set up connections in Integrations; outgoing actions require approval. No public listener starts until an HTTPS callback origin is configured.`);

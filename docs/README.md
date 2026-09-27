@@ -12,6 +12,7 @@ Start with [Getting started](getting-started.md). Existing installations should 
 | [Personal and organization workspaces](workspaces.md) | Guided setup, scoped tools, accountable work, migration, and enforced limits |
 | [Agents](agents.md) | Jobs, instructions, permissions, web access, and project files |
 | [Providers](providers.md) | Runner profiles, local sign-ins, and API keys |
+| [Local models](local-models.md) | llama.cpp and oMLX, supported models, hardware recommendation, connect |
 | [Integrations](integrations.md) | Connect accounts, grant actions, review outgoing messages, and add host gateways |
 | [Hosted integration reference host](reference-host.md) | Browser OAuth, signed webhooks, event routing, and one-owner Funnel deployment |
 | [Integration plugins](integration-plugins.md) | Private app setup, capability limits, pinned installation, scaffolding and contract tests |

@@ -8,8 +8,9 @@ ingress through an explicitly configured HTTPS proxy or Funnel.
 | Knowledge and agent configuration | Workspace Markdown and `.crew/` | Scoped tools; durable changes require reviewed patches |
 | Tasks, chats, exact approvals, usage | Private runtime SQLite under `CREW_HOME/runtime/` | Owner-only Unix permissions; not encrypted |
 | Integration tokens and OAuth state | Private integration SQLite | Authenticated encryption with a separate host key |
-| Model keys | Host environment or password-sealed model vault | Outside workspace and agent chat |
-| Runner profiles | `CREW_HOME/ai-runners.json` | Operator-owned SDK configuration |
+| Model API keys | Host environment or password-sealed key store `CREW_HOME/secrets.json` | AES-256-GCM with a scrypt-derived key; unlocked from Settings after each restart; outside workspace and agent chat |
+| Codex login copy (subscription profiles) | `CREW_HOME/provider-runtime/codex…/auth.json` | Copied from your Codex login with owner-only permissions (0600); not encrypted; read only by the local Codex runtime |
+| Runner profiles, including local model servers | `CREW_HOME/ai-runners.json` | Operator-owned SDK configuration; no secrets |
 
 `CREW_HOME` defaults to `~/.crew`. Workspace identity, not its directory name,
 selects new operational state. Old queues and credential files are not imported.
@@ -17,7 +18,9 @@ Keep SQLite on local disk; distributed multi-machine workers are not supported.
 
 Claude runs with no native tools except the explicitly selected shell agent.
 Codex uses its pinned, Linux-verified boundary and a turn-scoped authenticated MCP
-listener. Provider credentials stay in host closures, not model child processes.
+listener. API keys stay in host closures, not model child processes; vendor subscription
+logins are read by the vendor runtime itself (see [Providers](providers.md#authentication-modes)).
+Local model servers are reached only at the address the owner connects in Settings.
 Scoped paths reject traversal and symlinks. Missing contracts fail closed. Tool bridges
 and brokers cannot run tools with an allowlist alone: a host authority policy is
 required, and existing handlers recheck authority on every call. Workspace governance

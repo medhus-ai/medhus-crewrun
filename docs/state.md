@@ -16,6 +16,12 @@ Hybrid search requires separately installed local models and an owner setting.
 No automatic cloud-document synchronization, OCR or spreadsheet calculation engine
 is included; see [workspace knowledge](workspace-knowledge.md).
 
+Local models run through llama.cpp (Linux/Windows) or oMLX (Apple Silicon) from a
+short supported list; Crewrun recommends one for your hardware and connects a running
+server, but does not yet install the runtime or download weights. See
+[local models](local-models.md). API keys are saved in an encrypted key store from
+Settings and must be unlocked after each restart.
+
 Claude subscriptions/API routes and the Linux-verified Codex SDK use governed
 tools. Only one owner-selected direct-Claude agent can use native shell auto-review.
 Codex shell auto-review is not implemented.

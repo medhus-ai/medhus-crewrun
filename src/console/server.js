@@ -21,6 +21,8 @@ import { setShellAgent } from "../shell-access.js";
 import { runnerIdForRole } from "../runner.js";
 import { resolveRunnerProfile } from "../runner-config.js";
 import { listWorkspaceFiles, readWorkspaceFilePreview } from "../workspace-files.js";
+import { createSecretStore, KNOWN_SECRETS, listSecretNames, lock as lockSecrets, removeSecret, setSecret, unlock as unlockSecrets } from "../secret-store.js";
+import { checkLocalServer, detectLocalHardware, detectLocalRuntime, listLocalRunners, localRunnerId, recommendLocalModels, removeLocalRunner, saveLocalRunner } from "../local-models.js";
 
 // The crewrun console is a local operator surface over one project's .crew/.
 // `operations` is optional host integration:
@@ -136,6 +138,89 @@ function roleRoute(url) {
 function editableRole(value) {
   const role = String(value || "").trim();
   return ROLE_SLUG.test(role) && !RESERVED_ROLE_SLUGS.has(role);
+}
+
+function settingsUrl(tab, status, message = "") {
+  const params = new URLSearchParams({ tab, status });
+  if (message) params.set("message", String(message).slice(0, 400));
+  return `/settings?${params}`;
+}
+
+const KNOWN_SECRET_ENVS = new Set(KNOWN_SECRETS.map((entry) => entry.env));
+
+// Key-store actions from Settings → Providers & credentials. Values are never
+// echoed back; errors (such as a wrong password) return to the page as a notice.
+function secretAction(action, form) {
+  try {
+    if (action === "create") {
+      if (String(form.password || "") !== String(form.confirm || "")) throw new Error("The passwords do not match.");
+      createSecretStore(String(form.password || ""));
+      return settingsUrl("providers", "ok", "Key store created and unlocked.");
+    }
+    if (action === "unlock") {
+      unlockSecrets(String(form.password || ""));
+      return settingsUrl("providers", "ok", "Key store unlocked. It locks again when CrewRun restarts.");
+    }
+    if (action === "lock") {
+      lockSecrets();
+      return settingsUrl("providers", "ok", "Key store locked.");
+    }
+    if (action === "set") {
+      const name = String(form.name || "");
+      if (!KNOWN_SECRET_ENVS.has(name)) throw new Error("Unknown provider key.");
+      const value = String(form.value || "").trim();
+      if (!value) throw new Error("Enter a key to save.");
+      setSecret(name, value);
+      return settingsUrl("providers", "ok", `${name} saved.`);
+    }
+    if (action === "remove") {
+      const name = String(form.name || "");
+      if (!(listSecretNames() || []).includes(name)) throw new Error("That key is not saved.");
+      removeSecret(name);
+      return settingsUrl("providers", "ok", `${name} removed.`);
+    }
+    throw new Error("Unknown key-store action.");
+  } catch (error) {
+    const message = /wrong password|corrupted/.test(error.message) ? "Wrong password." : error.message;
+    return settingsUrl("providers", "error", message);
+  }
+}
+
+async function localModelAction(action, form) {
+  try {
+    if (action === "remove") {
+      if (!removeLocalRunner(String(form.id || ""))) throw new Error("That local model is not connected.");
+      return settingsUrl("local", "ok", "Local model removed.");
+    }
+    if (action === "connect") {
+      const runtime = ["llama-cpp", "omlx"].includes(form.runtime) ? form.runtime : "";
+      const result = await checkLocalServer({ baseUrl: form.base_url, model: form.model });
+      if (result.ok) {
+        const runner = saveLocalRunner({ baseUrl: result.baseUrl, model: result.model, runtime, check: result });
+        return settingsUrl("local", result.tools ? "ok" : "error", `${result.detail} Saved as ${runner.display_name}.`);
+      }
+      // A failed re-check still records the failure on an already connected model.
+      const existing = result.model && listLocalRunners().find((runner) => runner.id === localRunnerId(result.model));
+      if (existing) saveLocalRunner({ baseUrl: existing.base_url, model: existing.model, runtime: existing.local_runtime || runtime, label: existing.display_name, check: result });
+      return settingsUrl("local", "error", result.detail);
+    }
+    throw new Error("Unknown local model action.");
+  } catch (error) {
+    return settingsUrl("local", "error", error.message);
+  }
+}
+
+function localModelsState(url) {
+  const recommendation = recommendLocalModels(detectLocalHardware());
+  const status = ["ok", "error"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "";
+  return {
+    recommendation,
+    runtimeInstalled: detectLocalRuntime(recommendation.runtime).available,
+    runners: listLocalRunners(),
+    selected: String(url.searchParams.get("model") || ""),
+    status,
+    message: status ? String(url.searchParams.get("message") || "").slice(0, 400) : ""
+  };
 }
 
 function redirectTarget(value, fallback) {
@@ -448,6 +533,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     }
     if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/reviews?tab=learning");
     if (pathname === "/workspace/lifecycle") return callOperation(["toggleLifecycle"], { id: String(form.id || ""), enabled: form.enabled === "1" }, "/settings?tab=host");
+    if (pathname.startsWith("/settings/secrets/")) return secretAction(pathname.slice("/settings/secrets/".length), form);
+    if (pathname.startsWith("/settings/local/")) return localModelAction(pathname.slice("/settings/local/".length), form);
     if (pathname === "/settings/knowledge") return callOperation(["knowledgeAction"], {
       action: String(form.action || ""), consent: form.consent === "1", enabled: form.enabled === "1",
       fallback: form.fallback === "1", role: String(form.role || ""),
@@ -524,6 +611,10 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
         tab: String(url.searchParams.get("tab") || ""),
+        status: ["ok", "error"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "",
+        message: String(url.searchParams.get("message") || "").slice(0, 400),
+        runnerAttached: Boolean(up),
+        localModels: page === "settings" && url.searchParams.get("tab") === "local" ? localModelsState(url) : null,
         page: url.searchParams.get("page"),
         pageParams: Object.fromEntries(url.searchParams),
         calendarCount: url.searchParams.get("count"),

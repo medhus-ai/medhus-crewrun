@@ -151,7 +151,7 @@ async function discoverKeyedModels(provider) {
   return openAiCompatEntries(await fetchJson(modelsUrl, key));
 }
 
-// Saved local servers (Settings → Runners → Local model server): list each
+// Saved local servers (Settings → Local models): list each
 // server's models so they all become picker options. Returns null when no
 // local runners exist.
 export async function discoverLocalModels() {

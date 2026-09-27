@@ -64,16 +64,17 @@ test("anthropicRouteEnv maps provider keys to the Anthropic env contract", () =>
   });
   // secret_ref wins over the provider default key.
   assert.equal(store.anthropicRouteEnv({ ...glm, secret_ref: "glm-personal" }).ANTHROPIC_AUTH_TOKEN, "glm-key-2");
-  // Local servers route without a key (Ollama needs none).
+  // Local servers need no key but get a placeholder token, so the Claude runtime never
+  // falls back to the owner's subscription login and sends it to the model server.
   assert.deepEqual(
-    store.anthropicRouteEnv({ provider: "local", base_url: "http://localhost:11434" }),
-    { ANTHROPIC_BASE_URL: "http://localhost:11434", ANTHROPIC_API_KEY: "" }
+    store.anthropicRouteEnv({ provider: "local", base_url: "http://localhost:8080" }),
+    { ANTHROPIC_BASE_URL: "http://localhost:8080", ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: store.LOCAL_ROUTE_TOKEN }
   );
   // No base_url → no routing; subscription/ambient auth stays untouched.
   assert.deepEqual(store.anthropicRouteEnv({ provider: "anthropic", model: "sonnet" }), {});
 
   store.lock();
-  // Locked store still routes the URL, just without a token.
+  // Locked store still routes the URL without a token; the engine then refuses the run.
   assert.deepEqual(store.anthropicRouteEnv(glm), { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY: "" });
 });
 
@@ -125,6 +126,34 @@ test("claude-agent routes env for base_url profiles and leaves others alone", as
     { id: "claude-agent-sonnet-high", provider: "anthropic", model: "sonnet", reasoning_effort: "high" }
   );
   assert.equal(plain.options.env, undefined);
+});
+
+test("routed profiles never fall back to the Claude subscription login", async () => {
+  store.lock();
+  const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-oat-owner-login";
+  try {
+    // A keyed cloud route with no available key is refused instead of running with the owner's login.
+    let queried = false;
+    const refused = await createClaudeAgentEngine({ loadQuery: async () => (...args) => { queried = true; return fakeClaudeQuery({}, [OK_RESULT])(...args); } })
+      .healthcheck(resolveRunnerProfile("kimi-k2.7"));
+    assert.equal(refused.ok, false);
+    assert.match(refused.message, /needs a kimi API key/);
+    assert.equal(queried, false, "no request is made without the provider's own key");
+
+    // A local route gets a placeholder bearer and the subscription token is removed from its env.
+    const local = {};
+    await runTurn(
+      createClaudeAgentEngine({ loadQuery: async () => fakeClaudeQuery(local, [OK_RESULT]) }),
+      { id: "local-model", engine: "claude-agent", provider: "local", model: "qwen3.6-35b-a3b", base_url: "http://127.0.0.1:8080" }
+    );
+    assert.equal(local.options.env.ANTHROPIC_AUTH_TOKEN, store.LOCAL_ROUTE_TOKEN);
+    assert.equal(local.options.env.ANTHROPIC_API_KEY, "");
+    assert.equal(local.options.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+  }
 });
 
 test("discovered GLM/Kimi/local models become routed picker profiles", () => {

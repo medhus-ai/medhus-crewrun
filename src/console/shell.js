@@ -181,6 +181,8 @@ form { margin: 0; }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .field { display: grid; min-width: 0; gap: 5px; }
 .field.wide { grid-column: 1 / -1; }
+.inline-form { display: inline-flex; gap: 6px; align-items: center; margin: 0 6px 0 0; }
+.inline-form input[type="password"] { width: 180px; }
 label { color: #414851; font-size: 11px; font-weight: 600; }
 input, select, textarea { width: 100%; border: 1px solid #dcdcdc; border-radius: 6px; outline: none; background: #fff; color: #1d2229; font: inherit; font-size: 12px; }
 input, select { min-height: 33px; padding: 6px 8px; }

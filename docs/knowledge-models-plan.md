@@ -37,7 +37,7 @@ Do not promise correct reading from retrieval alone.
 
 First release targets Windows/Linux with independently verified runtime boundaries;
 macOS is now an app packaging target; knowledge isolation still needs a native implementation.
-Future reduced-profile chat choices are the separate local-model project or
+Local chat uses llama.cpp or oMLX ([Local models](local-models.md)) or
 OpenRouter. The embedding worker does not depend on either. Earlier Claude/Codex
 optional-reranker ideas below are future design options, not bundled launch clients.
 
@@ -140,7 +140,17 @@ embedded inference path. [QMD model setup](https://github.com/tobi/qmd/blob/main
   applicable model terms; do not imply unrestricted redistribution rights.
   [Google model card](https://huggingface.co/google/embeddinggemma-300m).
 
-## Local AI stack discussion — no selection committed
+## Local chat runtime — decided 2026-09-26
+
+The owner chose one runtime per platform: **llama.cpp `llama-server`** on Linux and
+Windows and **oMLX** on Apple Silicon macOS, with a short curated model list and a
+hardware-based recommendation. Ollama, LM Studio and vLLM are not supported chat
+runtimes. Both chosen runtimes serve the Anthropic Messages API, so local models use
+the existing Claude engine route. Detection, recommendation, capability check and
+connection are implemented; managed installation, download and start/stop are next.
+See [Local models](local-models.md). The discussion below is kept for history.
+
+## Local AI stack discussion — superseded by the decision above
 
 A model requires an inference engine, but not necessarily a separate server.
 EmbeddingGemma can run inside CrewRun's existing QMD worker. Local chat/helper
@@ -212,7 +222,8 @@ Decide before coding:
    validate Windows isolation separately. Current verified execution is Linux-only.
 2. Evaluate safe incremental passage reuse across changed generations, cache cleanup,
    larger corpora and hardware-specific resource budgets; do not share role indexes.
-3. Decide local chat runtime independently from the embedded retrieval worker.
+3. ~~Decide local chat runtime independently from the embedded retrieval worker.~~
+   Decided: llama.cpp (Linux/Windows) and oMLX (macOS); see [Local models](local-models.md).
 4. Optional later API embeddings, query improvement/reranking and helper selector.
 5. Broaden relevance/performance fixtures beyond the initial document and synonym tests.
 

@@ -90,6 +90,20 @@ export function unlock(password) {
   return Object.keys(cache);
 }
 
+// Creates the sealed file up front (unlock alone defers the first write until a key is set),
+// so the console can show "Unlocked" immediately after the owner picks a password.
+export function createSecretStore(password) {
+  if (readBlob()) throw new Error("a secret store already exists; unlock it instead");
+  if (String(password ?? "").length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`choose a password of at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+  unlock(password);
+  persist();
+  return true;
+}
+
+export const MIN_PASSWORD_LENGTH = 8;
+
 export function lock() {
   restoreProviderEnv();
   cache = null;
@@ -179,14 +193,19 @@ export function secretValueForRunner(runner) {
     || "";
 }
 
+// Placeholder bearer for local model servers (llama.cpp, oMLX), which need no key.
+// Sending a token of our own stops the Claude runtime from falling back to the
+// owner's Claude subscription login and sending that token to the model server.
+export const LOCAL_ROUTE_TOKEN = "crewrun-local";
+
 // Anthropic-protocol routing: a runner with base_url speaks the Anthropic API at a
-// third-party or local endpoint (GLM, Kimi, Ollama, LM Studio, llama.cpp). The stored
-// key rides in ANTHROPIC_AUTH_TOKEN, as those vendors document for Claude Code;
-// local servers typically need no key, so a missing one only omits the token.
+// third-party or local endpoint (GLM, Kimi, OpenRouter, llama.cpp, oMLX). The stored
+// key rides in ANTHROPIC_AUTH_TOKEN, as those vendors document for Claude Code.
+// A keyed provider without a key gets no token here; the engine refuses to run it.
 export function anthropicRouteEnv(runner) {
   const baseUrl = String(runner?.base_url || "").trim();
   if (!baseUrl) return {};
-  const key = secretValueForRunner(runner);
+  const key = secretValueForRunner(runner) || (runner?.provider === "local" ? LOCAL_ROUTE_TOKEN : "");
   // ANTHROPIC_API_KEY is explicitly blanked so the Bearer token wins even when the operator
   // also stores a direct Anthropic key (OpenRouter's Claude Code guide requires this).
   return { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_API_KEY: "", ...(key ? { ANTHROPIC_AUTH_TOKEN: key } : {}) };

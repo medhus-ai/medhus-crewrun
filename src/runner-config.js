@@ -40,7 +40,7 @@ export const BUILT_IN_RUNNER_PROFILES = [
   codexAgentProfile("codex-agent-spark-medium", "Codex Code Spark · Medium", "code-spark", "medium"),
   codexAgentProfile("codex-agent-spark-low", "Codex Code Spark · Low", "code-spark", "low"),
   // Anthropic-protocol providers — the Claude engine with a base-URL override and
-  // the key from Settings → API Keys (both vendors document this integration).
+  // the key from Settings → Providers & credentials (both vendors document this integration).
   anthropicRouteProfile("glm-4.7", "GLM 4.7", "glm", GLM_ANTHROPIC_URL, "glm-4.7"),
   anthropicRouteProfile("kimi-k2.7", "Kimi K2.7 Code", "kimi", KIMI_ANTHROPIC_URL, "kimi-k2.7-code"),
   // OpenRouter: one key, many models. The auto-router alias is stable; concrete models are discovered.

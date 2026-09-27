@@ -39,6 +39,16 @@ VPN transport and application authentication, never a public-console option.
 | Outcome evaluation | Repeatable checks for factual grounding, recipient accuracy, completion, and correction effort |
 | Spending controls | Budget reservations and runtime enforcement beyond recorded-spend reporting |
 | Reviewed learning updates | Previews, rollback, and evaluation of proposed context or Skill changes |
+| Managed local models | Install the pinned llama.cpp or oMLX release, download supported models with verified hashes, start and stop the server, and size context from measured memory ([Local models](local-models.md)) |
+| Local model evaluation | Score each supported local model on the same governed agent tasks before recommending it |
+| Key store unlock | Unlock stored API keys at startup through the operating-system keychain or app sign-in instead of after every restart |
+| Tester release | Signed and notarized installers, auto-update, and a first-run guide: key store or local model, then a first crew |
+| Team templates | A gallery of reviewed crew presets with roles, contracts and schedules, plus workspace setup export and import |
+| Goals and reporting | Optional goals and reporting lines so agent results roll up to the outcome they serve |
+| Budget warnings | Warn at a configurable share of an agent's budget before the hard stop |
+| Private network models | Route roles to a local model on another computer in the private network, such as a GPU desktop |
+| Large-model mode | Evaluate streaming mixture-of-experts weights from disk so larger models run on small-memory machines |
+| Runtime interoperability | Evaluate a standard agent protocol so more agent runtimes can run under Crewrun contracts, and expose Crewrun as a governed runtime to other orchestrators |
 
 A representative workflow is a client operations brief: gather evidence, identify overdue
 commitments, prepare an update, obtain approval, and record the result. Start with one agent;

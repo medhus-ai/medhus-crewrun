@@ -48,9 +48,55 @@ or guarantee current formula results. Use authorized provider range reads for li
 spreadsheet calculations. Scanned PDFs needing OCR fail rather than claim a complete
 result. This release uses Docling's model-free native PDF pipeline, not OCR/VLM.
 
-Supported sources are local workspace files. This does **not** automatically sync
-Google Drive, Docs, Sheets or Microsoft files: existing provider tools remain
-separate, and connecting a provider does not start indexing or automation.
+Supported sources are local workspace files, including public web pages saved by
+**web sources** (below). This does **not** automatically sync Google Drive, Docs,
+Sheets or Microsoft files: existing provider tools remain separate, and connecting a
+provider does not start indexing or automation.
+
+## Web sources
+
+The owner can add public web pages and sitemaps under **Settings → Knowledge → Web
+sources**. The host fetches each source on its schedule (hourly, every 6 hours, daily or
+weekly) and saves every page as Markdown in `knowledge/sources/<source>/`. Search,
+embeddings, read grants and citations then work exactly as for any workspace file: an
+agent sees a saved page only if it may read that folder (the standard presets grant
+`workspace:knowledge/*`). Agents cannot add sources or choose addresses.
+
+- **Page**: one HTML, Markdown or plain-text address. **Sitemap**: a `sitemap.xml` (or a
+  sitemap index, one level deep) whose pages on the same host are saved, up to 100.
+- HTTPS on the standard port only; no credentials in the address. Every connection
+  resolves the host name and refuses loopback, private, link-local, carrier-grade NAT
+  (including Tailscale `100.64.0.0/10`) and other non-public addresses, including after
+  redirects. Up to five redirects; 2 MB per page, 5 MB per sitemap, 20 MB per refresh.
+- HTML is converted conservatively: scripts, styles, navigation, forms and footers are
+  dropped, links become absolute `http(s)` links, and code blocks keep their indentation.
+  Each file starts with the source address, fetch time and a note that it is external
+  content. Agents treat it as data, never instructions.
+- A page is rewritten only when its text changes, and requests reuse `ETag` and
+  `Last-Modified`, so unchanged pages do not invalidate indexes.
+- A failed refresh keeps every page from the last good refresh and retries within an
+  hour. Pages a sitemap stops listing are removed only after the sitemap itself was read.
+- **Remove** deletes only the pages the source saved; other files in its folder stay.
+- The source list is `.crew/knowledge-sources.json`; fetch status lives in the private
+  runtime database. At most 50 sources per workspace. `robots.txt` is not consulted, so
+  add only pages you are entitled to copy.
+
+## Incremental indexes (opt-in)
+
+By default every change to an agent's source set creates a new index generation and
+re-embeds the whole bounded corpus. Set `CREW_KNOWLEDGE_INCREMENTAL=1` in the host
+environment to keep one content-addressed QMD index per agent contract instead:
+
+- A changed file re-embeds only its own passages; unchanged passages keep their vectors.
+- Each source set (the files and revisions a request stages) gets its own ready marker, so
+  hybrid search stays exact: results come only from the files staged for that request.
+- A full-corpus build (no path selection) deletes passages and vectors of removed files;
+  narrower builds leave them in the private cache.
+- A marker whose vectors are gone is detected, deleted and rebuilt, with keyword fallback
+  meanwhile.
+
+Different agents and different contracts never share an index. The flag changes only the
+private cache layout; turn it off to return to per-generation indexes.
 
 ## Host setup
 
@@ -180,6 +226,10 @@ is separate from these keyword/parser checks; do not interpret passing them as
 verification of model downloads or semantic retrieval quality. `knowledge-models.test.js`
 also covers consent, redirects, hashes, cancellation, recovery and concurrent claims;
 the console tests cover setup controls and cross-origin rejection.
+
+`test/knowledge-sources.test.js` covers address and redirect checks, HTML conversion,
+unchanged-page skipping, failure retention, sitemap limits and symlink refusal with a fake
+transport; the incremental cache layout is covered in `test/workspace-knowledge.test.js`.
 
 QMD and Docling code are MIT-licensed; preserve their notices. Model weights have
 their own licenses. The npm lockfile pins QMD's dependency resolution; the Docling

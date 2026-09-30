@@ -28,6 +28,10 @@ test("knowledge setup uses existing settings forms and owner-only operations", a
     assert.equal(response.status, 303); assert.equal(actions[0].consent, true); assert.equal(actions[0].url, undefined);
     const blocked = await fetch(base + "/settings/knowledge", { method: "POST", headers: { Origin: "https://evil.test" }, body: new URLSearchParams({ action: "cancel" }) });
     assert.equal(blocked.status, 403); assert.equal(actions.length, 1);
+    const added = await fetch(base + "/settings/knowledge", { method: "POST", redirect: "manual", headers: { Origin: base }, body: new URLSearchParams({ action: "source_add", url: "https://docs.example.com/", kind: "sitemap", interval: "6", max_pages: "10" }) });
+    assert.equal(added.status, 303);
+    assert.deepEqual([actions[1].action, actions[1].url, actions[1].kind, actions[1].intervalHours, actions[1].maxPages], ["source_add", "https://docs.example.com/", "sitemap", 6, 10]);
+    assert.match(page, /Web sources/, "web sources are managed next to local search");
     const active = renderKnowledge({ specs: {}, operations: { knowledge: { ...state, busy: true, completed: 10, total: 100, status: "downloading", error: "<script>bad</script>" } } });
     assert.match(active, /Cancel job/); assert.match(active, /<progress/); assert.match(active, /&lt;script&gt;bad/);
   } finally { await console_.close(); await rm(parent, { recursive: true, force: true }); }

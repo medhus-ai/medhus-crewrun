@@ -7,6 +7,7 @@ import { normalizeRoleContract, scopeAllows } from "./role-contract.js";
 import { normalizeSchedule } from "./schedules.js";
 import { normalizeWorkspace, readWorkspace, resolveWorkspacePath, relativeWorkspacePath, WORKSPACE_FILE } from "./workspace-manifest.js";
 import { createWorkspaceKnowledge, isKnowledgeDocument } from "./workspace-knowledge.js";
+import { createKnowledgeSources } from "./knowledge-sources.js";
 import { listSkills } from "./skills.js";
 import { isEditableWorkspaceFile } from "./workspace-files.js";
 
@@ -55,7 +56,7 @@ export function scopeMatches(scopes, scope) {
 }
 export function canReadWorkspace(contract, relative) { return scopeMatches(contract?.authority.data.read, fileScope(relative)); }
 
-export function createWorkspaceTools({ targetRoot, store, governance, env = process.env, now = Date.now, knowledgeProcess, knowledgeInstallation }) {
+export function createWorkspaceTools({ targetRoot, store, governance, env = process.env, now = Date.now, knowledgeProcess, knowledgeInstallation, sourceTransport, log = () => {} }) {
   const { db, tx } = store;
   const knowledge = createWorkspaceKnowledge({ targetRoot, store, env, canRead: canReadWorkspace, contractFor: (role) => governance.contractFor(role), processRunner: knowledgeProcess, ...(knowledgeInstallation ? { installation: knowledgeInstallation } : {}) });
   db.exec(`CREATE TABLE IF NOT EXISTS workspace_proposals (
@@ -319,11 +320,13 @@ export function createWorkspaceTools({ targetRoot, store, governance, env = proc
     });
   }
   // Owner console operations, deliberately absent from WORK_TOOLS and MCP schemas.
+  const sources = createKnowledgeSources({ targetRoot, db, now, log, ...(sourceTransport ? { transport: sourceTransport } : {}) });
   const knowledgeAdmin = {
-    snapshot: knowledge.setup.snapshot, install: knowledge.setup.install,
+    snapshot: () => ({ ...knowledge.setup.snapshot(), sources: sources.list() }), install: knowledge.setup.install,
     configure: knowledge.setup.configure, cancel: knowledge.setup.cancel,
     build: ({ role, paths, rebuild = false }) => knowledge.build({ role, paths, rebuild, check: () => authorize(role, "workspace.search") }),
-    close: knowledge.close, idle: knowledge.setup.idle
+    addSource: sources.add, removeSource: sources.remove, refreshSource: sources.refresh, tickSources: sources.tick,
+    close: async () => { await sources.close(); await knowledge.close(); }, idle: knowledge.setup.idle
   };
   return { call, propose, decide, revise, saveManifest, listProposals, knowledge: knowledgeAdmin, recover: () => { for (const row of db.prepare("SELECT id FROM workspace_proposals WHERE status='applying'").all()) { try { apply(row.id); } catch { /* visible review error; do not overwrite a conflict */ } } } };
 }

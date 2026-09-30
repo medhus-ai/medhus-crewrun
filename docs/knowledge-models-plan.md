@@ -220,12 +220,20 @@ Decide before coding:
 
 1. Package inference/parser prerequisites into the desktop/headless installers;
    validate Windows isolation separately. Current verified execution is Linux-only.
-2. Evaluate safe incremental passage reuse across changed generations, cache cleanup,
-   larger corpora and hardware-specific resource budgets; do not share role indexes.
-3. ~~Decide local chat runtime independently from the embedded retrieval worker.~~
+2. Incremental passage reuse is implemented behind `CREW_KNOWLEDGE_INCREMENTAL=1`
+   (one content-addressed index per agent contract). Before making it the default, run the
+   live hybrid test with it on, and measure cache growth, larger corpora and resource budgets.
+   Role indexes stay unshared.
+3. Web sources (public pages and sitemaps saved to `knowledge/sources/`) are implemented.
+   Next: public Git repositories through the GitHub plugin, optional `robots.txt`, and
+   per-agent source folders.
+4. Use the embedder beyond workspace search: `skill.search` over skill descriptions,
+   near-duplicate checks for reflection and preference proposals, and search over accepted
+   task results.
+5. ~~Decide local chat runtime independently from the embedded retrieval worker.~~
    Decided: llama.cpp (Linux/Windows) and oMLX (macOS); see [Local models](local-models.md).
-4. Optional later API embeddings, query improvement/reranking and helper selector.
-5. Broaden relevance/performance fixtures beyond the initial document and synonym tests.
+6. Optional later API embeddings, query improvement/reranking and helper selector.
+7. Broaden relevance/performance fixtures beyond the initial document and synonym tests.
 
 Unit tests exercise consent, hashes, redirects, recovery, concurrent claims, console
 controls and authority rechecks. Opt-in tests perform a real pinned model download,

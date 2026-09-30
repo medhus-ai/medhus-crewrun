@@ -538,7 +538,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (pathname === "/settings/knowledge") return callOperation(["knowledgeAction"], {
       action: String(form.action || ""), consent: form.consent === "1", enabled: form.enabled === "1",
       fallback: form.fallback === "1", role: String(form.role || ""),
-      paths: String(form.paths || "").trim() ? lines(form.paths) : undefined, rebuild: form.rebuild === "1"
+      paths: String(form.paths || "").trim() ? lines(form.paths) : undefined, rebuild: form.rebuild === "1",
+      ...(String(form.action || "").startsWith("source_") ? { id: String(form.id || ""), url: String(form.url || ""), kind: String(form.kind || "page"),
+        intervalHours: Number(form.interval || 24), maxPages: Number(form.max_pages || 25) } : {})
     }, "/settings?tab=knowledge");
     if (pathname === "/workspace/revise") {
       const changes = Object.keys(form).filter((key) => /^path_\d+$/.test(key)).map((key) => ({ path: form[key], content: form[key.replace("path_", "content_")] }));

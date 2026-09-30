@@ -40,6 +40,7 @@ export function createWorkspaceKnowledge({ targetRoot, store, env = process.env,
   const setup = createKnowledgeModels({ store, env, processRunner, installation });
   const models = setup.directory;
   const fingerprint = digest([KNOWLEDGE_VERSIONS, EMBEDDING_MODEL.sha256, "lex-vec-no-rerank"]);
+  const incremental = env.CREW_KNOWLEDGE_INCREMENTAL === "1";
   const privateDir = (directory) => { mkdirSync(directory, { recursive: true, mode: 0o700 }); return directory; };
   function checkCacheSize(directory) {
     let bytes = 0, entries = 0;
@@ -157,10 +158,17 @@ export function createWorkspaceKnowledge({ targetRoot, store, env = process.env,
       if (!files.length) return { engine: "qmd", mode, requestedMode, ...(fallbackReason ? { degraded: true, fallbackReason } : {}), matches: [], truncated, indexedFiles: 0 };
       // A content + contract generation cannot contain another role's files or old permissions.
       // flock in the child serializes concurrent workers; unchanged generations reuse embeddings.
-      const generation = privateDir(path.join(roleDir, digest([fingerprint, [...revisions]])));
-      const vectorCache = privateDir(path.join(generation, "hybrid"));
+      // With CREW_KNOWLEDGE_INCREMENTAL=1 each agent contract instead keeps one content-addressed
+      // QMD index: a changed file re-embeds only its own passages, and every source set records
+      // its own ready marker. Searches still return only the files staged for this request.
+      const generationId = digest([fingerprint, [...revisions]]);
+      const shared = incremental ? privateDir(path.join(roleDir, "incremental")) : null;
+      const generation = incremental ? null : privateDir(path.join(roleDir, generationId));
+      const vectorCache = privateDir(incremental ? path.join(shared, `hybrid-${fingerprint.slice(0, 16)}`) : path.join(generation, "hybrid"));
       const embedded = path.join(vectorCache, "embedded");
-      if (mode === "hybrid" && !indexJob && (!existsSync(embedded) || readFileSync(embedded, "utf8") !== fingerprint)) {
+      const ready = () => incremental ? existsSync(path.join(vectorCache, "ready", generationId))
+        : existsSync(embedded) && readFileSync(embedded, "utf8") === fingerprint;
+      const pending = () => {
         // Queue only one bounded job. Its new source snapshot and current grants are
         // checked again; no unrestricted whole-workspace index exists.
         if (!settings.busy && !["failed", "cancelled", "interrupted — retry"].includes(settings.status)) {
@@ -168,13 +176,15 @@ export function createWorkspaceKnowledge({ targetRoot, store, env = process.env,
         }
         if (!settings.fallback) throw new Error("Embedding index is not ready. Build it in Settings → Knowledge or enable keyword fallback.");
         mode = "keyword"; fallbackReason = "Embedding index is pending; using keyword search. See Settings → Knowledge.";
-      }
+      };
+      if (mode === "hybrid" && !indexJob && !ready()) pending();
       const execute = async () => {
         writeFileSync(path.join(job, "request.json"), JSON.stringify({ query: input.query, mode, limit: 10, fingerprint,
-          build: !!indexJob, indexOnly: !!indexJob, rebuild: !!indexJob?.rebuild }), { mode: 0o600 });
+          build: !!indexJob, indexOnly: !!indexJob, rebuild: !!indexJob?.rebuild,
+          ...(incremental ? { incremental: true, generation: generationId, cleanup: !!indexJob && input.paths == null } : {}) }), { mode: 0o600 });
         // Keep lexical reads off the embedding writer's flock, so fallback does
         // not wait behind a long build. Both indexes stage the same scoped bytes.
-        const cache = mode === "hybrid" ? vectorCache : privateDir(path.join(generation, "keyword"));
+        const cache = mode === "hybrid" ? vectorCache : privateDir(path.join(incremental ? shared : generation, "keyword"));
         return processRunner({ kind: "qmd", job, cache, models, installation, signal: indexJob?.signal,
           onProgress: indexJob ? ({ completed, total }) => { recheck(); indexJob.check(); indexJob.update("indexing", completed, total); } : undefined });
       };
@@ -187,6 +197,12 @@ export function createWorkspaceKnowledge({ targetRoot, store, env = process.env,
         result = await execute();
       }
       recheck();
+      if (incremental && result.pending === true && mode === "hybrid" && !indexJob) {
+        // The ready marker outlived some of its vectors (for example after cleanup): rebuild.
+        pending();
+        result = await execute();
+        recheck();
+      }
       if (!Array.isArray(result.matches) || result.matches.length > 10) throw new Error("Invalid QMD result.");
       const matches = result.matches.map((match) => {
         const file = ids.get(match.id);

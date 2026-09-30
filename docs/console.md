@@ -14,7 +14,7 @@ at the bottom of the sidebar. The Inbox item shows how many items need the owner
 | Activity | Read-only Agent actions and Integration events; search the retained safe metadata. |
 | Chats | Resumed agent conversations, also accessible from recent chats in the sidebar. |
 | Usage | Recorded costs, estimates, and accepted outcomes. Spending appears only here. |
-| Settings | Providers & credentials (encrypted key store: create, unlock, add or remove API keys), Local models (hardware check, recommended model, connect a llama.cpp or oMLX server), Knowledge, and host configuration status. |
+| Settings | Providers & credentials (encrypted key store: create, unlock, add or remove API keys), Local models (hardware check, recommended model, connect a llama.cpp or oMLX server), Knowledge (local search model, agent indexes, and web sources: public pages and sitemaps saved as Markdown in `knowledge/sources/` on a schedule), and host configuration status. |
 
 A scheduled task is a definition; its executions appear in the Inbox. A verified integration
 event becomes work only when an enabled, authorized event rule routes it. Activity links

@@ -297,6 +297,41 @@ test("hybrid returns visible keyword fallback until a scoped background index is
   await f.workspace.knowledge.idle();
 });
 
+test("incremental indexes keep one cache per agent contract and mark each source set ready", async (t) => {
+  let stale = false;
+  const f = fixture(t, async (options) => {
+    const input = JSON.parse(readFileSync(path.join(options.job, "request.json")));
+    assert.equal(input.incremental, true); assert.match(input.generation, /^[0-9a-f]{64}$/);
+    if (input.build) {
+      mkdirSync(path.join(options.cache, "ready"), { recursive: true });
+      writeFileSync(path.join(options.cache, "ready", input.generation), input.fingerprint);
+    }
+    if (stale && input.mode === "hybrid" && !input.build) { stale = false; return { matches: [], pending: true }; }
+    return { matches: [] };
+  }, { CREW_KNOWLEDGE_INCREMENTAL: "1" });
+  fakeInstalled(f);
+  assert.equal((await f.call("workspace.search", { query: "budget" })).degraded, true);
+  await f.workspace.knowledge.idle();
+  assert.equal((await f.call("workspace.search", { query: "budget" })).mode, "hybrid");
+  writeFileSync(path.join(f.root, "knowledge/assistant/note.md"), "Changed budget");
+  assert.equal((await f.call("workspace.search", { query: "budget" })).degraded, true, "a changed source set waits for its own marker");
+  await f.workspace.knowledge.idle();
+  assert.equal((await f.call("workspace.search", { query: "budget" })).mode, "hybrid");
+  const hybrid = f.calls.filter((call) => call.cache?.includes("hybrid-"));
+  assert.ok(hybrid.length >= 4);
+  assert.equal(new Set(hybrid.map((call) => call.cache)).size, 1, "every generation reuses the agent's content-addressed index");
+  stale = true;
+  const recovered = await f.call("workspace.search", { query: "budget" });
+  assert.equal(recovered.degraded, true); assert.match(recovered.fallbackReason, /pending/);
+  await f.workspace.knowledge.idle();
+  const before = f.calls.length;
+  const peer = await f.call("workspace.search", { query: "budget" }, "peer");
+  assert.equal(peer.degraded, true, "another agent never inherits this agent's index or markers");
+  await f.workspace.knowledge.idle();
+  const peerCaches = f.calls.slice(before).map((call) => call.cache).filter(Boolean);
+  assert.ok(peerCaches.length && peerCaches.every((cache) => !cache.startsWith(path.dirname(path.dirname(hybrid[0].cache)))));
+});
+
 test("missing models fall back visibly or fail according to owner choice, never grant setup tools", async (t) => {
   const f = fixture(t);
   const result = await f.call("workspace.search", { query: "budget", mode: "hybrid" });

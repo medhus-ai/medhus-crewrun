@@ -151,7 +151,8 @@ export function createIntegrationHost({
 
   const operations = {
     knowledgeAction: ({ action, ...options }) => {
-      const allowed = { install: "install", configure: "configure", cancel: "cancel", build: "build" };
+      const allowed = { install: "install", configure: "configure", cancel: "cancel", build: "build",
+        source_add: "addSource", source_refresh: "refreshSource", source_remove: "removeSource" };
       if (!Object.hasOwn(allowed, action)) throw new Error("Unknown knowledge action.");
       runtime.workspace.knowledge[allowed[action]](options);
       return "/settings?tab=knowledge";
@@ -353,6 +354,8 @@ export function createIntegrationHost({
       // dedupe keys keep a recovery pass from creating a second agent turn.
       await recoverInboundEvents();
       await renewSubscriptions();
+      // Starts at most one due web-source refresh in the background; never blocks the tick.
+      runtime.workspace.knowledge.tickSources?.()?.catch?.((error) => log(`[knowledge] web source refresh failed: ${safeError(error)}`));
       await runtime.tick();
     },
     async stop() {

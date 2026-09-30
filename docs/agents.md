@@ -44,22 +44,20 @@ and budget settings can only become stricter. See [Permissions and approvals](go
 
 Keep reusable procedures in [Skills](learning.md), and recurring work in [Scheduling](scheduling.md).
 
+## Collaboration
+
+`crew.roster` is a read-only, governed agent directory. It reports each agent's reviewed responsibility, applicable Skills, high-level tool capabilities, and whether a two-way handoff is eligible. Use `task.delegate` only for an eligible peer; the child task is auditable and does not inherit authority. Agents must complete work only within their own contract.
+
 ## Web access
 
-Web access is off by default. Set `"web": true` for open access, or restrict domains:
+New workspaces and agents receive free, best-effort DuckDuckGo search and public-page fetching by default. Existing agents keep their current setting until their versioned contract explicitly grants the tools. Set `"web": false` to turn it off, or restrict domains:
 
 ```json
 { "web": { "allow": ["docs.example.com", "*.example.org"], "search": true, "max_chars": 40000 } }
 ```
 
-Crewrun uses native web tools when the engine can honor the requested access. Otherwise it
-provides `web.fetch` and `web.search`; fetch rejects private addresses and rechecks redirects.
-A domain allowlist uses fallback tools for Codex because its native search cannot enforce it.
-This setting governs exposed web tools; it is not a network sandbox for arbitrary native commands.
+Web tools use the governed MCP bridge: `web.search` returns DuckDuckGo results and `web.fetch` reads a selected public page. Fetch rejects private addresses and rechecks redirects; grant the relevant tools and data authority in the agent contract as well as enabling web. Future paid search providers will be host-configured and return the same bounded result format—agent contracts never hold provider credentials.
+This setting does not constrain the privileged shell agent's native commands.
 
-## Existing Roles projects
-
-Existing `.crew/roles` files, `role` fields, role-named library exports, `/roles` bookmarks,
-and `crewrun roles check` remain supported. Existing files are edited in place.
-If both directories define an agent, the `.crew/agents` definition wins. Shared defaults fall
-back to the legacy folder, and duplicate definitions do not produce duplicate schedules.
+Agent definitions must be JSON in `.crew/agents`. Markdown is context, not a
+definition; old role folders and schedule keys need [explicit migration](v6-migration.md).

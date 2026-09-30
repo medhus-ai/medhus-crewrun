@@ -1,0 +1,2 @@
+# Model-free Office and native PDF conversion; no Torch/OCR/VLM stack.
+docling-slim[format-office,format-pdf,convert-core]==2.126.0

@@ -1,0 +1,29 @@
+{
+  "name": "@medhus-ai/crewrun-plugin-sdk",
+  "version": "0.6.0",
+  "description": "Versioned integration-plugin contracts for CrewRun hosts.",
+  "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",
+  "bugs": {
+    "url": "https://github.com/medhus-ai/medhus-crewrun/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medhus-ai/medhus-crewrun.git",
+    "directory": "packages/crewrun-plugin-sdk"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./index.js",
+  "files": [
+    "*.js",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

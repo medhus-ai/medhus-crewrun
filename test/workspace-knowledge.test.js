@@ -1,0 +1,352 @@
+import assert from "node:assert/strict";
+import nodeTest from "node:test";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, symlinkSync, linkSync, rmSync, truncateSync, copyFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { initializeWorkspace } from "../src/workspace-setup.js";
+import { createRuntimeStore } from "../src/runtime-store.js";
+import { createRoleGovernance } from "../src/role-contract.js";
+import { loadRoleSpec } from "../src/role-spec.js";
+import { createWorkspaceTools, WORK_TOOLS, workToolSchema } from "../src/workspace-tools.js";
+import { createMcpBridge } from "../src/mcp.js";
+import { knowledgeInstallation, knowledgeSandboxArgs } from "../src/knowledge-process.js";
+import { readKnowledgeSource } from "../src/workspace-knowledge.js";
+import { EMBEDDING_MODEL, verifyModel } from "../src/knowledge-models.js";
+import { z } from "zod";
+
+// Descriptor-relative reads and the verified parser sandbox are Linux-only.
+const test = (name, options, fn) => typeof options === "function"
+  ? nodeTest(name, { skip: process.platform !== "linux" }, options)
+  : nodeTest(name, { ...options, skip: process.platform !== "linux" }, fn);
+
+function fixture(t, processRunner, extraEnv = {}) {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "crew-knowledge-test-"));
+  const root = path.join(directory, "workspace");
+  const env = { CREW_HOME: path.join(directory, "private"), ...extraEnv };
+  initializeWorkspace(root);
+  const contracts = {};
+  for (const role of ["assistant", "peer"]) {
+    const spec = loadRoleSpec(root, "assistant");
+    contracts[role] = structuredClone(spec.contract);
+    contracts[role].authority.data.read = [`workspace:knowledge/${role}/*`];
+    mkdirSync(path.join(root, "knowledge", role), { recursive: true });
+    writeFileSync(path.join(root, "knowledge", role, "note.md"), `# ${role}\nThe ${role} budget is confidential.`);
+  }
+  const store = createRuntimeStore({ targetRoot: root, env });
+  const governance = createRoleGovernance({ targetRoot: root, env, requireContracts: true, getContract: (role) => contracts[role] });
+  const calls = [];
+  const mock = async (options) => {
+    calls.push(options);
+    assert.equal(store.db.inTransaction, false, "subprocess must not hold runtime transaction");
+    if (processRunner) return processRunner(options, { contracts, root, calls });
+    if (options.kind === "docling") return { content: "# Extracted\nOffice budget", references: [{ ref: "#/tables/0", pages: [1] }] };
+    return { matches: readdirSync(path.join(options.job, "sources")).slice(0, 10).map((id) => ({ id, excerpt: readFileSync(path.join(options.job, "sources", id), "utf8"), line: 1, score: 1 })) };
+  };
+  // A mocked worker describes governance logic on any Linux host; the real worker keeps host detection.
+  const workspace = createWorkspaceTools({ targetRoot: root, store, governance, env, knowledgeProcess: processRunner === null ? undefined : mock,
+    knowledgeInstallation: processRunner === null ? undefined : { sandbox: true, qmd: true, docling: true, modules: "", venv: "" } });
+  t.after(async () => { await workspace.knowledge.close(); store.close(); rmSync(directory, { recursive: true, force: true }); });
+  const call = (toolName, input, role = "assistant", context = {}) => workspace.call({ role, toolName, input, context });
+  return { directory, root, store, governance, contracts, workspace, calls, call };
+}
+
+test("QMD stages only the acting agent's sources before indexing and maps citations back", async (t) => {
+  const f = fixture(t);
+  const a = await f.call("workspace.search", { query: "budget" });
+  const b = await f.call("workspace.search", { query: "budget" }, "peer");
+  assert.equal(a.engine, "qmd");
+  assert.equal(a.indexedFiles, 1);
+  assert.equal(a.matches[0].path, "knowledge/assistant/note.md");
+  assert.match(a.matches[0].excerpt, /assistant/);
+  assert.doesNotMatch(JSON.stringify(a), /peer/);
+  assert.equal(b.matches[0].path, "knowledge/peer/note.md");
+  assert.notEqual(f.calls[0].cache, f.calls[1].cache);
+  assert.deepEqual(readdirSync(path.join(path.dirname(f.store.file), "knowledge/jobs")), []);
+});
+
+test("explicit forbidden paths, traversal, symlinks and hard links fail before parsing", async (t) => {
+  const f = fixture(t);
+  await assert.rejects(f.call("workspace.search", { query: "budget", paths: ["knowledge/peer/note.md"] }), /authority/);
+  await assert.rejects(f.call("workspace.search", { query: "budget", paths: ["knowledge/assistant/../../secret.md"] }), /relative/);
+  symlinkSync(path.join(f.root, "knowledge/peer/note.md"), path.join(f.root, "knowledge/assistant/escape.md"));
+  await assert.rejects(f.call("workspace.search", { query: "budget", paths: ["knowledge/assistant/escape.md"] }), /ELOOP/);
+  symlinkSync(path.join(f.root, "knowledge/peer"), path.join(f.root, "knowledge/assistant/linked"));
+  assert.throws(() => readKnowledgeSource(f.root, "knowledge/assistant/linked/note.md"));
+  linkSync(path.join(f.root, "knowledge/peer/note.md"), path.join(f.root, "knowledge/assistant/hard.md"));
+  assert.throws(() => readKnowledgeSource(f.root, "knowledge/assistant/hard.md"), /unlinked/);
+  assert.equal(f.calls.length, 0);
+});
+
+test("authority revocation, deletion and changed bytes during retrieval invalidate the whole response", async (t) => {
+  for (const change of ["authority", "delete", "content"]) {
+    const f = fixture(t, async (options, { contracts, root }) => {
+      if (change === "authority") contracts.assistant.authority.data.read = [];
+      if (change === "delete") rmSync(path.join(root, "knowledge/assistant/note.md"));
+      if (change === "content") writeFileSync(path.join(root, "knowledge/assistant/note.md"), "Changed");
+      return { matches: [] };
+    });
+    await assert.rejects(f.call("workspace.search", { query: "budget" }), /authority changed|removed|ENOENT/);
+  }
+});
+
+test("old knowledge generations are never reused after contract or source changes", async (t) => {
+  const f = fixture(t);
+  await f.call("workspace.search", { query: "budget" });
+  await f.call("workspace.search", { query: "budget" });
+  assert.equal(f.calls[0].cache, f.calls[1].cache);
+  f.contracts.assistant.revision++;
+  await f.call("workspace.search", { query: "budget" });
+  assert.notEqual(f.calls[1].cache, f.calls[2].cache);
+  writeFileSync(path.join(f.root, "knowledge/assistant/note.md"), "New budget");
+  await f.call("workspace.search", { query: "budget" });
+  assert.notEqual(f.calls[2].cache, f.calls[3].cache);
+});
+
+test("Docling reads are paginated, cached, scoped and audited with source revisions", async (t) => {
+  const f = fixture(t);
+  writeFileSync(path.join(f.root, "knowledge/assistant/budget.xlsx"), "fake office fixture");
+  await assert.rejects(f.call("workspace.read", { path: "knowledge/peer/budget.xlsx" }), /authority/);
+  const run = f.store.enqueue({ agent: "assistant", prompt: "Read the budget" });
+  const claim = f.store.claimRun(run.id);
+  const ctx = { runId: run.id, runLease: claim.lease };
+  const first = await f.call("workspace.read", { path: "knowledge/assistant/budget.xlsx", limit: 4 }, "assistant", ctx);
+  const next = await f.call("workspace.read", { path: first.path, offset: first.nextOffset });
+  assert.equal(first.content, "# Ex");
+  assert.equal(next.content, "tracted\nOffice budget");
+  assert.equal(first.engine, "docling");
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.store.db.prepare("SELECT data FROM runtime_events WHERE type='tool.completed'").all().some((r) => r.data.includes(first.revision)));
+});
+
+test("ordinary Office filenames with spaces and Unicode preserve exact and folder authority", async (t) => {
+  const f = fixture(t);
+  const file = "knowledge/assistant/Launch Budget (été) 2026.xlsx";
+  writeFileSync(path.join(f.root, file), "fixture");
+  const result = await f.call("workspace.read", { path: file });
+  assert.equal(result.path, file);
+  assert.ok(f.governance.audit.list().some((entry) => entry.data.read.includes(`workspace:${file.toLowerCase()}`)));
+  f.contracts.assistant.authority.data.read = [`workspace:${file.toLowerCase()}`];
+  assert.equal((await f.call("workspace.read", { path: file })).engine, "docling");
+  await assert.rejects(f.call("workspace.read", { path: "knowledge/assistant/Other Budget.xlsx" }), /authority/);
+  await assert.rejects(f.call("workspace.read", { path: file }, "peer"), /authority/);
+});
+
+test("MCP exposes the existing scoped tools to both roles and rechecks tool revocation", async (t) => {
+  const f = fixture(t);
+  const bridge = createMcpBridge({ serverName: "knowledge", crewTools: false, governance: f.governance, toolsForRole: () => ["workspace.search", "workspace.read"], describe: (n) => WORK_TOOLS[n], inputSchema: workToolSchema, actionPolicy: () => ({ impact: "read" }), call: f.workspace.call });
+  // Use the real Claude MCP registration surface; the common bridge also backs Codex.
+  const sdk = { z, tool: (name, description, schema, invoke) => ({ name, invoke }), createSdkMcpServer: (s) => s };
+  for (const role of ["assistant", "peer"]) {
+    const mcp = bridge.createClaudeMcp({ sdk, role, targetRoot: f.root });
+    assert.equal(mcp.server.tools.length, 2);
+    const handler = mcp.server.tools.find((h) => h.name === "workspace_search");
+    const result = await handler.invoke({ query: "budget" });
+    assert.equal(result.structuredContent.matches[0].path, `knowledge/${role}/note.md`);
+    f.contracts[role].authority.tools = [];
+    assert.equal((await handler.invoke({ query: "budget" })).isError, true);
+  }
+});
+
+test("invalid backend references, excessive input and unconfigured semantic search fail closed", async (t) => {
+  const f = fixture(t, async () => ({ matches: [{ id: "outside.md", excerpt: "private", line: 1 }] }));
+  await assert.rejects(f.call("workspace.search", { query: "budget" }), /outside this request/);
+  await assert.rejects(f.call("workspace.search", { query: "x".repeat(501) }), /1–500/);
+  f.workspace.knowledge.configure({ enabled: false, fallback: false });
+  await assert.rejects(f.call("workspace.search", { query: "budget", mode: "hybrid" }), /owner-installed/);
+  assert.equal((await f.call("workspace.search", { query: "budget", mode: "literal" })).engine, "literal");
+});
+
+test("hybrid search uses the same scoped staging and honors task lease rechecks", async (t) => {
+  const f = fixture(t, async (options, { root }) => {
+    assert.equal(JSON.parse(readFileSync(path.join(options.job, "request.json"))).mode, "keyword", "uninstalled embeddings explicitly fall back before lease recheck");
+    const files = readdirSync(path.join(options.job, "sources"));
+    assert.equal(files.length, 1);
+    assert.doesNotMatch(readFileSync(path.join(options.job, "sources", files[0]), "utf8"), /peer/);
+    f.store.controlRun(run.id, "cancel");
+    return { matches: [] };
+  });
+  const run = f.store.enqueue({ agent: "assistant", prompt: "Find relevant knowledge" });
+  const claim = f.store.claimRun(run.id);
+  await assert.rejects(f.call("workspace.search", { query: "budget", mode: "hybrid" }, "assistant", { runId: run.id, runLease: claim.lease }), /lease|active|cancel|context/);
+});
+
+test("sandbox mounts only staged data, one index and code; no ambient credentials or network", () => {
+  const args = knowledgeSandboxArgs({ kind: "qmd", job: "/tmp/staged", cache: "/tmp/index", installation: { sandbox: true, qmd: true, modules: "/trusted/node_modules" } });
+  assert.ok(args.includes("--unshare-all"));
+  assert.ok(args.includes("--clearenv"));
+  assert.ok(args.includes("/usr/bin/flock"));
+  assert.ok(args.includes("/tmp/staged"));
+  assert.ok(!args.includes(process.env.HOME));
+  assert.ok(!args.includes("--share-net"));
+  assert.throws(() => knowledgeSandboxArgs({ kind: "qmd", installation: { sandbox: false } }), /No unsandboxed fallback/);
+});
+
+function createLiveDocuments(f) {
+  const installation = knowledgeInstallation();
+  const generated = spawnSync(path.join(installation.venv, "bin/python"), ["-c", "from docx import Document; from openpyxl import Workbook; from pptx import Presentation; import sys; from pathlib import Path; p=Path(sys.argv[1]); d=Document(); d.add_heading('Launch plan',0); d.add_paragraph('The approved launch budget is 2400 dollars.'); d.save(p/'plan.docx'); w=Workbook(); w.active.title='Forecast'; w.active.append(['Item','Budget']); w.active.append(['Launch',2400]); w.save(p/'budget.xlsx'); slides=Presentation(); slide=slides.slides.add_slide(slides.slide_layouts[0]); slide.shapes.title.text='Launch budget 2400'; slides.save(p/'budget.pptx')", path.join(f.root, "knowledge/assistant")], { encoding: "utf8" });
+  assert.equal(generated.status, 0, generated.stderr);
+  writeFileSync(path.join(f.root, "knowledge/assistant/budget.csv"), "Item,Budget\nLaunch,2400\n");
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  const stream = "BT /F1 12 Tf 72 720 Td (Launch budget 2400 dollars) Tj ET";
+  objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [i, object] of objects.entries()) { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${object}\nendobj\n`; }
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((n) => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  writeFileSync(path.join(f.root, "knowledge/assistant/budget.pdf"), pdf);
+}
+
+test("live local QMD and Docling: real Markdown, Word, Excel and PDF through the governed bridge", { timeout: 180000 }, async (t) => {
+  if (process.env.CREW_LIVE_KNOWLEDGE !== "1") return t.skip("set CREW_LIVE_KNOWLEDGE=1 after installing local QMD, Docling and bubblewrap");
+  const f = fixture(t, null);
+  createLiveDocuments(f);
+  const qmd = await f.call("workspace.search", { query: "budget", paths: ["knowledge/assistant/note.md"] });
+  assert.equal(qmd.matches[0].path, "knowledge/assistant/note.md");
+  for (const file of ["plan.docx", "budget.xlsx", "budget.pptx", "budget.csv", "budget.pdf"]) {
+    const read = await f.call("workspace.read", { path: `knowledge/assistant/${file}` });
+    assert.match(read.content, /2400/);
+    assert.equal(read.engine, "docling");
+  }
+  const combined = await f.call("workspace.search", { query: "budget" });
+  assert.ok(combined.matches.some((m) => m.path.endsWith("plan.docx")));
+  assert.ok(combined.matches.some((m) => m.path.endsWith("budget.xlsx")));
+  assert.doesNotMatch(JSON.stringify(combined), /peer/);
+  const [one, two] = await Promise.all([f.call("workspace.search", { query: "budget" }), f.call("workspace.search", { query: "budget" })]);
+  assert.deepEqual(one.matches, two.matches);
+});
+
+test("live parser sandbox denies host files, host secrets, writes to sources and network", { timeout: 20000 }, async (t) => {
+  if (process.env.CREW_LIVE_KNOWLEDGE !== "1") return t.skip("set CREW_LIVE_KNOWLEDGE=1 to exercise real Linux isolation");
+  const f = fixture(t);
+  const job = path.join(f.directory, "staged");
+  const cache = path.join(f.directory, "index");
+  mkdirSync(job); mkdirSync(cache);
+  writeFileSync(path.join(job, "source.md"), "Authorized fixture");
+  const args = knowledgeSandboxArgs({ kind: "qmd", job, cache, installation: knowledgeInstallation() });
+  args.splice(args.indexOf("/usr/bin/flock"));
+  args.push("/runtime/node", "--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import net from 'node:net';
+    assert.equal(process.env.TEST_HOST_SECRET, undefined);
+    assert.equal(fs.existsSync(${JSON.stringify(f.root)}), false);
+    assert.equal(fs.existsSync('/etc/passwd'), false);
+    assert.equal(fs.readFileSync('/work/source.md','utf8'), 'Authorized fixture');
+    assert.throws(()=>fs.writeFileSync('/work/source.md','overwrite'));
+    await new Promise((resolve,reject)=>{ const socket=net.connect(443,'1.1.1.1'); socket.on('connect',()=>{socket.destroy();reject(new Error('Network allowed'));}); socket.on('error',resolve); socket.setTimeout(2000,()=>{socket.destroy();reject(new Error('Network probe timed out'));}); });
+    console.log('isolated');
+  `);
+  const result = spawnSync("/usr/bin/bwrap", args, { env: { TEST_HOST_SECRET: "must-not-inherit" }, encoding: "utf8", timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /isolated/);
+  assert.equal(readFileSync(path.join(job, "source.md"), "utf8"), "Authorized fixture");
+});
+
+test("live QMD hybrid retrieval with only the pinned embedding model", { timeout: 190000 }, async (t) => {
+  if (process.env.CREW_LIVE_KNOWLEDGE_HYBRID !== "1") return t.skip("set CREW_LIVE_KNOWLEDGE_HYBRID=1 and CREW_TEST_EMBEDDING_FILE to a verified EmbeddingGemma file");
+  const f = fixture(t, null);
+  await verifyModel(process.env.CREW_TEST_EMBEDDING_FILE);
+  const dir = path.join(path.dirname(f.store.file), "knowledge-models");
+  mkdirSync(dir, { recursive: true }); copyFileSync(process.env.CREW_TEST_EMBEDDING_FILE, path.join(dir, EMBEDDING_MODEL.file));
+  f.workspace.knowledge.install({ consent: true });
+  await f.workspace.knowledge.idle();
+  assert.equal(f.workspace.knowledge.snapshot().ready, true, JSON.stringify(f.workspace.knowledge.snapshot()));
+  createLiveDocuments(f);
+  writeFileSync(path.join(f.root, "knowledge/assistant/unrelated.md"), "# Astronomy\nSaturn has rings and many moons.");
+  f.workspace.knowledge.build({ role: "assistant" });
+  await f.workspace.knowledge.idle();
+  assert.equal(f.workspace.knowledge.snapshot().status, "indexed");
+  const result = await f.call("workspace.search", { query: "budget", mode: "hybrid" });
+  assert.equal(result.mode, "hybrid");
+  assert.ok(result.matches.some((match) => match.path.endsWith("budget.xlsx")));
+  assert.ok(result.matches.some((match) => match.path.endsWith("plan.docx")));
+  assert.doesNotMatch(JSON.stringify(result), /peer/);
+  const query = "release financial allocation";
+  const keyword = await f.call("workspace.search", { query, mode: "keyword" });
+  const semantic = await f.call("workspace.search", { query });
+  assert.equal(keyword.matches.length, 0);
+  assert.ok(semantic.matches.slice(0, 3).some((match) => /2400/.test(match.excerpt)), "semantic search retrieves the budget without keyword overlap");
+  assert.equal(semantic.degraded, undefined);
+});
+
+function fakeInstalled(f) {
+  const dir = path.join(path.dirname(f.store.file), "knowledge-models");
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, EMBEDDING_MODEL.file);
+  writeFileSync(file, "test"); truncateSync(file, EMBEDDING_MODEL.bytes);
+  f.store.db.prepare("UPDATE knowledge_setup SET ready=?,enabled=1").run(EMBEDDING_MODEL.sha256);
+}
+
+test("hybrid returns visible keyword fallback until a scoped background index is ready", async (t) => {
+  const f = fixture(t, async (options) => {
+    const input = JSON.parse(readFileSync(path.join(options.job, "request.json")));
+    if (input.build) writeFileSync(path.join(options.cache, "embedded"), input.fingerprint);
+    return { matches: [] };
+  });
+  fakeInstalled(f);
+  const first = await f.call("workspace.search", { query: "budget" });
+  assert.equal(first.mode, "keyword"); assert.equal(first.degraded, true);
+  await f.workspace.knowledge.idle();
+  assert.equal(f.workspace.knowledge.snapshot().status, "indexed");
+  assert.notEqual(f.calls[0].cache, f.calls[1].cache, "keyword fallback must not wait on the embedding writer's index lock");
+  assert.equal((await f.call("workspace.search", { query: "budget" })).mode, "hybrid");
+  writeFileSync(path.join(f.root, "knowledge/assistant/note.md"), "Changed budget");
+  assert.equal((await f.call("workspace.search", { query: "budget" })).degraded, true);
+  await f.workspace.knowledge.idle();
+});
+
+test("incremental indexes keep one cache per agent contract and mark each source set ready", async (t) => {
+  let stale = false;
+  const f = fixture(t, async (options) => {
+    const input = JSON.parse(readFileSync(path.join(options.job, "request.json")));
+    assert.equal(input.incremental, true); assert.match(input.generation, /^[0-9a-f]{64}$/);
+    if (input.build) {
+      mkdirSync(path.join(options.cache, "ready"), { recursive: true });
+      writeFileSync(path.join(options.cache, "ready", input.generation), input.fingerprint);
+    }
+    if (stale && input.mode === "hybrid" && !input.build) { stale = false; return { matches: [], pending: true }; }
+    return { matches: [] };
+  }, { CREW_KNOWLEDGE_INCREMENTAL: "1" });
+  fakeInstalled(f);
+  assert.equal((await f.call("workspace.search", { query: "budget" })).degraded, true);
+  await f.workspace.knowledge.idle();
+  assert.equal((await f.call("workspace.search", { query: "budget" })).mode, "hybrid");
+  writeFileSync(path.join(f.root, "knowledge/assistant/note.md"), "Changed budget");
+  assert.equal((await f.call("workspace.search", { query: "budget" })).degraded, true, "a changed source set waits for its own marker");
+  await f.workspace.knowledge.idle();
+  assert.equal((await f.call("workspace.search", { query: "budget" })).mode, "hybrid");
+  const hybrid = f.calls.filter((call) => call.cache?.includes("hybrid-"));
+  assert.ok(hybrid.length >= 4);
+  assert.equal(new Set(hybrid.map((call) => call.cache)).size, 1, "every generation reuses the agent's content-addressed index");
+  stale = true;
+  const recovered = await f.call("workspace.search", { query: "budget" });
+  assert.equal(recovered.degraded, true); assert.match(recovered.fallbackReason, /pending/);
+  await f.workspace.knowledge.idle();
+  const before = f.calls.length;
+  const peer = await f.call("workspace.search", { query: "budget" }, "peer");
+  assert.equal(peer.degraded, true, "another agent never inherits this agent's index or markers");
+  await f.workspace.knowledge.idle();
+  const peerCaches = f.calls.slice(before).map((call) => call.cache).filter(Boolean);
+  assert.ok(peerCaches.length && peerCaches.every((cache) => !cache.startsWith(path.dirname(path.dirname(hybrid[0].cache)))));
+});
+
+test("missing models fall back visibly or fail according to owner choice, never grant setup tools", async (t) => {
+  const f = fixture(t);
+  const result = await f.call("workspace.search", { query: "budget", mode: "hybrid" });
+  assert.equal(result.mode, "keyword"); assert.equal(result.degraded, true);
+  assert.match(result.fallbackReason, /not installed/);
+  assert.equal(Object.keys(WORK_TOOLS).some((name) => /install|configure|knowledge\.build/.test(name)), false);
+  f.workspace.knowledge.configure({ enabled: false, fallback: false });
+  await assert.rejects(f.call("workspace.search", { query: "budget", mode: "hybrid" }), /owner-installed/);
+});
+
+test("owner index jobs recheck tool and file permissions; agents cannot build other roles", async (t) => {
+  const f = fixture(t, async () => { f.contracts.assistant.authority.data.read = []; return { matches: [] }; });
+  fakeInstalled(f);
+  f.workspace.knowledge.build({ role: "assistant" }); await f.workspace.knowledge.idle();
+  assert.equal(f.workspace.knowledge.snapshot().status, "failed");
+  f.contracts.assistant.authority.tools = [];
+  assert.throws(() => f.workspace.knowledge.build({ role: "assistant" }), /tool|authority|authorized/i);
+});

@@ -1,9 +1,5 @@
 #!/usr/bin/env node
-// The crewrun CLI — a thin wrapper over the library:
-//   crewrun up <targetRoot> [--host <module>]   run the crew loop (schedules + heartbeats +
-//                                               hooks + host housekeeping) on a project
-//   crewrun agents check <targetRoot> [--host <module>]   validate agent frontmatter settings
-//   crewrun --version | help
+// v6 workspace CLI; the bundled host is the only execution path.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,8 +9,14 @@ import { writeSkillIndexFile, renderSkillIndexFile } from "../src/skills.js";
 import { approveSkill, listSkillProposals, rejectSkill } from "../src/skill-proposals.js";
 import { approvePreference, listPreferenceProposals, rejectPreference } from "../src/preference-memory.js";
 import { approveReflection, listReflectionProposals, rejectReflection } from "../src/reflection-proposals.js";
-import { createUp, loadHostModule } from "../src/up.js";
+import { createUp } from "../src/up.js";
 import { createConsole } from "../src/console/server.js";
+import { initializeWorkspace } from "../src/workspace-setup.js";
+import { requireWorkspace, LIFECYCLE_EVENTS } from "../src/workspace-manifest.js";
+import { installIntegrationPlugin, listInstalledPlugins, scaffoldIntegrationPlugin } from "../src/integration-plugins.js";
+import { platformDoctor, formatPlatformDoctor } from "../src/platform-doctor.js";
+import { acquireRunnerLock } from "../src/app/runner-lock.js";
+import { checkLocalServer, detectLocalHardware, detectLocalRuntime, fitLabel, listLocalRunners, recommendLocalModels, removeLocalRunner, saveLocalRunner, setupSteps } from "../src/local-models.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const log = (line) => console.log(`${new Date().toISOString()} ${line}`);
@@ -24,30 +26,115 @@ function argValue(args, flag) {
   return index !== -1 ? args[index + 1] : undefined;
 }
 
-const [command, ...rest] = process.argv.slice(2);
-
-if (command === "--version" || command === "-v") {
-  console.log(JSON.parse(readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version);
-} else if (command === "up") {
-  const targetRoot = rest.find((arg) => !arg.startsWith("-"));
-  if (!targetRoot) fail("usage: crewrun up <targetRoot> [--host <module>]");
-  const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  const up = createUp({ targetRoot, host, log });
-  await up.start();
-  if (rest.includes("--console")) {
-    await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, host: argValue(rest, "--console-host") || "127.0.0.1", log }).listen();
+// Flags may appear before or after the project. Do not mistake a flag's value (such as a host
+// module or port number) for the target root.
+function targetArgument(args, valueFlags = []) {
+  const values = new Set(valueFlags);
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (values.has(value)) { index += 1; continue; }
+    if (!value.startsWith("-")) return value;
   }
-  const shutdown = () => { void up.stop().finally(() => process.exit(0)); };
+  return "";
+}
+
+const [command, ...rest] = process.argv.slice(2);
+if (rest.includes("--host")) fail("v6 removed --host modules. Use the bundled host and integration plugins; see docs/v6-migration.md.");
+async function commandHost(targetRoot) {
+  const manifest = requireWorkspace(targetRoot);
+  const { createHost, loadReferencePlugins } = await import("@medhus-ai/crewrun-reference-host");
+  process.env.TZ = manifest.timezone;
+  return createHost({ targetRoot, log, plugins: await loadReferencePlugins() });
+}
+
+if (command === "doctor") {
+  const report = platformDoctor();
+  console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatPlatformDoctor(report));
+} else if (command === "models") {
+  const sub = rest[0];
+  if (sub === "recommend") {
+    const result = recommendLocalModels(detectLocalHardware());
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify({ ...result, runtimeInstalled: detectLocalRuntime(result.runtime).available }, null, 2));
+    } else {
+      const { hardware, runtime } = result;
+      console.log(`Memory ${hardware.memoryGb} GB · ${hardware.gpus.length ? hardware.gpus.map((gpu) => `${gpu.name} ${gpu.memoryGb} GB`).join(", ") : hardware.unifiedMemory ? "Apple Silicon" : "no NVIDIA GPU"} · free disk ${hardware.freeDiskGb ?? "?"} GB`);
+      if (!runtime) fail("Local models need Apple Silicon (oMLX) or Linux/Windows (llama.cpp).");
+      console.log(`Runtime: ${runtime.label} (${detectLocalRuntime(runtime).available ? "installed" : "not installed"})\n`);
+      for (const option of result.options) console.log(`${option.model.id === result.recommended ? "*" : " "} ${option.model.id.padEnd(18)} ${option.diskOk ? fitLabel(option.fit) : "not enough free disk"}`);
+      const pick = result.options.find((option) => option.model.id === result.recommended);
+      if (!pick) fail("\nNo supported model fits this computer. Use a cloud model profile.");
+      console.log(`\nSet up ${pick.model.label}:`);
+      for (const step of setupSteps(runtime, pick.model, { fit: pick.fit })) console.log(`  # ${step.title}\n  ${step.command}`);
+      console.log(`\nThen: crewrun models connect ${runtime.defaultBaseUrl}${runtime.id === "llama-cpp" ? ` --model ${pick.model.id}` : ""}`);
+    }
+  } else if (sub === "connect" && rest[1]) {
+    const result = await checkLocalServer({ baseUrl: rest[1], model: argValue(rest, "--model") || "" });
+    if (!result.ok) fail(result.detail);
+    const runner = saveLocalRunner({ baseUrl: result.baseUrl, model: result.model, check: result });
+    console.log(`${result.detail}\nSaved runner ${runner.id} (${runner.display_name}). Assign it to an agent from the console.`);
+  } else if (sub === "list") {
+    for (const runner of listLocalRunners()) console.log(`${runner.id.padEnd(28)} ${runner.base_url.padEnd(26)} ${runner.last_check ? runner.last_check.ok ? runner.last_check.tools ? "ready" : "no tool use" : "failed" : "not checked"}`);
+  } else if (sub === "remove" && rest[1]) {
+    if (!removeLocalRunner(rest[1])) fail(`no local model runner named ${rest[1]}`);
+    console.log(`removed ${rest[1]}`);
+  } else fail("usage: crewrun models recommend [--json] | connect <server-url> [--model id] | list | remove <runner-id>");
+} else if (command === "--version" || command === "-v") {
+  console.log(JSON.parse(readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version);
+} else if (command === "plugins") {
+  if (rest[0] === "list") console.log(JSON.stringify(await listInstalledPlugins(), null, 2));
+  else if (rest[0] === "create" && rest[1]) console.log(await scaffoldIntegrationPlugin(rest[1], { id: argValue(rest, "--id") || "example" }));
+  else if (rest[0] === "install" && rest[1]) {
+    console.log(JSON.stringify(await installIntegrationPlugin(rest[1], { trust: rest.includes("--trust") }), null, 2));
+    console.log("Installed. Restart CrewRun to load the reviewed plugin; no agent permissions or event rules were enabled.");
+  } else fail("usage: crewrun plugins list | create <new-directory> [--id slug] | install <package@1.2.3|./directory> --trust");
+} else if (command === "init") {
+  const targetRoot = targetArgument(rest, ["--preset", "--name", "--timezone"]);
+  if (!targetRoot) fail("usage: crewrun init <targetRoot> [--preset personal|organization|launch-desk] [--name name] [--timezone UTC]");
+  const workspace = initializeWorkspace(targetRoot, { kind: argValue(rest, "--preset") || "personal", name: argValue(rest, "--name") || path.basename(path.resolve(targetRoot)), timezone: argValue(rest, "--timezone") || "UTC" });
+  console.log(`Initialized ${workspace.name}. Start with crewrun up ${targetRoot} --console, then open the side helper to tailor the setup.`);
+} else if (command === "up") {
+  const targetRoot = targetArgument(rest, ["--host", "--console-host", "--console-port"]);
+  if (!targetRoot) fail("usage: crewrun up <targetRoot> ");
+  const host = await commandHost(targetRoot);
+  const consoleHost = argValue(rest, "--console-host") || "127.0.0.1";
+  if (rest.includes("--console") && host.privateConsoleOnly && !isLoopbackHost(consoleHost)) fail("this host requires a loopback-only console; publish only its documented callback ingress");
+  const up = createUp({ targetRoot, host, log });
+  const lock = acquireRunnerLock(targetRoot);
+  try {
+    await up.start();
+    if (rest.includes("--console")) {
+      await createConsole({ targetRoot, up, knownEvents: host.knownEvents || [], operations: up.operations, port: Number(argValue(rest, "--console-port")) || 4400, host: consoleHost, log }).listen();
+    }
+  } catch (error) {
+    try { await up.stop(); } finally { lock.close(); }
+    throw error;
+  }
+  const shutdown = () => { void up.stop().finally(() => { lock.close(); process.exit(0); }); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30); // keep the process alive; the loop's own timers are unref'd
 } else if (command === "console") {
-  const targetRoot = rest.find((arg) => !arg.startsWith("-"));
-  if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--console-host <address>] [--host <module>]");
-  const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log });
-  const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, host: argValue(rest, "--console-host") || "127.0.0.1", log });
-  await consoleApp.listen();
-  const shutdown = () => { void consoleApp.close().finally(() => process.exit(0)); };
+  const targetRoot = targetArgument(rest, ["--host", "--console-host", "--port"]);
+  if (!targetRoot) fail("usage: crewrun console <targetRoot> [--port N] [--console-host <address>] ");
+  const host = await commandHost(targetRoot);
+  const consoleHost = argValue(rest, "--console-host") || "127.0.0.1";
+  if (host.privateConsoleOnly && !isLoopbackHost(consoleHost)) fail("this host requires a loopback-only console; publish only its documented callback ingress");
+  const consoleApp = createConsole({ targetRoot, knownEvents: host.knownEvents || [], operations: host.operations || (Object.keys(host).length ? host : null), port: Number(argValue(rest, "--port")) || 4400, host: consoleHost, log });
+  let hostStarted = false;
+  const lock = acquireRunnerLock(targetRoot);
+  try {
+    await host.start?.();
+    hostStarted = true;
+    await consoleApp.listen();
+  } catch (error) {
+    if (hostStarted) {
+      try { await host.stop?.(); } catch { /* preserve startup error */ }
+    }
+    lock.close();
+    throw error;
+  }
+  const shutdown = () => { void consoleApp.close().finally(async () => { if (hostStarted) await host.stop?.(); lock.close(); process.exit(0); }); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   setInterval(() => {}, 1 << 30);
@@ -84,12 +171,15 @@ if (command === "--version" || command === "-v") {
   } else {
     fail("usage: crewrun proposals list|approve|reject <targetRoot> [proposal-id]");
   }
-} else if ((command === "agents" || command === "roles") && rest[0] === "check") {
-  const targetRoot = rest.slice(1).find((arg) => !arg.startsWith("-"));
-  if (!targetRoot) fail("usage: crewrun agents check <targetRoot> [--host <module>]");
-  const host = await loadHostModule(argValue(rest, "--host"), { targetRoot, log: () => {} });
+} else if (command === "agents" && rest[0] === "check") {
+  const targetRoot = targetArgument(rest.slice(1), ["--host"]);
+  if (!targetRoot) fail("usage: crewrun agents check <targetRoot> ");
+  requireWorkspace(targetRoot);
+  const { loadReferencePlugins } = await import("@medhus-ai/crewrun-reference-host");
+  const referencePlugins = await loadReferencePlugins();
+  const knownEvents = [...LIFECYCLE_EVENTS, ...referencePlugins.flatMap((plugin) => plugin.events.map((event) => typeof event === "string" ? event : event.id))];
   const settings = loadRoleSettings(targetRoot);
-  const { problems, warnings } = validateRoleSettings(settings, { knownEvents: host.knownEvents || [] });
+  const { problems, warnings } = validateRoleSettings(settings, { knownEvents });
   for (const entry of Object.values(settings)) {
     const hb = entry.heartbeat ? `every ${entry.heartbeat.intervalSeconds}s${entry.heartbeat.budgetUsdPerDay != null ? ` (cap $${entry.heartbeat.budgetUsdPerDay}/day)` : ""}` : "off";
     console.log(`${entry.role.padEnd(14)} heartbeat: ${hb.padEnd(28)} hooks: ${entry.hooks.join(", ") || "none"}`);
@@ -100,21 +190,27 @@ if (command === "--version" || command === "-v") {
 } else {
   console.log(`crewrun — run a crew of AI agents on the runtimes you already pay for
 
-  crewrun up <targetRoot> [--host <module>] [--console] [--console-host <address>]   run the crew loop on a project (+ console)
+  crewrun init <targetRoot> [--preset personal|organization|launch-desk] [--name name] [--timezone UTC]
+  crewrun up <targetRoot>  [--console] [--console-host <address>]   run the crew loop on a project (+ console)
   crewrun console <targetRoot> [--port N] [--console-host <address>]                  the operator UI without the loop
-  crewrun agents check <targetRoot> [--host <module>]  validate agent heartbeat/hook settings
+  crewrun agents check <targetRoot>   validate agent heartbeat/hook settings
+  crewrun plugins list | create <new-directory> [--id slug] | install <package@1.2.3|./directory> --trust
   crewrun skills index <targetRoot> [--write]         print or write the generated skills/_index.md
   crewrun proposals list|approve|reject <targetRoot> [id]   review agent-proposed skills/memory
   crewrun --version
+  crewrun doctor [--json]                            read-only OS and dependency readiness
+  crewrun models recommend [--json] | connect <url> [--model id] | list | remove <id>   local models (llama.cpp / oMLX)
 
-A host module (optional) injects tools, turn recording, hook routing, and housekeeping:
-export createHost({ targetRoot, log }) or a plain host object — see src/up.js for the contract.
-Without one, schedules and heartbeats use built-in tools and configured Slack/Gmail connections.
-Set up connections in Integrations; outgoing actions require approval. Event hooks need an enqueue adapter.`);
+The bundled one-owner host manages tasks, reviews, schedules, and integration plugins.
+Set up connections in Integrations; outgoing actions require approval. No public listener starts until an HTTPS callback origin is configured.`);
   if (command && command !== "help") process.exit(2);
 }
 
 function fail(message) {
   console.error(message);
   process.exit(2);
+}
+
+function isLoopbackHost(value) {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(String(value || "").toLowerCase());
 }

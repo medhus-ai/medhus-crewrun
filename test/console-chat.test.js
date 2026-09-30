@@ -14,33 +14,44 @@ import { createConsoleChatService, createConsoleHelperBridge, HELPER_ROLE } from
 sqlite("console chat resumes one durable thread per agent", async (t) => {
   const parent = mkdtempSync(path.join(os.tmpdir(), "crew-console-chat-"));
   const root = path.join(parent, "repo");
-  mkdirSync(path.join(root, ".crew", "roles"), { recursive: true });
-  writeFileSync(path.join(root, ".crew", "roles", "ops.json"), JSON.stringify({ title: "Operations" }));
+  mkdirSync(path.join(root, ".crew", "agents"), { recursive: true });
+  writeFileSync(path.join(root, ".crew", "agents", "ops.json"), JSON.stringify({ title: "Operations" }));
   const db = new Database(":memory:");
   t.after(() => { db.close(); rmSync(parent, { recursive: true, force: true }); });
   const calls = [];
   const runner = {
-    startAgentTurn({ agent, messages, resumeSessionId, modeOverride, onLine, onClose }) {
-      calls.push({ agent, messages, resumeSessionId, modeOverride });
+    startAgentTurn({ agent, messages, resumeSessionId, toolContext, modeOverride, context, onLine, onClose }) {
+      calls.push({ agent, messages, resumeSessionId, toolContext, modeOverride, context });
       queueMicrotask(() => { onLine(`Reply ${calls.length}`); onClose({ code: 0, engineSessionId: `session-${calls.length}` }); });
       return { kill() {} };
     },
     isLikelyStaleSessionError: () => false
   };
-  const chats = createConsoleChatService({ targetRoot: root, getDb: () => db, createRunner: () => runner, createHelperRunner: () => runner });
+  const chats = createConsoleChatService({
+    targetRoot: root, getDb: () => db, createRunner: () => runner, createHelperRunner: () => runner,
+    toolContextFor: ({ role }) => role === HELPER_ROLE ? {} : { actor: role, runner: "claude-agent-sonnet-high", model: "sonnet" }
+  });
   const first = await chats.sendChat({ role: "ops", message: "First question" });
   const second = await chats.sendChat({ role: "ops", message: "Second question" });
   assert.equal(first.id, second.id);
   assert.equal(calls[1].resumeSessionId, "session-1");
+  assert.deepEqual(calls[0].toolContext, { actor: "ops", runner: "claude-agent-sonnet-high", model: "sonnet", chatId: first.id });
   assert.deepEqual(second.messages.map((message) => message.author), ["user", "ops", "user", "ops"]);
-  const helper = await chats.sendChat({ role: HELPER_ROLE, message: "Help me add an agent" });
+  assert.deepEqual(chats.setTopic({ role: "ops", conversationId: first.id, topic: "  Incident   response plan  " }), { id: first.id, topic: "Incident response plan" });
+  assert.equal(chats.getChat({ role: "ops" }).title, "Incident response plan");
+  assert.equal(chats.listChats().find((entry) => entry.role === "ops").title, "Incident response plan");
+  assert.throws(() => chats.setTopic({ role: "ops", conversationId: first.id + 1, topic: "Wrong thread" }), /own current durable conversation/);
+  const helper = await chats.sendChat({ role: HELPER_ROLE, message: "Help me add an agent", targetRole: "ops", intent: "schedule", cadence: "weekly", time: "09:30" });
   assert.equal(helper.role, HELPER_ROLE);
   assert.equal(calls[2].modeOverride, "propose");
+  assert.match(calls[2].context, /The owner selected target agent: ops/);
+  assert.match(calls[2].context, /The owner began a scheduled task request/);
+  assert.match(calls[2].context, /Preferred repeat: weekly at 09:30 local time/);
   assert.deepEqual(chats.listChats().map((entry) => entry.role).sort(), [HELPER_ROLE, "ops"]);
 
   const helperBridge = createConsoleHelperBridge({ targetRoot: root });
   const tools = helperBridge.toolHandlers({ role: HELPER_ROLE });
-  assert.deepEqual(tools.map((tool) => tool.toolName), ["crew.status"]);
+  assert.deepEqual(tools.map((tool) => tool.toolName), ["crew.status", "skill.propose"]);
   const status = await tools[0].invoke({});
   assert.equal(status.structuredContent.agents[0].role, "ops");
 });

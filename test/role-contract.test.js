@@ -80,7 +80,7 @@ test("defaults form a stricter contract floor and cannot relax approvals or budg
 
 test("a role spec exposes its merged contract and UI summary without changing legacy role fields", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "crew-contract-spec-"));
-  const roles = path.join(root, ".crew", "roles");
+  const roles = path.join(root, ".crew", "agents");
   await mkdir(roles, { recursive: true });
   await writeFile(path.join(roles, "_defaults.json"), JSON.stringify({
     runner: "claude-agent-sonnet-high",
@@ -134,7 +134,7 @@ test("authority, data boundaries, approvals, and handoffs are evaluated independ
   assert.equal(wrongData.decision, "denied");
   assert.match(wrongData.reason, /outside/);
   assert.equal(evaluateRoleAction(contract, { toolName: "gmail.send", approval }).allowed, false);
-  assert.equal(evaluateRoleAction(null, { toolName: "anything" }).decision, "legacy");
+  assert.equal(evaluateRoleAction(null, { toolName: "anything" }).decision, "denied");
   assert.equal(evaluateRoleAction(null, { toolName: "anything", requireContract: true }).decision, "denied");
 
   assert.equal(evaluateRoleHandoff(contract, { direction: "send", role: "ops" }).allowed, true);

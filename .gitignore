@@ -1,3 +1,10 @@
 node_modules/
 *.log
 .DS_Store
+dist/
+apps/desktop/target/
+apps/desktop/payload/
+apps/desktop/gen/
+apps/desktop/CrewRun
+apps/desktop/CrewRun.exe
+apps/desktop/CrewRun-desktop

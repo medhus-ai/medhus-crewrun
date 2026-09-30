@@ -2,3 +2,9 @@ crewrun
 Copyright 2026 Medhus
 
 Licensed under the Apache License, Version 2.0. See LICENSE.
+
+Optional workspace knowledge components:
+QMD (https://github.com/tobi/qmd) and Docling
+(https://github.com/docling-project/docling) are separately distributed under
+their MIT licenses. Their notices accompany the installed packages. Model
+weights, when installed by the operator, retain their respective licenses.

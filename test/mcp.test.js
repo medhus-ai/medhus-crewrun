@@ -6,9 +6,15 @@ import path from "node:path";
 import test from "node:test";
 
 import { createMcpBridge, mcpToolFullName, sanitizeToolName, toolError, toolResult } from "../src/mcp.js";
-import { configureCrew } from "../src/crew-dirs.js";
-import { buildMcpServer, loadMcpAuthEnv, mcpRoleFromEnv, readMcpContextData } from "../src/mcp-stdio.js";
+import { buildMcpServer } from "../src/mcp-server.js";
 import { createRoleGovernance } from "../src/role-contract.js";
+
+function testGovernance() {
+  return createRoleGovernance({ getContract: () => ({
+    version: 1, revision: 1, mandate: "Exercise bridge transport with explicit test authority.",
+    authority: { tools: ["doc.read", "doc.write", "inbox.list", "memory.reflect", "skill.read", "skill.propose", "prefs.propose", "only.this", "web.fetch", "web.search"].map((name) => ({ name, impact: /propose|reflect|write/.test(name) ? "internal-write" : "read" })) }
+  }) });
+}
 
 function demoRegistry(overrides = {}) {
   const calls = [];
@@ -16,6 +22,7 @@ function demoRegistry(overrides = {}) {
     calls,
     registry: {
       serverName: "demo",
+      governance: testGovernance(),
     crewTools: false,
       label: "Demo",
       instructions: "Demo tools.",
@@ -47,7 +54,7 @@ test("handlers validate input, invoke the registry, and report errors as MCP res
   const { registry, calls } = demoRegistry();
   const bridge = createMcpBridge(registry);
   const seen = [];
-  const handlers = bridge.toolHandlers({ role: "writer", toolContext: { targetRoot: "/repo", roleOptions: { x: 1 } }, onToolCall: (name) => seen.push(name) });
+  const handlers = bridge.toolHandlers({ role: "writer", toolContext: { targetRoot: process.cwd(), roleOptions: { x: 1 } }, onToolCall: (name) => seen.push(name) });
   assert.deepEqual(handlers.map((handler) => [handler.name, handler.alwaysLoad]), [["doc_read", true], ["doc_write", false]]);
   const ok = await handlers[1].invoke({ file: "a.md" });
   assert.deepEqual(ok.structuredContent, { ok: true, toolName: "doc.write" });
@@ -66,79 +73,18 @@ test("Claude in-process server and instructions follow the role allowlist", () =
     tool: (name, description, inputSchema, handler, extras) => ({ name, description, inputSchema, handler, extras }),
     createSdkMcpServer: (options) => ({ name: options.name, tools: options.tools, instructions: options.instructions })
   };
-  const mcp = bridge.createClaudeMcp({ sdk, role: "reader", targetRoot: "/repo", toolContext: {} });
+  const mcp = bridge.createClaudeMcp({ sdk, role: "reader", targetRoot: process.cwd(), toolContext: {} });
   assert.equal(mcp.serverName, "demo");
   assert.deepEqual(mcp.allowedTools, ["mcp__demo__doc_read"]);
   assert.equal(mcp.server.instructions, "Demo tools.");
   assert.equal(bridge.createClaudeMcp({ sdk, role: "reader", targetRoot: "", toolContext: {} }), null);
-  assert.equal(bridge.createClaudeMcp({ sdk: {}, role: "reader", targetRoot: "/repo" }), null);
-  const text = bridge.claudeToolInstructions("writer", { targetRoot: "/repo" });
+  assert.equal(bridge.createClaudeMcp({ sdk: {}, role: "reader", targetRoot: process.cwd() }), null);
+  const text = bridge.claudeToolInstructions("writer", { targetRoot: process.cwd() });
   assert.match(text, /^## Demo MCP tools/);
   assert.match(text, /- doc\.write \(mcp__demo__doc_write\): Tool doc\.write/);
   assert.equal(bridge.claudeToolInstructions("writer", {}), "");
   const disabled = createMcpBridge({ ...registry, enabled: (ctx) => ctx.tools !== "off" });
-  assert.equal(disabled.createClaudeMcp({ sdk, role: "reader", targetRoot: "/repo", toolContext: { tools: "off" } }), null);
-});
-
-test("Codex config writes a plain-data context file and a scoped child environment", () => {
-  const { registry } = demoRegistry();
-  const bridge = createMcpBridge(registry);
-  const env = { PATH: "/bin", HOME: "/home/u", DEMO_DB: "/db", DEMO_EXTRA: "1", CREW_HOME: "/crew", OTHER: "no", DEMO_TOKEN: "tok" };
-  const cfg = bridge.codexMcpConfig({
-    role: "writer",
-    targetRoot: "/repo",
-    toolContext: { roleOptions: {}, secret: () => "never", workItemId: "i9" },
-    env
-  });
-  assert.equal(cfg.available, true);
-  const server = cfg.config.mcp_servers.demo;
-  assert.equal(server.command, process.execPath);
-  assert.deepEqual(server.args, ["/opt/demo/mcp-server.js"]);
-  assert.equal(server.default_tools_approval_mode, "approve");
-  assert.equal(server.env.CREW_MCP_ROLE, "writer");
-  assert.equal(server.env.DEMO_DB, "/db");
-  assert.equal(server.env.DEMO_EXTRA, "1");
-  assert.equal(server.env.CREW_HOME, "/crew");
-  assert.equal(server.env.OTHER, undefined);
-  assert.equal(server.env.DEMO_TOKEN, undefined);
-  const context = JSON.parse(readFileSync(server.env.CREW_MCP_CONTEXT_FILE, "utf8"));
-  assert.deepEqual(context, { targetRoot: "/repo", root: "/repo", workItemId: "i9", roleOptions: {} });
-  assert.deepEqual(JSON.parse(readFileSync(server.env.CREW_MCP_AUTH_FILE, "utf8")), { DEMO_TOKEN: "tok" });
-  cfg.cleanup();
-  assert.equal(existsSync(server.env.CREW_MCP_CONTEXT_FILE), false);
-  assert.equal(bridge.codexMcpConfig({ role: "writer", targetRoot: null }).available, false);
-  assert.equal(createMcpBridge({ ...registry, stdioServerEntry: "" }).codexMcpConfig({ role: "writer", targetRoot: "/repo" }).available, false);
-});
-
-test("stdio helpers rebuild the server and read the child environment", () => {
-  const { registry } = demoRegistry();
-  const bridge = createMcpBridge(registry);
-  const registered = [];
-  class FakeServer {
-    constructor(info, options) { this.info = info; this.options = options; }
-    registerTool(name, config, handler) { registered.push([name, Object.keys(config), typeof handler]); }
-  }
-  const built = buildMcpServer({ bridge, role: "writer", toolContext: { targetRoot: "/repo" }, ServerClass: FakeServer });
-  assert.deepEqual(built.toolNames, ["doc.read", "doc.write"]);
-  assert.deepEqual(registered, [["doc_read", ["description"], "function"], ["doc_write", ["description", "inputSchema"], "function"]]);
-  assert.equal(built.server.info.name, "demo");
-
-  const dir = mkdtempSync(path.join(os.tmpdir(), "crew-mcp-env-"));
-  const contextFile = path.join(dir, "ctx.json");
-  const authFile = path.join(dir, "auth.json");
-  writeFileSync(contextFile, JSON.stringify({ targetRoot: "/repo" }));
-  writeFileSync(authFile, JSON.stringify({ DEMO_TOKEN: "tok", IGNORED: "x" }));
-  const env = { CREW_MCP_CONTEXT_FILE: contextFile, LEGACY_MCP_ROLE: "legacy-role", CREW_MCP_AUTH_FILE: authFile };
-  assert.deepEqual(readMcpContextData(env), { targetRoot: "/repo" });
-  assert.equal(mcpRoleFromEnv(env), "", "legacy prefixes are opt-in");
-  configureCrew({ legacyEnvPrefix: "LEGACY" });
-  assert.equal(mcpRoleFromEnv(env), "legacy-role");
-  configureCrew({ legacyEnvPrefix: "" });
-  loadMcpAuthEnv(["DEMO_TOKEN"], env);
-  assert.equal(env.DEMO_TOKEN, "tok");
-  assert.equal(env.IGNORED, undefined);
-  assert.deepEqual(readMcpContextData({ CREW_MCP_CONTEXT: "{\"role\":\"r\"}" }), { role: "r" });
-  assert.deepEqual(readMcpContextData({ CREW_MCP_CONTEXT: "not json" }), {});
+  assert.equal(disabled.createClaudeMcp({ sdk, role: "reader", targetRoot: process.cwd(), toolContext: { tools: "off" } }), null);
 });
 
 test("every bridge carries the kernel's built-in crew tools unless a host overrides or opts out", async () => {
@@ -149,6 +95,7 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
 
   const bridge = createMcpBridge({
     serverName: "hosty",
+    governance: testGovernance(),
     toolsForRole: () => ["inbox.list", "memory.reflect"],
     describe: (name) => `host ${name}`,
     inputSchema: () => ({}),
@@ -171,6 +118,7 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
 
   const optedOut = createMcpBridge({
     serverName: "strict",
+    governance: testGovernance(),
     crewTools: false,
     toolsForRole: () => ["only.this"],
     describe: () => "",
@@ -181,10 +129,10 @@ test("every bridge carries the kernel's built-in crew tools unless a host overri
 
   // Web tools appear only for roles whose spec enables them.
   const { mkdirSync, writeFileSync } = await import("node:fs");
-  mkdirSync(pathMod.join(root, ".crew", "roles"), { recursive: true });
-  writeFileSync(pathMod.join(root, ".crew", "roles", "scout.json"), JSON.stringify({ web: { allow: ["example.com"], search: false } }));
-  writeFileSync(pathMod.join(root, ".crew", "roles", "surfer.json"), JSON.stringify({ web: true }));
-  const bare = createMcpBridge({ serverName: "bare2", toolsForRole: () => [], describe: () => "", inputSchema: () => ({}), call: async () => ({}) });
+  mkdirSync(pathMod.join(root, ".crew", "agents"), { recursive: true });
+  writeFileSync(pathMod.join(root, ".crew", "agents", "scout.json"), JSON.stringify({ web: { allow: ["example.com"], search: false } }));
+  writeFileSync(pathMod.join(root, ".crew", "agents", "surfer.json"), JSON.stringify({ web: true }));
+  const bare = createMcpBridge({ serverName: "bare2", governance: testGovernance(), toolsForRole: () => [], describe: () => "", inputSchema: () => ({}), call: async () => ({}) });
   const namesOf = (role) => bare.toolHandlers({ role, toolContext: { targetRoot: root } }).map((handler) => handler.toolName);
   assert.ok(!namesOf("ops").includes("web.fetch"), "no web tools without opt-in");
   assert.deepEqual(namesOf("scout").filter((name) => name.startsWith("web.")), ["web.fetch"], "search:false drops web.search");
@@ -217,9 +165,27 @@ test("a governed bridge never registers kernel or host tools outside the role co
     inputSchema: () => ({}),
     call: async () => ({ ok: true })
   });
-  const names = bridge.toolHandlers({ role: "researcher", toolContext: { targetRoot: "/repo" } })
+  const names = bridge.toolHandlers({ role: "researcher", toolContext: { targetRoot: process.cwd() } })
     .map((handler) => handler.toolName);
   assert.deepEqual(names, ["skill.read"]);
-  assert.equal(bridge.toolHandlers({ role: "legacy", toolContext: { targetRoot: "/repo" } }).length, 0,
+  assert.equal(bridge.toolHandlers({ role: "legacy", toolContext: { targetRoot: process.cwd() } }).length, 0,
     "requireContracts fails closed for uncontracted roles");
+});
+
+test("MCP exposes no tools without a host authority policy", () => {
+  const { registry } = demoRegistry({ governance: null });
+  assert.deepEqual(createMcpBridge(registry).toolHandlers({ role: "writer", toolContext: {} }), []);
+});
+
+test("registered host handlers recheck revoked authority before invocation", async () => {
+  let allowed = true;
+  const { registry, calls } = demoRegistry({ governance: createRoleGovernance({ getContract: () => allowed ? {
+    version: 1, revision: 1, mandate: "Read only while authorized.",
+    authority: { tools: [{ name: "doc.read", impact: "read" }] }
+  } : null }) });
+  const [handler] = createMcpBridge(registry).toolHandlers({ role: "reader" });
+  assert.ok(handler);
+  allowed = false;
+  assert.equal((await handler.invoke()).isError, true);
+  assert.equal(calls.length, 0);
 });

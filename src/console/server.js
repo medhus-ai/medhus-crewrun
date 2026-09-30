@@ -5,18 +5,24 @@ import { fileURLToPath } from "node:url";
 
 import { agentFile } from "../agent-paths.js";
 import { cronFromRecurrence, listSchedules, normalizeSchedule, removeSchedule, upsertSchedule } from "../schedules.js";
-import { approveSkill, proposeSkill, rejectSkill } from "../skill-proposals.js";
+import { approveSkill, rejectSkill } from "../skill-proposals.js";
 import { approvePreference, rejectPreference } from "../preference-memory.js";
 import { approveReflection, rejectReflection } from "../reflection-proposals.js";
-import { approveAction, getActionApproval, listActionApprovals, rejectAction } from "../action-approvals.js";
 import { normalizeRoleContract } from "../role-contract.js";
 import { readAgentSpecForEditing, roleScheduledEntries } from "../role-spec.js";
 import { parseInterval, validateRoleSettings, loadRoleSettings } from "../pulse.js";
-import { createStandaloneRuntime } from "../standalone.js";
 import { renderPage } from "./shell.js";
-import { pageFromUrl } from "./navigation.js";
+import { legacyInboxRedirect, pageFromUrl } from "./navigation.js";
+import { inboxCount } from "./views.js";
 import { collectModels, renderHelperDrawer, renderPartial } from "./pages.js";
 import { HELPER_ROLE } from "../console-chat.js";
+import { validateWorkspaceChange } from "../workspace-tools.js";
+import { setShellAgent } from "../shell-access.js";
+import { runnerIdForRole } from "../runner.js";
+import { resolveRunnerProfile } from "../runner-config.js";
+import { listWorkspaceTree, readWorkspaceFilePreview } from "../workspace-files.js";
+import { createSecretStore, KNOWN_SECRETS, listSecretNames, lock as lockSecrets, removeSecret, setSecret, unlock as unlockSecrets } from "../secret-store.js";
+import { checkLocalServer, detectLocalHardware, detectLocalRuntime, listLocalRunners, localRunnerId, recommendLocalModels, removeLocalRunner, saveLocalRunner } from "../local-models.js";
 
 // The crewrun console is a local operator surface over one project's .crew/.
 // `operations` is optional host integration:
@@ -25,9 +31,10 @@ import { HELPER_ROLE } from "../console-chat.js";
 //   connect?: ({ targetRoot, connectorId }), disconnect?: (...),
 //   decideApproval?: ({ targetRoot, id, action })
 // }
-// It is deliberately data/action shaped rather than a product dependency. The
-// console uses the standalone local connector adapter when none is supplied.
+// The bundled host supplies durable operations. Without operations the console
+// can edit configuration, but it cannot execute work or connect providers.
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
+const RESERVED_ROLE_SLUGS = new Set(["new", HELPER_ROLE]);
 const VERSION = (() => {
   try { return JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")).version; } catch { return ""; }
 })();
@@ -37,7 +44,13 @@ function parseBody(request) {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; if (body.length > 1_000_000) request.destroy(); });
-    request.on("end", () => resolve(Object.fromEntries(new URLSearchParams(body))));
+    request.on("end", () => {
+      const params = new URLSearchParams(body);
+      const form = Object.fromEntries(params);
+      const capabilities = params.getAll("capabilities").filter(Boolean);
+      if (capabilities.length) form.capabilities = capabilities;
+      resolve(form);
+    });
     request.on("error", reject);
   });
 }
@@ -58,6 +71,7 @@ function readSpec(file) {
 }
 
 function writeSpec(file, spec) {
+  validateWorkspaceChange(`.crew/agents/${path.basename(file)}`, JSON.stringify(spec));
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(spec, null, 2) + "\n");
 }
@@ -80,8 +94,22 @@ function initialContract(role, title = "") {
     version: 1,
     revision: 1,
     mandate: title ? `Operate as ${title}.` : "",
-    authority: { tools: [{ name: "skill.read", impact: "read" }, ...["memory.reflect", "skill.propose", "prefs.propose"].map((name) => ({ name, impact: "internal-write" }))] }
+    authority: { tools: [{ name: "skill.read", impact: "read" }, ...["crew.roster", "web.fetch", "web.search"].map((name) => ({ name, impact: "read" })), ...["task.delegate", "chat.setTopic", "memory.reflect", "skill.propose", "prefs.propose"].map((name) => ({ name, impact: "internal-write" }))] }
   }, { role });
+}
+
+function grantWebReadTools(spec, role) {
+  const existing = spec.contract ? normalizeRoleContract(spec.contract, { role }) : initialContract(role, spec.title || "");
+  const tools = existing.authority.tools;
+  if (tools.some((tool) => tool.name === "web.fetch") && tools.some((tool) => tool.name === "web.search")) {
+    if (!spec.contract) spec.contract = persistedContract(existing);
+    return;
+  }
+  spec.contract = persistedContract(normalizeRoleContract({
+    ...existing,
+    revision: spec.contract ? existing.revision + 1 : existing.revision,
+    authority: { ...existing.authority, tools: [...tools, ...["web.fetch", "web.search"].filter((name) => !tools.some((tool) => tool.name === name)).map((name) => ({ name, impact: "read" }))] }
+  }, { role }));
 }
 
 function persistedContract(contract) {
@@ -96,15 +124,103 @@ function roleUrl(role, tab = "manage") {
 
 function roleRoute(url) {
   const segments = url.pathname.split("/").filter(Boolean);
-  if (!["agents", "roles"].includes(segments[0])) return null;
+  if (segments[0] !== "agents") return null;
   const roleTab = url.searchParams.get("tab") === "defaults" ? "defaults" : "manage";
   if (segments.length === 1) {
     const selectedRole = String(url.searchParams.get("role") || "");
-    return ROLE_SLUG.test(selectedRole) ? { view: "detail", selectedRole, roleTab } : { view: "list", selectedRole: "", roleTab: "manage" };
+    return editableRole(selectedRole) ? { view: "detail", selectedRole, roleTab } : { view: "list", selectedRole: "", roleTab: "manage" };
   }
   if (segments.length === 2 && segments[1] === "new") return { view: "create", selectedRole: "", roleTab: "manage" };
-  if (segments.length === 2 && ROLE_SLUG.test(segments[1])) return { view: "detail", selectedRole: segments[1], roleTab };
+  if (segments.length === 2 && editableRole(segments[1])) return { view: "detail", selectedRole: segments[1], roleTab };
   return null;
+}
+
+function editableRole(value) {
+  const role = String(value || "").trim();
+  return ROLE_SLUG.test(role) && !RESERVED_ROLE_SLUGS.has(role);
+}
+
+function settingsUrl(tab, status, message = "") {
+  const params = new URLSearchParams({ tab, status });
+  if (message) params.set("message", String(message).slice(0, 400));
+  return `/settings?${params}`;
+}
+
+const KNOWN_SECRET_ENVS = new Set(KNOWN_SECRETS.map((entry) => entry.env));
+
+// Key-store actions from Settings → Providers & credentials. Values are never
+// echoed back; errors (such as a wrong password) return to the page as a notice.
+function secretAction(action, form) {
+  try {
+    if (action === "create") {
+      if (String(form.password || "") !== String(form.confirm || "")) throw new Error("The passwords do not match.");
+      createSecretStore(String(form.password || ""));
+      return settingsUrl("providers", "ok", "Key store created and unlocked.");
+    }
+    if (action === "unlock") {
+      unlockSecrets(String(form.password || ""));
+      return settingsUrl("providers", "ok", "Key store unlocked. It locks again when CrewRun restarts.");
+    }
+    if (action === "lock") {
+      lockSecrets();
+      return settingsUrl("providers", "ok", "Key store locked.");
+    }
+    if (action === "set") {
+      const name = String(form.name || "");
+      if (!KNOWN_SECRET_ENVS.has(name)) throw new Error("Unknown provider key.");
+      const value = String(form.value || "").trim();
+      if (!value) throw new Error("Enter a key to save.");
+      setSecret(name, value);
+      return settingsUrl("providers", "ok", `${name} saved.`);
+    }
+    if (action === "remove") {
+      const name = String(form.name || "");
+      if (!(listSecretNames() || []).includes(name)) throw new Error("That key is not saved.");
+      removeSecret(name);
+      return settingsUrl("providers", "ok", `${name} removed.`);
+    }
+    throw new Error("Unknown key-store action.");
+  } catch (error) {
+    const message = /wrong password|corrupted/.test(error.message) ? "Wrong password." : error.message;
+    return settingsUrl("providers", "error", message);
+  }
+}
+
+async function localModelAction(action, form) {
+  try {
+    if (action === "remove") {
+      if (!removeLocalRunner(String(form.id || ""))) throw new Error("That local model is not connected.");
+      return settingsUrl("local", "ok", "Local model removed.");
+    }
+    if (action === "connect") {
+      const runtime = ["llama-cpp", "omlx"].includes(form.runtime) ? form.runtime : "";
+      const result = await checkLocalServer({ baseUrl: form.base_url, model: form.model });
+      if (result.ok) {
+        const runner = saveLocalRunner({ baseUrl: result.baseUrl, model: result.model, runtime, check: result });
+        return settingsUrl("local", result.tools ? "ok" : "error", `${result.detail} Saved as ${runner.display_name}.`);
+      }
+      // A failed re-check still records the failure on an already connected model.
+      const existing = result.model && listLocalRunners().find((runner) => runner.id === localRunnerId(result.model));
+      if (existing) saveLocalRunner({ baseUrl: existing.base_url, model: existing.model, runtime: existing.local_runtime || runtime, label: existing.display_name, check: result });
+      return settingsUrl("local", "error", result.detail);
+    }
+    throw new Error("Unknown local model action.");
+  } catch (error) {
+    return settingsUrl("local", "error", error.message);
+  }
+}
+
+function localModelsState(url) {
+  const recommendation = recommendLocalModels(detectLocalHardware());
+  const status = ["ok", "error"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "";
+  return {
+    recommendation,
+    runtimeInstalled: detectLocalRuntime(recommendation.runtime).available,
+    runners: listLocalRunners(),
+    selected: String(url.searchParams.get("model") || ""),
+    status,
+    message: status ? String(url.searchParams.get("message") || "").slice(0, 400) : ""
+  };
 }
 
 function redirectTarget(value, fallback) {
@@ -120,29 +236,24 @@ function localRedirect(value, fallback) {
   return /^\/(?!\/)/.test(target) && !/[\r\n]/.test(target) ? target : fallback;
 }
 
-export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {} } = {}) {
+export function createConsole({ targetRoot, up = null, knownEvents = [], operations = null, port = 4400, host = "127.0.0.1", env = process.env, log = () => {}, access = null } = {}) {
   if (!targetRoot) throw new Error("createConsole requires targetRoot");
   const root = path.resolve(targetRoot);
-  const standalone = !operations && !up?.operations ? createStandaloneRuntime({ targetRoot: root, env, log }) : null;
-  operations ||= up?.operations || standalone?.operations;
+  // Browser authorities require brackets around IPv6, while Node's listen API requires the bare
+  // address. Normalize once so a private `::1` console is both reachable and origin-checked.
+  const listenHost = normalizedListenHost(host);
+  operations ||= up?.operations;
 
   async function snapshot() {
-    // The kernel's small host-local approval queue is useful even without a product host. A
-    // host snapshot may add its own queue; IDs are de-duplicated in the host's favor.
-    const coreApprovals = listActionApprovals({ targetRoot: root, env }).map((approval) => ({ ...approval, source: "crewrun" }));
     try {
       const getter = typeof operations === "function" ? operations : operations?.getSnapshot || operations?.snapshot;
       const value = typeof getter === "function" ? await getter({ targetRoot: root }) : operations;
       const hostSnapshot = value && typeof value === "object" ? value : {};
-      const merged = new Map(coreApprovals.filter((a) => !(hostSnapshot.supersededApprovalIds || []).includes(a.id)).map((approval) => [approval.id, approval]));
-      for (const approval of Array.isArray(hostSnapshot.approvals) ? hostSnapshot.approvals : []) {
-        if (approval && typeof approval === "object") merged.set(String(approval.id || ""), approval);
-      }
-      return { ...hostSnapshot, approvals: [...merged.values()] };
+      return hostSnapshot;
     } catch (error) {
       // A host dashboard integration should never take away the local role UI.
       log(`[console] host snapshot unavailable: ${error.message}`);
-      return { approvals: coreApprovals };
+      return { approvals: [] };
     }
   }
 
@@ -174,13 +285,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
   }
 
   async function handleAction(pathname, form) {
-    // Keep old console forms and bookmarks working while the operator surface
-    // calls these Scheduled tasks.
-    pathname = pathname.replace(/^\/agents(?=\/|$)/, "/roles");
-    pathname = pathname.replace(/^\/schedules(?=\/|$)/, "/scheduled");
-    if (pathname === "/roles/save") {
+    if (pathname === "/agents/shell") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
+      await (operation(["setShellAgent"]) || setShellAgent)({ targetRoot: root, role, enabled: form.enabled === "1", confirmed: form.confirmed === "1", profile: resolveRunnerProfile(runnerIdForRole(role, root)) });
+      return roleUrl(role);
+    }
+    if (pathname === "/agents/save") {
+      const role = String(form.role || "");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent spec must be a JSON object");
       roleScheduledEntries(parsed);
@@ -189,9 +302,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       if (problems.length) log(`[console] saved ${role}.json with validation problems: ${problems.join("; ")}`);
       return roleUrl(role);
     }
-    if (pathname === "/roles/update") {
+    if (pathname === "/agents/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const title = String(form.title || "").trim();
@@ -207,9 +320,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/behavior") {
+    if (pathname === "/agents/behavior") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const interval = String(form.heartbeat || "off").trim();
@@ -225,15 +338,16 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         const allow = lines(form.web_allow);
         if (allow.some((domain) => !/^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(domain))) throw new Error("Enter website domains only, such as docs.example.com.");
         spec.web = { ...(typeof spec.web === "object" ? spec.web : {}), allow };
+        grantWebReadTools(spec, role);
       }
       if (form.heartbeat_mode === "inherit") delete spec.heartbeat;
       else spec.heartbeat = { ...(typeof spec.heartbeat === "object" ? spec.heartbeat : {}), interval, prompt: String(form.heartbeat_prompt || "").slice(0, 20_000) };
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/contract") {
+    if (pathname === "/agents/contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       const existing = spec.contract ? normalizeRoleContract(spec.contract, { role }) : initialContract(role, spec.title || "");
@@ -254,9 +368,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/initialize-contract") {
+    if (pathname === "/agents/initialize-contract") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       const spec = readAgentSpecForEditing(root, role);
       if (spec.contract) throw new Error(`${role} already has an agent-specific contract`);
@@ -264,9 +378,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/add") {
+    if (pathname === "/agents/add") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = specPath(root, role);
       if (existsSync(file)) throw new Error(`agent ${role} already exists`);
       const title = String(form.title || "").trim();
@@ -277,14 +391,15 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         memory_pointers: [],
         instructions: String(form.instructions || "").slice(0, 20_000),
         hooks: [],
+        web: true,
         contract: persistedContract(initialContract(role, title))
       };
       writeSpec(file, spec);
       return roleUrl(role);
     }
-    if (pathname === "/roles/defaults/update") {
+    if (pathname === "/agents/defaults/update") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const file = defaultsPath(root);
       const defaults = readSpec(file);
       const runner = String(form.runner || "").trim();
@@ -295,9 +410,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       writeSpec(file, defaults);
       return roleUrl(role, "defaults");
     }
-    if (pathname === "/roles/defaults/save") {
+    if (pathname === "/agents/defaults/save") {
       const role = String(form.role || "");
-      if (!ROLE_SLUG.test(role)) throw new Error("invalid agent slug");
+      if (!editableRole(role)) throw new Error("invalid or reserved agent slug");
       const parsed = JSON.parse(String(form.json || "{}"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shared defaults must be a JSON object");
       if (parsed.contract != null) normalizeRoleContract(parsed.contract, { role: "" });
@@ -349,7 +464,7 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const next = { ...task, enabled: form.enabled === "1" };
       upsertSchedule({ targetRoot: root, schedule: next });
       await syncCalendarTask(next, task);
-      return "/scheduled";
+      return localRedirect(form.return_to, "/scheduled?tab=list");
     }
     if (pathname === "/scheduled/delete") {
       const role = String(form.role || "");
@@ -363,9 +478,9 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
     if (pathname === "/scheduled/run") {
       if (!up?.scheduler?.runNow) throw new Error("run task now needs the console attached to a running crew loop");
       void Promise.resolve(up.scheduler.runNow({ role: String(form.role || ""), id: String(form.id || "") })).catch((error) => log(`[console] run-now failed: ${error.message}`));
-      return "/scheduled";
+      return localRedirect(form.return_to, "/scheduled?tab=list");
     }
-    if (pathname === "/proposals/decide") {
+    if (pathname === "/reviews/learning/decide") {
       const approve = form.action === "approve";
       const kind = String(form.kind || "");
       const handlers = {
@@ -376,51 +491,69 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const fn = handlers[kind];
       if (!fn) throw new Error("proposal kind must be skill, pref, or reflection");
       fn({ targetRoot: root, proposalId: String(form.id || ""), approvedBy: "operator", target: form.target, key: form.key, description: form.description, env });
-      return "/approvals";
+      return "/inbox?tab=approvals";
     }
-    if (pathname === "/skills/propose") {
-      proposeSkill({
-        targetRoot: root,
-        id: String(form.skill_id || ""),
-        description: String(form.description || ""),
-        content: String(form.content || ""),
-        roles: lines(form.roles),
-        scope: String(form.scope || "repository"),
-        evidence: String(form.evidence || ""),
-        proposedBy: "operator"
-      });
-      return "/approvals";
+    if (pathname === "/reviews/decide") {
+      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/inbox?tab=approvals");
     }
-    if (pathname === "/approvals/decide") {
-      const approvalId = String(form.id || "");
-      const action = String(form.action || "").trim().toLowerCase();
-      const local = getActionApproval({ targetRoot: root, approvalId, env });
-      if (local) {
-        if (action === "approve") approveAction({ targetRoot: root, approvalId, approvedBy: "operator", env });
-        else if (action === "reject") rejectAction({ targetRoot: root, approvalId, rejectedBy: "operator", env });
-        else throw new Error("approval action must be approve or reject");
-        await operation(["afterApproval"])?.({ id: approvalId, action });
-        return "/approvals";
-      }
-      return callOperation(["decideApproval", "decide"], { id: String(form.id || ""), action: String(form.action || "") }, "/approvals");
+    if (pathname === "/integrations/connect") {
+      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), capabilities: Array.isArray(form.capabilities) ? form.capabilities : [], credentials: form }, "/integrations");
     }
-    if (pathname === "/connectors/connect") {
-      return callOperation(["connect", "connectConnector"], { connectorId: String(form.id || ""), credentials: form }, "/connectors");
+    if (pathname === "/integrations/setup") {
+      return callOperation(["saveIntegrationSetup"], { connectorId: String(form.id || ""), fields: form }, "/integrations");
     }
-    if (pathname === "/connectors/disconnect") {
-      return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/connectors");
+    if (pathname === "/integrations/check") {
+      return callOperation(["checkIntegrationConnection"], { id: String(form.id || "") }, "/integrations");
+    }
+    if (pathname === "/integrations/subscribe") {
+      return callOperation(["configureIntegrationEvents"], { id: String(form.id || "") }, "/integrations");
+    }
+    if (pathname === "/integrations/disconnect") {
+      return callOperation(["disconnect", "disconnectConnector"], { connectorId: String(form.id || "") }, "/integrations");
+    }
+    if (pathname === "/integrations/route") {
+      const [connectionId, eventType] = String(form.source || "").split("|", 2);
+      if (!connectionId || !eventType) throw new Error("Choose a connected integration event.");
+      await callOperation(["saveEventRoute", "saveRoute"], {
+        connectionId,
+        eventType,
+        role: String(form.role || ""),
+        enabled: form.enabled === "1"
+      }, "/events");
+      const data = await snapshot();
+      const connector = (data.connectors || []).find((entry) => entry.connectionId === connectionId);
+      return connector ? `/integrations?integration=${encodeURIComponent(connector.id)}&tab=rules` : "/integrations";
     }
     if (pathname === "/chats/send") {
       const role = String(form.role || "").trim();
       const send = operation(["sendChat"]);
       if (!send) throw new Error("chat needs a console host integration");
-      await send({ targetRoot: root, role, message: String(form.message || "") });
+      await send({ targetRoot: root, role, message: String(form.message || ""), targetRole: String(form.target_role || ""), intent: String(form.intent || ""), cadence: String(form.cadence || ""), time: String(form.time || "") });
       return localRedirect(form.return_to, `/chats?agent=${encodeURIComponent(role)}`);
     }
-    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/tasks");
-    if (pathname === "/tasks/control") return callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || "") }, "/tasks");
-    if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/tasks");
-    if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/tasks");
+    if (pathname === "/workspace/decide") return callOperation(["decideWorkspace"], { id: String(form.id || ""), action: String(form.action || "") }, "/inbox?tab=approvals");
+    if (pathname === "/workspace/lifecycle") return callOperation(["toggleLifecycle"], { id: String(form.id || ""), enabled: form.enabled === "1" }, "/settings?tab=host");
+    if (pathname.startsWith("/settings/secrets/")) return secretAction(pathname.slice("/settings/secrets/".length), form);
+    if (pathname.startsWith("/settings/local/")) return localModelAction(pathname.slice("/settings/local/".length), form);
+    if (pathname === "/settings/knowledge") return callOperation(["knowledgeAction"], {
+      action: String(form.action || ""), consent: form.consent === "1", enabled: form.enabled === "1",
+      fallback: form.fallback === "1", role: String(form.role || ""),
+      paths: String(form.paths || "").trim() ? lines(form.paths) : undefined, rebuild: form.rebuild === "1",
+      ...(String(form.action || "").startsWith("source_") ? { id: String(form.id || ""), url: String(form.url || ""), kind: String(form.kind || "page"),
+        intervalHours: Number(form.interval || 24), maxPages: Number(form.max_pages || 25) } : {})
+    }, "/settings?tab=knowledge");
+    if (pathname === "/workspace/revise") {
+      const changes = Object.keys(form).filter((key) => /^path_\d+$/.test(key)).map((key) => ({ path: form[key], content: form[key.replace("path_", "content_")] }));
+      return callOperation(["reviseWorkspace"], { id: form.id, title: form.title, changes }, "/inbox?tab=approvals");
+    }
+    if (pathname === "/tasks/answer") return callOperation(["answerQuestion"], { id: String(form.id || ""), answer: String(form.answer || "") }, "/inbox");
+    if (pathname === "/tasks/create") return callOperation(["enqueueTask"], { agent: String(form.agent || ""), prompt: String(form.prompt || ""), title: String(form.title || ""), priority: String(form.priority || "normal"), outcome: String(form.outcome || ""), criteria: String(form.criteria || ""), dependencies: form.dependency ? [String(form.dependency)] : [] }, "/inbox?tab=progress");
+    if (pathname === "/tasks/control") {
+      const redirect = await callOperation(["controlTask"], { id: String(form.id || ""), action: String(form.action || ""), feedback: String(form.feedback || "") }, "/inbox");
+      return form.action === "accept" ? "/inbox" : redirect;
+    }
+    if (pathname === "/tasks/check-delivery") return callOperation(["checkDelivery"], { id: String(form.id || "") }, "/inbox");
+    if (pathname === "/tasks/reconcile") return callOperation(["reconcileAction"], { id: String(form.id || ""), outcome: String(form.outcome || ""), evidence: String(form.evidence || ""), receipt: form.receipt ? { reference: String(form.receipt) } : null }, "/inbox");
     throw new Error("unknown action");
   }
 
@@ -432,13 +565,14 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       // The console owns local credentials and outgoing approvals. Reject browser
       // requests from another origin, including DNS rebinding onto loopback.
       const authority = request.headers.host || "";
-      const expected = `${host}:${server.address()?.port}`;
+      const expected = consoleAuthority(listenHost, server.address()?.port);
       if (authority !== expected && authority !== `localhost:${server.address()?.port}`) {
         response.writeHead(403).end("Invalid console host"); return;
       }
       if (request.method === "POST" && ((request.headers.origin && request.headers.origin !== `http://${authority}`) || request.headers["sec-fetch-site"] === "cross-site")) {
         response.writeHead(403).end("Open the console directly to make changes"); return;
       }
+      if (access && !await access(request, response, url)) return;
       if (request.method === "POST") {
         const form = await parseBody(request);
         const back = await handleAction(url.pathname, form);
@@ -451,6 +585,8 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
         if (!artifact) { response.writeHead(404).end("Artifact not found"); return; }
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8", "content-disposition": 'attachment; filename="crewrun-result.txt"' }).end(artifact.content); return;
       }
+      const legacy = legacyInboxRedirect(url);
+      if (legacy) { response.writeHead(302, { location: legacy }).end(); return; }
       const page = pageFromUrl(url.pathname);
       if (!page) { response.writeHead(404, { "content-type": "text/plain" }).end("not found"); return; }
       const roles = page === "agents" ? roleRoute(url) : null;
@@ -459,14 +595,18 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const models = collectModels(root, { knownEvents, operations: hostOperations });
       const getChat = operation(["getChat"]);
       const canChat = Boolean(getChat && operation(["sendChat"]));
-      const selectedChatRole = page === "chats" ? String(url.searchParams.get("agent") || url.searchParams.get("role") || "") : "";
-      const selectedChat = page === "chats" && models.specs[selectedChatRole] && getChat
+      let selectedChatRole = page === "chats" ? String(url.searchParams.get("agent") || url.searchParams.get("role") || "") : "";
+      if (page === "chats" && !selectedChatRole) selectedChatRole = Object.keys(models.specs)[0] || "";
+      const selectedChat = page === "chats" && (models.specs[selectedChatRole] || selectedChatRole === HELPER_ROLE) && getChat
         ? await getChat({ targetRoot: root, role: selectedChatRole })
         : null;
       const helperOpen = url.searchParams.get("helper") === "1";
       const helperChat = helperOpen && getChat
         ? await getChat({ targetRoot: root, role: HELPER_ROLE })
         : null;
+      const workspaceTree = page === "workspace" ? listWorkspaceTree(root) : null;
+      const requestedWorkspaceFile = page === "workspace" ? String(url.searchParams.get("file") || "") : "";
+      const workspaceFile = requestedWorkspaceFile ? readWorkspaceFilePreview(root, requestedWorkspaceFile) : null;
       const helperUrl = new URL(url);
       helperUrl.searchParams.set("helper", "1");
       const closeHelperUrl = new URL(url);
@@ -474,29 +614,51 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
       const localUrl = (value) => `${value.pathname}${value.search}`;
       const roleSubpage = roles?.view === "create" || roles?.view === "detail";
       const html = renderPage(page, renderPartial(page, models, {
+        tab: String(url.searchParams.get("tab") || ""),
+        status: ["ok", "error"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "",
+        message: String(url.searchParams.get("message") || "").slice(0, 400),
+        runnerAttached: Boolean(up),
+        localModels: page === "settings" && url.searchParams.get("tab") === "local" ? localModelsState(url) : null,
+        page: url.searchParams.get("page"),
+        pageParams: Object.fromEntries(url.searchParams),
+        calendarCount: url.searchParams.get("count"),
+        calendarFrom: url.searchParams.get("from"),
+        search: String(url.searchParams.get("q") || ""),
+        selectedReview: String(url.searchParams.get("review") || ""),
+        selectedIntegration: String(url.searchParams.get("integration") || ""),
         selectedRun: String(url.searchParams.get("run") || ""),
         canManageTasks: Boolean(operation(["enqueueTask"])),
+        canCheckDelivery: Boolean(operation(["checkDelivery"])),
         canRunNow: Boolean(up?.scheduler?.runNow),
+        calendarSyncAvailable: Boolean(operation(["syncCalendarTask", "syncScheduledTask"])),
         selectedRole: roles?.selectedRole || String(url.searchParams.get("role") || ""),
         roleView: roles?.view || "list",
         roleTab: roles?.roleTab || "manage",
         agentSearch: String(url.searchParams.get("q") || ""),
         selectedTask: String(url.searchParams.get("task") || url.searchParams.get("schedule") || url.searchParams.get("id") || ""),
         showTaskEditor: url.searchParams.get("new") === "1",
-        showSkillForm: url.searchParams.get("new") === "1",
         selectedChat,
         selectedChatRole,
+        workspaceTree,
+        workspaceFile,
+        chatDraft: String(url.searchParams.get("draft") || "").slice(0, 20_000),
+        chatIntent: ["task", "schedule", "skill"].includes(String(url.searchParams.get("intent") || "")) ? String(url.searchParams.get("intent")) : "",
         canChat,
         canConnect: Boolean(operation(["connect", "connectConnector"])),
+        canConfigureIntegrations: Boolean(operation(["saveIntegrationSetup"])),
+        canCheckIntegrations: Boolean(operation(["checkIntegrationConnection"])),
+        canSubscribeIntegrations: Boolean(operation(["configureIntegrationEvents"])),
         canDisconnect: Boolean(operation(["disconnect", "disconnectConnector"])),
+        canManageEventRoutes: Boolean(operation(["saveEventRoute", "saveRoute"])),
         canDecideApprovals: Boolean(operation(["decideApproval", "decide"]))
           || Array.isArray(hostOperations.approvals) && hostOperations.approvals.some((approval) => approval?.source === "crewrun" && approval?.status === "pending")
       }), {
         targetRoot: root,
         version: VERSION,
-        backHref: roleSubpage ? "/agents" : page === "dashboard" ? "" : "/",
-        backLabel: roleSubpage ? "Back to agents" : "Back to dashboard",
+        backHref: roleSubpage ? "/agents" : page === "inbox" ? "" : "/",
+        backLabel: roleSubpage ? "Back to agents" : "Back to inbox",
         recentChats: models.operations.chats,
+        inboxCount: inboxCount(models),
         helperContent: renderHelperDrawer(models, {
           helperOpen,
           helperChat,
@@ -513,12 +675,20 @@ export function createConsole({ targetRoot, up = null, knownEvents = [], operati
 
   return {
     server,
-    listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, () => {
+    listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, listenHost, () => {
       server.removeListener("error", reject);
-      standalone?.start();
-      log(`[console] http://${host}:${server.address().port}/`);
+      log(`[console] http://${consoleAuthority(listenHost, server.address().port)}/`);
       resolve(server.address().port);
     }); }),
-    close: async () => { await standalone?.close(); return new Promise((resolve) => server.close(resolve)); }
+    close: async () => new Promise((resolve) => server.close(resolve))
   };
+}
+
+function normalizedListenHost(value) {
+  const host = String(value || "127.0.0.1").trim();
+  return host === "[::1]" ? "::1" : host;
+}
+
+function consoleAuthority(host, port) {
+  return `${host === "::1" ? "[::1]" : host}:${port}`;
 }

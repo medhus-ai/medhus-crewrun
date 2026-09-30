@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { crewEnv, crewHome, crewDir } from "./crew-dirs.js";
 import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
+import { readWorkspace, resolveWorkspacePath } from "./workspace-manifest.js";
 
 const SKILL_ID = /^[a-z][a-z0-9-]{0,79}$/;
 
@@ -38,6 +39,7 @@ export function skillIndexPrompt(skills = []) {
 // Skill directories in precedence order (user, workspace, repository).
 export function skillScopes({ targetRoot, workspaceRoot, env }) {
   const target = path.resolve(targetRoot || process.cwd());
+  if (readWorkspace(target)) return [{ scope: "repository", dir: resolveWorkspacePath(target, ".crew/skills"), root: target }];
   const workspace = path.resolve(workspaceRoot || crewEnv("WORKSPACE", env) || path.dirname(target));
   const values = [
     { scope: "user", dir: path.join(crewHome(env), "skills") },
@@ -49,7 +51,7 @@ export function skillScopes({ targetRoot, workspaceRoot, env }) {
   return [...selected.values()];
 }
 
-function readSkillDirectory({ scope, dir }) {
+function readSkillDirectory({ scope, dir, root }) {
   if (!existsSync(dir)) return [];
   const out = [];
   for (const name of readdirSync(dir).sort()) {
@@ -59,6 +61,7 @@ function readSkillDirectory({ scope, dir }) {
     const flat = name.endsWith(".md") && SKILL_ID.test(name.slice(0, -3));
     if (!flat && !SKILL_ID.test(name)) continue;
     const file = flat ? path.join(dir, name) : path.join(dir, name, "SKILL.md");
+    if (root) { try { resolveWorkspacePath(root, path.relative(root, file).split(path.sep).join("/")); } catch { continue; } }
     if (!existsSync(file) || !statSync(file).isFile()) continue;
     const text = readFileSync(file, "utf8");
     const meta = parseFrontmatter(text);

@@ -1,38 +1,38 @@
 # Capabilities and limits
 
-[Documentation](README.md) / Capabilities and limits
+v6 provides one owner per workspace, versioned agents, governed task delegation,
+persistent questions and chats, reviewed durable changes, recurring tasks, and
+installable Slack, Google Workspace, Microsoft 365 and GitHub integrations.
 
-This page describes the code on this branch. Published package versions may differ;
-use the documentation at your installed version's Git tag.
+Linux x64 is the current tested source-runtime path. Windows remains experimental;
+native Windows/macOS knowledge isolation is not ready. Desktop/headless packaging
+and three-OS CI are implemented but require native release verification; see the
+[packaged app](packaged-app.md). Use `crewrun doctor --json` for read-only
+prerequisite reporting; see [desktop and platform delivery](desktop-and-platforms.md).
 
-## Available
+On Linux, agents' existing workspace tools support permission-scoped QMD keyword
+search and Docling Office/native-PDF reads after installing the local dependencies.
+Hybrid search requires separately installed local models and an owner setting.
+No automatic cloud-document synchronization, OCR or spreadsheet calculation engine
+is included; see [workspace knowledge](workspace-knowledge.md).
 
-| Area | Support |
-|---|---|
-| Agents | JSON specs, instructions, shared defaults, permissions, and a local management console |
-| Runners | Claude Agent SDK, Codex SDK, and configured CLI/API routes |
-| Tasks | Manual requests, accepted dependencies, saved artifacts, receipts, and timelines |
-| Recovery | Transactional local storage, atomic claims, delivery retries, pause/cancel, and restart recovery |
-| Scheduling | Cron tasks, periodic check-ins, and application-supplied hooks |
-| Integrations | Approved Slack posts/replies and Gmail existing-draft sends; optional Gmail reads |
-| Learning | Scoped Skills, reviewed preferences, and optional reflection proposals |
-| Usage | Run ledger, reported and estimated spend, and cost per accepted deliverable |
-| Embedding | Host APIs for tools, governance, storage, events, and console data |
+Local models run through llama.cpp (Linux/Windows) or oMLX (Apple Silicon) from a
+short supported list; Crewrun recommends one for your hardware and connects a running
+server, but does not yet install the runtime or download weights. See
+[local models](local-models.md). API keys are saved in an encrypted key store from
+Settings and must be unlocked after each restart.
 
-## Current limits
+Claude subscriptions/API routes and the Linux-verified Codex SDK use governed
+tools. Only one owner-selected direct-Claude agent can use native shell auto-review.
+Codex shell auto-review is not implemented.
 
-- Restart recovery resumes queued work. Interrupted model turns need review and an explicit retry;
-  pause/resume does not restore an exact model checkpoint.
-- An external action already in flight can finish after pause/cancel. Uncertain delivery needs
-  reconciliation before resending. A provider receipt is not proof of recipient delivery or reading.
-- Standalone storage supports processes sharing a local database, not a distributed worker cluster.
-  Exported file-based host helpers still require one operator process or host-provided coordination.
-- Standalone Gmail sends existing drafts. Incoming Slack subscriptions, Gmail draft creation,
-  and browser OAuth callbacks require additional integration work.
-- Usage may be incomplete when a provider does not report it. Subscription costs are estimates;
-  budget reservations and hard provider spending limits are not implemented.
-- Reflections are off by default. Reviewed proposals update preferences or Skills;
-  legacy journals are retained but are not automatically loaded.
+Internal claims and continuations are durable and deduplicated. External writes
+may become uncertain and require reconciliation. Usage reporting can be incomplete;
+subscription estimates are not invoices. See [execution and budget limits](workspaces.md).
 
-See [Tasks and recovery](runtime-recovery.md) for operational details and the
-[Roadmap](product-direction.md) for planned improvements.
+Shared OAuth hosting, multiple human permission levels, a general workflow
+builder, automatic calendar synchronization and WhatsApp are not provided.
+Optional managed **Easy Connect** is a [future direction](product-direction.md#integration-hosting-direction),
+not part of the current self-hosted release.
+There is no compatibility execution mode for old custom hosts, arbitrary CLIs,
+worktrees, Docker workers, Markdown agents, or global schedule files.

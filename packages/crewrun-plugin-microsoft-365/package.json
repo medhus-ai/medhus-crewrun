@@ -1,0 +1,32 @@
+{
+  "name": "@medhus-ai/crewrun-plugin-microsoft-365",
+  "version": "0.6.0",
+  "description": "Governed Microsoft 365 integration plugin for CrewRun.",
+  "homepage": "https://github.com/medhus-ai/medhus-crewrun#readme",
+  "bugs": {
+    "url": "https://github.com/medhus-ai/medhus-crewrun/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medhus-ai/medhus-crewrun.git",
+    "directory": "packages/crewrun-plugin-microsoft-365"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@medhus-ai/crewrun-plugin-sdk": "^0.6.0"
+  }
+}

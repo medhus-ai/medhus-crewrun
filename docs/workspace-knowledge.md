@@ -1,0 +1,237 @@
+# Workspace knowledge: QMD and Docling
+
+CrewRun uses [QMD](https://github.com/tobi/qmd) for local document search and
+[Docling](https://github.com/docling-project/docling) for document conversion.
+They are host components behind the existing internal MCP bridge, not separate
+agent-accessible MCP servers. No cloud search account or provider key is required.
+
+## Agent tools
+
+Every ordinary agent with the existing `workspace.search` and `workspace.read`
+tool grants gets these capabilities. No new file grants are added. The normal
+personal/organization presets already include both tools; existing contracts
+which deliberately omit them remain restricted. The setup helper is not a
+workspace-reading agent and does not gain broad knowledge access.
+
+## Editable workspace formats
+
+CrewRun's first local authoring surface is intentionally small: agents can write
+only **Markdown (`.md`)** and **CSV (`.csv`)** files in their authorized draft or
+output folders. The owner console previews both under **Workspace**. Markdown is
+rendered safely and CSV is shown as a bounded table.
+
+DOCX, XLSX, PPTX and PDF remain read-only local import formats. Docling can extract
+them for authorized reading and search, but CrewRun does not claim to be an Office
+editor or silently rewrite arbitrary binary documents. Durable Markdown remains
+reviewed; agent-created Markdown/CSV drafts are direct outputs in the agent's
+assigned draft/output boundary.
+
+- `workspace.search({query, mode?, paths?})`: QMD keyword search before setup, returning
+  up to ten matches, original source paths, content revisions and excerpts.
+  After setup the default combines keyword and local vector
+  retrieval, without query expansion or a separate reranking model. `paths`
+  optionally selects 1–50 specific authorized files. The owner chooses visible
+  keyword fallback (default) or failure when hybrid retrieval is unavailable.
+- `workspace.read({path, offset?, limit?})`: existing text reads remain unchanged.
+  PDF, DOCX, XLSX, PPTX and CSV are converted with Docling to paginated Markdown.
+  Offsets for converted documents are bytes in the extracted Markdown, not the
+  original binary file. Results include source revision and available Docling
+  element/page references. A changed source invalidates cached extraction.
+- `workspace.search({query, mode: "literal"})`: basic scoped Markdown search without
+  QMD or Python. Hybrid fallback returns `degraded: true`, `requestedMode` and a
+  `fallbackReason`; it never sends files to a cloud provider.
+
+Example: search for `launch budget`, then read `knowledge/budget.xlsx` from a
+matching result. Cite its source/revision. Extracted line numbers are **not Excel
+cell addresses** or PDF page numbers. Docling extraction does not evaluate formulas
+or guarantee current formula results. Use authorized provider range reads for live
+spreadsheet calculations. Scanned PDFs needing OCR fail rather than claim a complete
+result. This release uses Docling's model-free native PDF pipeline, not OCR/VLM.
+
+Supported sources are local workspace files, including public web pages saved by
+**web sources** (below). This does **not** automatically sync Google Drive, Docs,
+Sheets or Microsoft files: existing provider tools remain separate, and connecting a
+provider does not start indexing or automation.
+
+## Web sources
+
+The owner can add public web pages and sitemaps under **Settings → Knowledge → Web
+sources**. The host fetches each source on its schedule (hourly, every 6 hours, daily or
+weekly) and saves every page as Markdown in `knowledge/sources/<source>/`. Search,
+embeddings, read grants and citations then work exactly as for any workspace file: an
+agent sees a saved page only if it may read that folder (the standard presets grant
+`workspace:knowledge/*`). Agents cannot add sources or choose addresses.
+
+- **Page**: one HTML, Markdown or plain-text address. **Sitemap**: a `sitemap.xml` (or a
+  sitemap index, one level deep) whose pages on the same host are saved, up to 100.
+- HTTPS on the standard port only; no credentials in the address. Every connection
+  resolves the host name and refuses loopback, private, link-local, carrier-grade NAT
+  (including Tailscale `100.64.0.0/10`) and other non-public addresses, including after
+  redirects. Up to five redirects; 2 MB per page, 5 MB per sitemap, 20 MB per refresh.
+- HTML is converted conservatively: scripts, styles, navigation, forms and footers are
+  dropped, links become absolute `http(s)` links, and code blocks keep their indentation.
+  Each file starts with the source address, fetch time and a note that it is external
+  content. Agents treat it as data, never instructions.
+- A page is rewritten only when its text changes, and requests reuse `ETag` and
+  `Last-Modified`, so unchanged pages do not invalidate indexes.
+- A failed refresh keeps every page from the last good refresh and retries within an
+  hour. Pages a sitemap stops listing are removed only after the sitemap itself was read.
+- **Remove** deletes only the pages the source saved; other files in its folder stay.
+- The source list is `.crew/knowledge-sources.json`; fetch status lives in the private
+  runtime database. At most 50 sources per workspace. `robots.txt` is not consulted, so
+  add only pages you are entitled to copy.
+
+## Incremental indexes (opt-in)
+
+By default every change to an agent's source set creates a new index generation and
+re-embeds the whole bounded corpus. Set `CREW_KNOWLEDGE_INCREMENTAL=1` in the host
+environment to keep one content-addressed QMD index per agent contract instead:
+
+- A changed file re-embeds only its own passages; unchanged passages keep their vectors.
+- Each source set (the files and revisions a request stages) gets its own ready marker, so
+  hybrid search stays exact: results come only from the files staged for that request.
+- A full-corpus build (no path selection) deletes passages and vectors of removed files;
+  narrower builds leave them in the private cache.
+- A marker whose vectors are gone is detected, deleted and rebuilt, with keyword fallback
+  meanwhile.
+
+Different agents and different contracts never share an index. The flag changes only the
+private cache layout; turn it off to return to per-generation indexes.
+
+## Host setup
+
+The bundled host exposes **Settings → Knowledge** for model download, verification,
+search preferences and agent index jobs. Packaging QMD/Docling into self-contained
+Windows/Linux installers remains separate work; these checkout prerequisites still
+apply. Unsupported sandbox platforms stay disabled.
+
+Use Linux with Node 22+ for QMD (the core still supports Node 20), Python 3.10+
+and `bubblewrap` plus `util-linux` (`flock`, `prlimit`). Install OS packages using
+your distribution's package manager. Unprivileged user namespaces must work for
+the account running CrewRun. A container may need an explicit operator security
+configuration; CrewRun never falls back to unrestricted execution.
+
+From a checkout, `npm install` installs the pinned optional `@tobilu/qmd@2.8.3`.
+`npm install --omit=optional` leaves it unavailable and does not prevent core startup.
+Create a dedicated Python virtual environment (do not use a credential-containing
+application environment):
+
+```sh
+python3 -m venv node_modules/.crewrun-docling
+node_modules/.crewrun-docling/bin/python -m pip install -r docs/docling-requirements.txt
+```
+
+This selects Docling's slim Office/native-PDF components, not the full GPU stack.
+Some Linux distributions require their `python3-venv` package first. For a global
+CrewRun installation or an environment outside the checkout, set
+`CREW_DOCLING_VENV` to that dedicated environment's absolute directory in the host
+service environment. Use a system-Python-based venv: the sandbox exposes `/usr`
+system libraries, not arbitrary Conda installations or the host home.
+
+Restart the host after dependency/environment changes. Missing components produce
+an actionable tool error; ordinary text reads and explicit literal search still work.
+
+### Guided local hybrid search
+
+1. Open **Settings → Knowledge**, review the Gemma terms and download/resource
+   guidance, and choose **Download and set up**. No paid plan, API key or Ollama needed.
+2. The host downloads only EmbeddingGemma 300M Q8_0 (333,590,944 bytes) from the pinned
+   Hugging Face revision. HTTPS/CDN destinations, byte count and SHA-256 are checked;
+   the model is published atomically, then tested with a real sandboxed embedding and
+   vector search. Ready is not reported merely because a file exists.
+3. Setup enables local hybrid search. Choose None for keyword-only, or choose whether
+   unavailable embeddings should produce explicitly degraded keyword results or errors.
+4. Select an agent and **Build / rebuild index**. Optional paths narrow the corpus.
+   Settings displays progress and allows cancellation; refresh shows durable status.
+   Incomplete downloads restart on retry rather than trusting partial files.
+
+Each workspace stores a single immutable model artifact shared by its agents in
+`knowledge-models/` beside its private runtime SQLite store. Credentials are not
+mounted into workers. Separate workspace runtimes currently keep separate copies.
+The setup/lease record lives in the existing SQLite database; concurrent hosts cannot
+own the same job. Interrupted jobs become retryable after their 60-second lease expires.
+Cancellation and shutdown abort active work; an interrupted build is never reported ready.
+
+New source/contract generations queue one bounded background embedding job on demand.
+The requesting search uses keyword results until the index is ready (or errors if
+fallback is disabled). Permission, task lease and source revisions are rechecked.
+One setup/index job runs per workspace; a busy workspace defers other generations
+until a later search or explicit build. Failed jobs require owner retry. Unchanged
+generations reuse vectors; changed generations currently rebuild their bounded corpus,
+not a cross-generation incremental vector cache. Very large workspaces need narrower
+path selections; the existing admission limits below remain in effect.
+
+Model weights are mounted read-only. Workers have no network and use CPU mode with
+one embedding context. Host download is a separate owner-only operation. Workspace
+QMD hooks, YAML, model URLs, plugins and ambient credentials are never loaded. No
+generation/reranking weights are downloaded. Legacy manual QMD cache/environment setup
+is replaced by the private managed artifact; use Settings to provision it. Local
+inference is not reported as a provider API charge. RAM headroom guidance is an
+estimate, not a hard native-memory quota; existing heap, CPU, time and file limits apply.
+
+## Boundary and private state
+
+1. Check the acting agent's current tool and data grants before reading sources.
+2. Read through directory descriptors with no-follow checks; deny traversal,
+   symlinks, hard links, devices and other special files.
+3. Stage only authorized bytes. QMD never indexes the original workspace or a
+   shared cross-agent collection, even when filtering results would appear sufficient.
+4. Run subprocesses in Linux bubblewrap with no network, no host credentials or
+   workspace mounts, read-only staged inputs and runtime dependencies. Only the
+   selected QMD index and temporary sandbox area are writable. Apply CPU, output,
+   file-size and wall-clock limits; Docling also has an address-space limit.
+5. Recheck the contract, task lease and all source revisions before returning results.
+   Reject the whole response after revocation, deletion or a source change. Record
+   indexed source references/revisions in task audit events, not just returned hits.
+
+Source content is untrusted data, not instructions or permission grants. Parsed
+content/indexes do not rewrite durable knowledge, skills or configuration. Even
+the optional shell agent uses this same scoped knowledge bridge; its separately
+authorized native-shell exception is unchanged.
+
+Private derived caches live beside the workspace's runtime `state.sqlite`, in
+`knowledge/`. Each role/contract/content generation is isolated; unchanged QMD
+generations reuse their index/embeddings. OS file locks serialize concurrent
+access and release on process exit. Old generations are never selected by new
+permissions, but their bytes remain private owner-readable cache until cleanup.
+Stop the host before removing that workspace's **knowledge directory only** to
+purge cached documents or reclaim space; do not remove `state.sqlite`, credentials,
+or the workspace. Sources are unchanged and indexes rebuild on the next call.
+
+Discovery is bounded to 5,000 entries, depth 30, and 100 authorized files; a
+`truncated` response explicitly signals partial discovery. Select narrower `paths`
+when needed. Other limits: 10 MB per source, 32 MB total source/extracted corpus,
+2 MB extracted text per Office/PDF file, 100 PDF pages, ten newly parsed documents
+per call, and a 256 MiB per-agent cache admission threshold. Oversized or malformed
+inputs fail explicitly. The threshold is checked before each call, not a filesystem
+quota. Jobs clean up on completion; an abruptly killed host can leave private
+`knowledge/jobs/` snapshots which can be removed with the host stopped.
+
+## Verification
+
+```sh
+node --test test/workspace-knowledge.test.js
+CREW_LIVE_KNOWLEDGE=1 node --test test/workspace-knowledge.test.js
+# Opt-in real download, checksum and sandbox inference (334 MB):
+CREW_LIVE_KNOWLEDGE_INSTALL=1 node --test test/knowledge-models.test.js
+# Reuse an existing verified artifact for scoped hybrid retrieval tests:
+CREW_LIVE_KNOWLEDGE_HYBRID=1 CREW_TEST_EMBEDDING_FILE=/absolute/model.gguf node --test test/workspace-knowledge.test.js
+```
+
+The first command checks authority, staging, invalidation, caching, schemas and MCP
+registration with controlled adapters. The opt-in command runs real QMD, Docling,
+Word/Excel/CSV/PDF fixtures, concurrent searches and active sandbox-denial probes.
+It needs no provider credentials or public HTTPS. Hybrid-model quality/performance
+is separate from these keyword/parser checks; do not interpret passing them as
+verification of model downloads or semantic retrieval quality. `knowledge-models.test.js`
+also covers consent, redirects, hashes, cancellation, recovery and concurrent claims;
+the console tests cover setup controls and cross-origin rejection.
+
+`test/knowledge-sources.test.js` covers address and redirect checks, HTML conversion,
+unchanged-page skipping, failure retention, sitemap limits and symlink refusal with a fake
+transport; the incremental cache layout is covered in `test/workspace-knowledge.test.js`.
+
+QMD and Docling code are MIT-licensed; preserve their notices. Model weights have
+their own licenses. The npm lockfile pins QMD's dependency resolution; the Docling
+requirements pin its top-level release (transitive Python dependencies follow its
+declared compatible constraints).

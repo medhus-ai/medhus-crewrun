@@ -1,29 +1,16 @@
 import { createToolBroker } from "./tool-broker.js";
-import { gmailConnectorActions } from "./connectors/gmail.js";
-export { connectorAuthorizationUrl, connectorProvider, connectorProviders } from "./connectors/oauth.js";
-export { gmailConnectorActions } from "./connectors/gmail.js";
-export { slackConnectorActions } from "./connectors/slack.js";
-import { slackConnectorActions } from "./connectors/slack.js";
 
 const CONNECTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const PROVIDER_ID = /^[a-z][a-z0-9-]{0,63}$/;
-const ACTION_ID = /^[a-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/;
+const ACTION_ID = /^[a-z][a-z0-9-]{0,63}\.[A-Za-z][A-Za-z0-9]*$/;
 const CONNECTION_STATES = new Set(["connected", "needs_reconnect", "revoked", "disconnected"]);
 
 // Connector records are deliberately metadata only. OAuth callbacks, refresh tokens, client
 // secrets, and provider SDKs remain in the host application; this module only decides which
 // narrow action a role may request and whether the host needs to approve it.
-export const builtInConnectorActions = Object.freeze([
-  ...slackConnectorActions,
-  ...gmailConnectorActions
-]);
-
-// Gmail reads are off until a host explicitly opts in. Sending a host-owned draft and the Slack
-// message actions remain available when their connection, scopes, and role grants permit them.
-export function connectorActions({ gmailRead = false, actions = builtInConnectorActions } = {}) {
-  return actionValues(actions)
-    .filter((action) => gmailRead || action.provider !== "gmail" || !action.read)
-    .map(normalizeAction);
+// Actions come exclusively from installed plugins; an empty registry exposes nothing.
+export function connectorActions({ actions = [] } = {}) {
+  return actionValues(actions).map(normalizeAction);
 }
 
 // Creates the public form of a connection. It copies known metadata fields only, which means a
@@ -43,12 +30,17 @@ export function connectionMetadata(record) {
     : {};
   const accountId = safeText(accountSource.id ?? record.accountId, 256);
   const accountLabel = safeText(accountSource.label ?? record.accountLabel, 256);
+  const capabilities = normalizedScopes(record.capabilities);
   const metadata = {
     id,
     provider,
     status,
     account: accountId || accountLabel ? { ...(accountId ? { id: accountId } : {}), ...(accountLabel ? { label: accountLabel } : {}) } : null,
-    scopes: normalizedScopes(record.scopes ?? record.grantedScopes)
+    scopes: normalizedScopes(record.scopes ?? record.grantedScopes),
+    // A hosted OAuth consent screen can intentionally grant only a subset of a plugin's
+    // declared capabilities. Keep that non-secret selection alongside scopes so a broad
+    // provider app permission never becomes a tool escape hatch.
+    ...(capabilities.length ? { capabilities } : {})
   };
   for (const [key, value] of [["createdAt", record.createdAt], ["updatedAt", record.updatedAt], ["expiresAt", record.expiresAt]]) {
     const text = safeText(value, 64);
@@ -75,9 +67,7 @@ export function createConnectionCatalog(connections = []) {
 // Return the risk classification a host should display and hand to its approval UI. An
 // external-write action is never downgraded by a descriptor: it always requires a host decision.
 export function classifyConnectorAction(action) {
-  const descriptor = typeof action === "string"
-    ? connectorActions({ gmailRead: true }).find((entry) => entry.id === action)
-    : normalizeAction(action);
+  const descriptor = normalizeAction(action);
   if (!descriptor) throw new Error(`unknown connector action: ${action || "<empty>"}`);
   const requiresApproval = descriptor.risk === "external-write" || descriptor.approval === "required";
   return {
@@ -99,8 +89,7 @@ export function createConnectorRegistry({
   connections = [],
   roleActions = {},
   roleConnections = {},
-  actions = builtInConnectorActions,
-  gmailRead = false,
+  actions = [],
   invoke,
   approve = null,
   governance = null,
@@ -109,7 +98,7 @@ export function createConnectorRegistry({
   serverName = "connectors",
   label = "Connected services"
 } = {}) {
-  const descriptors = connectorActions({ gmailRead, actions });
+  const descriptors = connectorActions({ actions });
   const actionById = new Map(descriptors.map((action) => [action.id, action]));
   const catalog = createConnectionCatalog(connections);
   const broker = createToolBroker({ allowlists: roleActions, displayRole, governance });
@@ -190,7 +179,8 @@ export function createConnectorRegistry({
     const preDecision = governance?.authorizeAction
       ? await governance.authorizeAction({ role, toolName: actionId, input: checked.input, context, roleOptions, approval: null, data, impact })
       : null;
-    if (preDecision && !preDecision.allowed && preDecision.decision !== "approval-required") {
+    if (!preDecision) throw new Error("A host authority policy is required to execute integration tools.");
+    if (!preDecision.allowed && preDecision.decision !== "approval-required") {
       await governance.recordAction?.({
         role,
         action: "tool",
@@ -296,6 +286,7 @@ function normalizeAction(raw) {
     provider,
     label: String(raw.label || id),
     description: String(raw.description || raw.label || id),
+    capability: safeText(raw.capability, 64),
     scopes: normalizedScopes(raw.scopes),
     scopeSets: normalizedScopeSets(raw.scopeSets, raw.scopes),
     risk,
@@ -312,6 +303,7 @@ function publicAction(action) {
     provider: action.provider,
     label: action.label,
     description: action.description,
+    ...(action.capability ? { capability: action.capability } : {}),
     scopes: [...action.scopes],
     risk: action.risk,
     approval: action.approval,
@@ -333,6 +325,7 @@ function selectConnection({ role, action, requestedConnectionId, connectionsForR
 
 function supportsAction(connection, action) {
   if (connection.status !== "connected" || connection.provider !== action.provider) return false;
+  if (action.capability && !(connection.capabilities || []).includes(action.capability)) return false;
   const granted = new Set(connection.scopes);
   return action.scopeSets.some((scopeSet) => scopeSet.every((scope) => granted.has(scope)));
 }

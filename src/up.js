@@ -1,129 +1,48 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-
-import { createPulse } from "./pulse.js";
-import { listReflectionProposals } from "./reflection-proposals.js";
-import { listSkillProposals } from "./skill-proposals.js";
-import { listPreferenceProposals } from "./preference-memory.js";
-import { createScheduler } from "./schedules.js";
 import { createRuntimeScheduler } from "./runtime-scheduler.js";
-import { createStandaloneRuntime } from "./standalone.js";
+import { requireWorkspace } from "./workspace-manifest.js";
 
-// The crew loop as a library: schedules + heartbeats + hooks + host housekeeping around one
-// target project, with every opinionated piece injected by an optional host module. The
-// `crewrun up` CLI is a thin wrapper over createUp; hosts can equally import it directly and
-// keep their own entry point.
-//
-// Host contract — a plain object, everything optional:
-//   runTurn(role, prompt, meta)   -> { ok, text?, reason? }   turn execution (default: a
-//                                     standalone runner with built-in tools and configured connections)
-//   runSchedule(schedule)         -> { ok, ... }              override schedule runs entirely
-//   enqueue({role, body, externalId}) -> { created }          hook delivery; hooks are disabled
-//                                     (with one logged notice) when absent
-//   routeEvent(event, payload, settings) -> [roles]           default: every subscribed role
-//   renderEvent(event, payload)   -> prompt string
-//   spentToday(role)              -> USD number               backs heartbeat budget caps
-//   tick({ emit })                                            periodic housekeeping (queues, outboxes)
-//   start({ emit }) / stop()                                  lifecycle (servers, watchers)
-
-export function defaultRouteEvent(event, payload, settings) {
-  return Object.values(settings).filter((entry) => entry.hooks.includes(event)).map((entry) => entry.role);
-}
-
-// Accepts: default export object, default export factory, named createHost({ targetRoot, log }).
-export async function loadHostModule(spec, { targetRoot, log = () => {} } = {}) {
-  if (!spec) return {};
-  const resolved = path.isAbsolute(spec) || /^\./.test(spec) ? pathToFileURL(path.resolve(spec)).href : spec;
-  const mod = await import(resolved);
-  const factory = mod.createHost || mod.default?.createHost || (typeof mod.default === "function" ? mod.default : null);
-  if (factory) return await factory({ targetRoot, log });
-  if (mod.default && typeof mod.default === "object") return mod.default;
-  throw new Error(`host module ${spec} exports neither createHost({ targetRoot, log }) nor a host object`);
-}
-
-export function createUp({
-  targetRoot,
-  host = {},
-  heartbeatTickMs = 1000,
-  hostTickMs = 15000,
-  log = () => {},
-  env = process.env,
-  now = () => new Date()
-} = {}) {
+// One runtime owns queued work, trigger claims, delivery, and shutdown. Provider
+// events enter through the host's verified ingress, never an in-memory hook bus.
+export function createUp({ targetRoot, host, hostTickMs = 15000, log = () => {}, now = () => new Date() } = {}) {
   if (!targetRoot) throw new Error("createUp requires targetRoot");
   const root = path.resolve(targetRoot);
-
-  const standalone = host.runTurn ? null : createStandaloneRuntime({ targetRoot: root, env, log });
-  const runTurn = host.runTurn || standalone.runTurn;
-  const durableTriggers = Boolean(standalone && !host.runSchedule);
-
-  let hooksNoticeShown = false;
-  const enqueue = host.enqueue || (standalone ? ({ role, body, externalId }) => standalone.store.enqueue({ agent: role, prompt: body, workflow: "hook", dedupeKey: externalId }) : (() => {
-    if (!hooksNoticeShown) {
-      hooksNoticeShown = true;
-      log("[up] hooks are disabled: the host provides no enqueue({ role, body, externalId })");
-    }
-    return { created: false };
-  }));
-
-  const pulse = createPulse({
-    targetRoot: root,
-    runTurn: (role, prompt) => runTurn(role, prompt, { workflow: "heartbeat", label: `heartbeat:${role}` }),
-    enqueue,
-    routeEvent: host.routeEvent || defaultRouteEvent,
-    ...(host.renderEvent ? { renderEvent: host.renderEvent } : {}),
-    ...(host.spentToday ? { spentToday: host.spentToday } : {}),
-    log,
-    env,
-    now
-  });
-
-  const scheduler = durableTriggers ? createRuntimeScheduler({ targetRoot: root, runtime: standalone, env, now, log }) : createScheduler({
-    targetRoot: root,
-    run: host.runSchedule || ((schedule) => runTurn(schedule.role, schedule.prompt, { workflow: "schedule", label: `schedule:${schedule.id}`, schedule })),
-    env,
-    now,
-    log,
-    error: log
-  });
-
-  let timers = [];
-
-  async function tickOnce() {
-    await scheduler.tick();
-    if (!durableTriggers) await pulse.tickHeartbeats();
-    if (standalone) await standalone.tick();
-    await host.tick?.({ emit: pulse.emit });
+  requireWorkspace(root);
+  if (!host?.durableRuntime || !host.operations) throw new Error("v6 requires the bundled governed host and its durable runtime");
+  const scheduler = createRuntimeScheduler({ targetRoot: root, runtime: host.durableRuntime, now, log });
+  let timer;
+  let started = false;
+  let ticking = null;
+  function tickOnce() {
+    if (ticking) return ticking;
+    ticking = Promise.resolve().then(async () => {
+      await scheduler.tick();
+      await host.tick();
+    }).finally(() => { ticking = null; });
+    return ticking;
   }
-
   async function start() {
-    standalone?.start();
-    scheduler.start();
-    const heartbeat = setInterval(() => { if (!durableTriggers) void pulse.tickHeartbeats(); }, heartbeatTickMs);
-    heartbeat.unref?.();
-    timers.push(heartbeat);
-    if (host.tick) {
-      const housekeeping = setInterval(() => { void Promise.resolve(host.tick({ emit: pulse.emit })).catch((error) => log(`[up] host tick failed: ${error.message}`)); }, hostTickMs);
-      housekeeping.unref?.();
-      timers.push(housekeeping);
-    }
-    await host.start?.({ emit: pulse.emit });
+    if (started) return;
     try {
-      const pending = listSkillProposals({ targetRoot: root }).length
-        + listPreferenceProposals({ targetRoot: root }).length
-        + listReflectionProposals({ targetRoot: root }).length;
-      if (pending) log(`[up] ${pending} proposal${pending === 1 ? "" : "s"} pending operator review — crewrun proposals list ${root}`);
-    } catch { /* proposals are optional */ }
-    log(`[up] crew loop running on ${root}`);
+      await host.start();
+      scheduler.start();
+      started = true;
+      timer = setInterval(() => { void tickOnce().catch((error) => log(`[up] tick failed: ${error.message}`)); }, hostTickMs);
+      timer.unref?.();
+      log(`[up] workspace running on ${root}`);
+    } catch (error) {
+      await scheduler.stop();
+      await host.stop();
+      throw error;
+    }
   }
-
   async function stop() {
+    clearInterval(timer);
+    timer = null;
+    await ticking?.catch(() => {});
     await scheduler.stop();
-    await standalone?.stop();
-    for (const timer of timers) clearInterval(timer);
-    timers = [];
-    await host.stop?.();
+    await host.stop();
+    started = false;
   }
-
-  return { start, stop, tickOnce, emit: pulse.emit, scheduler, pulse, operations: host.operations || standalone?.operations || host };
+  return { start, stop, tickOnce, scheduler, operations: host.operations };
 }

@@ -1,29 +1,38 @@
 # Crewrun documentation
 
 Crewrun runs agents locally or inside an application, with reviewed permissions and visible results.
-Start with [Getting started](getting-started.md).
+Start with [Getting started](getting-started.md). Existing installations should read [v6 migration](v6-migration.md).
 
 ## Use Crewrun
 
 | Guide | What it covers |
 |---|---|
 | [Getting started](getting-started.md) | Install, choose a runner, and complete your first task |
+| [Console](console.md) | Inbox, workspace files, scheduled work, integrations and skills, and activity |
+| [Personal and organization workspaces](workspaces.md) | Guided setup, scoped tools, accountable work, migration, and enforced limits |
 | [Agents](agents.md) | Jobs, instructions, permissions, web access, and project files |
 | [Providers](providers.md) | Runner profiles, local sign-ins, and API keys |
+| [Local models](local-models.md) | llama.cpp and oMLX, supported models, hardware recommendation, connect |
 | [Integrations](integrations.md) | Connect accounts, grant actions, review outgoing messages, and add host gateways |
+| [Hosted integration reference host](reference-host.md) | Browser OAuth, signed webhooks, event routing, and one-owner Funnel deployment |
+| [Integration plugins](integration-plugins.md) | Private app setup, capability limits, pinned installation, scaffolding and contract tests |
+| [Tailscale HTTPS setup](tailscale-setup.md) | Recommended public callbacks, private console, verification and rollback |
 | [Tasks and recovery](runtime-recovery.md) | Results, receipts, pause/cancel, retries, and usage |
 | [Scheduling](scheduling.md) | Recurring tasks, check-ins, hooks, and handoffs |
 | [Skills and context](learning.md) | Save useful procedures and preferences; review optional reflections |
+| [Workspace knowledge](workspace-knowledge.md) | Scoped QMD search, Docling document reads, local setup and isolation |
 | [Security and storage](security.md) | Credentials, permissions, isolation, and local state |
 | [Capabilities and limits](state.md) | What is supported today |
+| [Desktop and platforms](desktop-and-platforms.md) | Windows/Linux/macOS rollout, diagnostics, packaging gates and Hermes review |
+| [Packaged app](packaged-app.md) | Shared desktop/headless app for Linux, Windows and macOS; build and private access |
 
 ## Build with Crewrun
 
 | Guide | What it covers |
 |---|---|
-| [Library integration](library.md) | Run agents from code or supply a custom host |
+| [Library integration](library.md) | Start the bundled host from code |
 | [Permissions and approvals](governed-operations-v1.md) | Agent contracts, data scopes, and approval boundaries |
-| [Host API reference](host-api-v1.md) | Supported interfaces, schemas, and compatibility |
+| [Host API reference](host-api-v1.md) | Current host interfaces and versioned schemas |
 | [Module reference](modules.md) | Available package imports |
 | [Development](development.md) | Tests, examples, and contribution guidance |
 | [Roadmap](product-direction.md) | Planned improvements and evaluation priorities |

@@ -1,10 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import { z as zod } from "zod";
 
 import { crewToolDefinitions } from "./crew-tools.js";
+import { createRoleGovernance } from "./role-contract.js";
+import { loadRoleSpec } from "./role-spec.js";
 
 // Function-call tool names disallow dots: codebase.search_code -> codebase_search_code.
 export function sanitizeToolName(toolName) {
@@ -31,7 +30,6 @@ export function toolError(error) {
   };
 }
 
-const DEFAULT_PASSTHROUGH = ["PATH", "HOME"];
 
 // Kernel tools do not have provider descriptors, so their low-risk behavior is explicit before
 // a governed role sees them. Host registries may supply actionPolicy() for the same treatment.
@@ -44,22 +42,19 @@ const CREW_TOOL_POLICY = Object.freeze({
   "web.search": { impact: "read" }
 });
 
-// Exposes a host tool registry to Claude (in-process SDK server) and Codex (stdio child server).
+// Exposes a host tool registry to Claude (in-process SDK server) and Codex (turn-scoped HTTP server).
 // Registry contract — required: serverName, toolsForRole(role, roleOptions), describe(toolName),
 // inputSchema(toolName, z), call({ role, toolName, input, context, roleOptions }).
+// Tool access requires governance (createRoleGovernance facade).
 // Optional: label, toolLineMarker, instructions, enabled(toolContext), validate(toolName, input),
-// alwaysLoad(toolName), toolInstructions(role, toolContext, toolNames), serializeContext(toolContext),
-// serializableContextKeys, childEnvPassthrough, childEnvPrefixes, childAuthEnv, stdioServerEntry,
-// governance (createRoleGovernance facade), actionPolicy(toolName, { role, ...toolContext }).
+// alwaysLoad(toolName), toolInstructions(role, toolContext, toolNames),
+// actionPolicy(toolName, { role, ...toolContext }).
 export function createMcpBridge(registry) {
   if (!registry?.serverName) throw new Error("createMcpBridge requires registry.serverName");
   const serverName = registry.serverName;
   const label = registry.label || serverName;
   const toolLineMarker = registry.toolLineMarker || `[${serverName}-tool]`;
   const enabled = (toolContext) => (registry.enabled ? registry.enabled(toolContext || {}) !== false : true);
-  const serializeContext = registry.serializeContext
-    || ((toolContext) => defaultSerialize(toolContext, registry.serializableContextKeys || []));
-
   const includeCrewTools = registry.crewTools !== false;
 
   function toolNamesFor(role, toolContext = {}) {
@@ -80,7 +75,7 @@ export function createMcpBridge(registry) {
 
   function authorityForTool(role, toolName, toolContext = {}) {
     const governance = registry.governance;
-    if (!governance?.authorizeAction) return null;
+    if (!governance?.authorizeAction) return { allowed: false, decision: "denied", reason: "A host authority policy is required." };
     const policy = isCrewTool(role, toolName, toolContext)
       ? CREW_TOOL_POLICY[toolName] || { impact: "read" }
       : registry.actionPolicy?.(toolName, { ...toolContext, role }) || {};
@@ -95,24 +90,24 @@ export function createMcpBridge(registry) {
 
   function toolVisibleForRole(role, toolName, toolContext, hostNames) {
     const governance = registry.governance;
-    if (!governance?.authorizeAction) return true;
+    if (!governance?.authorizeAction) return false;
     try {
       const decision = authorityForTool(role, toolName, toolContext, hostNames);
       // Approval-gated actions remain visible so they can produce a host-owned approval
       // request. Fully denied actions are never registered with either MCP transport.
-      return !decision || decision.allowed || decision.decision === "approval-required" || decision.decision === "legacy";
+      return Boolean(decision?.allowed || decision?.decision === "approval-required");
     } catch {
       // A malformed policy must not create a new avenue around the governed boundary.
       return false;
     }
   }
 
-  function assertCrewToolAuthority(role, toolName, toolContext = {}) {
-    if (!isCrewTool(role, toolName, toolContext)) return;
+  function assertToolAuthority(role, toolName, toolContext = {}) {
     const decision = authorityForTool(role, toolName, toolContext);
-    if (!decision || decision.allowed || decision.decision === "legacy") return;
-    if (decision.decision === "approval-required") throw new Error(`${toolName} requires host approval`);
-    throw new Error(decision.reason || `${toolName} is outside this role's authority`);
+    if (decision?.allowed) return;
+    // Host write handlers own the durable approval request and recheck it before delivery.
+    if (decision?.decision === "approval-required" && !isCrewTool(role, toolName, toolContext)) return;
+    throw new Error(decision?.reason || `${toolName} is outside this role's authority`);
   }
 
   function toolHandlers({ role, toolContext = {}, schemaApi = zod, onToolCall } = {}) {
@@ -132,9 +127,8 @@ export function createMcpBridge(registry) {
           if (!validation.ok) return toolError(new Error(validation.error));
           try {
             registry.assertContext?.(toolContext);
-            // Host tools receive the same enforcement through createToolBroker. Kernel tools do
-            // not pass through that broker, so recheck their role contract at invocation too.
-            assertCrewToolAuthority(role, toolName, toolContext);
+            // Recheck even previously registered handlers after an authority change.
+            assertToolAuthority(role, toolName, toolContext);
             return toolResult(await source.call({ role, toolName, input: validation.input, context: toolContext, roleOptions }));
           } catch (error) {
             return toolError(error);
@@ -185,71 +179,11 @@ export function createMcpBridge(registry) {
     const describeFor = (name) => (isCrewTool(role, name, toolContext) ? crewToolDefinitions.describe(name) : registry.describe(name));
     return [
       `## ${label} MCP tools`,
-      `You have ${label} MCP tools in addition to the built-in Read/Grep/Glob tools. If this section is present, do not claim that only file-read tools are available.`,
+      `Use these governed ${label} MCP tools. Native filesystem and web tools are unavailable.`,
       "",
       `Available ${label} tools:`,
       ...names.map((name) => `- ${name} (${mcpToolFullName(serverName, name)}): ${describeFor(name)}`)
     ].join("\n");
-  }
-
-  // Codex reaches host tools through a real stdio MCP server (the host's entry script) because the
-  // Codex SDK only injects MCP via CodexOptions.config. The child rebuilds the tool context from a
-  // serialized file; secrets never enter that file.
-  function codexMcpConfig({ role, targetRoot, toolContext = {}, env = process.env, serverEntry = registry.stdioServerEntry } = {}) {
-    const unavailable = { available: false, transport: "mcp", mcp: true };
-    if (!targetRoot || !enabled(toolContext) || !serverEntry) return unavailable;
-    const toolNames = toolNamesFor(role, toolContext);
-    if (toolNames.length === 0) return unavailable;
-
-    const contextData = serializeContext({ ...toolContext, targetRoot, root: targetRoot });
-    const contextDir = mkdtempSync(path.join(os.tmpdir(), `${serverName}-mcp-ctx-`));
-    const contextFile = path.join(contextDir, "context.json");
-    writeFileSync(contextFile, JSON.stringify(contextData), "utf8");
-    // Auth keys travel in a 0600 file, never in the child environment — even when a host prefix matches them.
-    const authKeys = new Set(registry.childAuthEnv || []);
-    const auth = Object.fromEntries([...authKeys]
-      .filter((key) => env[key] !== undefined)
-      .map((key) => [key, env[key]]));
-    const authFile = Object.keys(auth).length ? path.join(contextDir, "auth.json") : "";
-    if (authFile) writeFileSync(authFile, JSON.stringify(auth), { encoding: "utf8", mode: 0o600 });
-    const cleanup = () => {
-      try { rmSync(contextDir, { recursive: true, force: true }); } catch { /* best-effort */ }
-    };
-
-    const serverEnv = {
-      CREW_MCP_ROLE: role || "",
-      CREW_MCP_CONTEXT_FILE: contextFile,
-      ...(authFile ? { CREW_MCP_AUTH_FILE: authFile } : {})
-    };
-    for (const key of [...DEFAULT_PASSTHROUGH, ...(registry.childEnvPassthrough || [])]) {
-      if (env[key] !== undefined && !authKeys.has(key)) serverEnv[key] = env[key];
-    }
-    const prefixes = ["CREW_", ...(registry.childEnvPrefixes || [])];
-    for (const key of Object.keys(env)) {
-      if (authKeys.has(key) || key in serverEnv) continue;
-      if (prefixes.some((prefix) => key.startsWith(prefix))) serverEnv[key] = env[key];
-    }
-
-    return {
-      available: true,
-      transport: "mcp",
-      mcp: true,
-      serverName,
-      toolNames,
-      cleanup,
-      config: {
-        mcp_servers: {
-          [serverName]: {
-            command: process.execPath,
-            args: [serverEntry],
-            env: serverEnv,
-            // The SDK runs non-interactively, so an approval prompt would be reported as cancelled;
-            // the server already exposes only the tools allowed for this role.
-            default_tools_approval_mode: "approve"
-          }
-        }
-      }
-    };
   }
 
   return {
@@ -260,21 +194,8 @@ export function createMcpBridge(registry) {
     toolHandlers,
     createClaudeMcp,
     claudeToolInstructions,
-    codexMcpConfig,
-    serializeContext,
     registry
   };
-}
-
-// Only plain data crosses the process boundary: no closures, and only declared keys.
-function defaultSerialize(toolContext = {}, keys = []) {
-  const data = {};
-  for (const key of ["targetRoot", "root", "role", "workItemId", "roleOptions", "capabilities", ...keys]) {
-    const value = toolContext[key];
-    if (value !== undefined && typeof value !== "function") data[key] = value;
-  }
-  if (!data.targetRoot && data.root) data.targetRoot = data.root;
-  return data;
 }
 
 // MCP structuredContent must be an object; arrays and primitives are wrapped as { value }.
@@ -298,9 +219,10 @@ function stringify(value) {
 
 // The kernel's own bridge: nothing but the built-in crew tools. Used automatically by
 // createRoleRunner when a host supplies no bridge of its own.
-export function createCrewOnlyBridge() {
+export function createCrewOnlyBridge({ targetRoot } = {}) {
   return createMcpBridge({
     serverName: "crew",
+    governance: createRoleGovernance({ getContract: (role) => targetRoot ? loadRoleSpec(targetRoot, role)?.contract : null }),
     toolsForRole: () => [],
     describe: (toolName) => crewToolDefinitions.describe(toolName),
     inputSchema: (toolName, z) => crewToolDefinitions.inputSchema(toolName, z),

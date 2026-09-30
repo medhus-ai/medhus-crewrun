@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRuntimeStore } from "../src/runtime-store.js";
-import { createStandaloneRuntime } from "../src/standalone.js";
 import { createRuntimeScheduler } from "../src/runtime-scheduler.js";
 
 function fixture(t) {
@@ -113,89 +112,4 @@ test("runtime scheduler ignores roles without a heartbeat", (t) => {
   writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ title: "Operations" }));
   const scheduler = createRuntimeScheduler({ ...f.options, runtime: { store: f.store }, now: () => new Date(f.options.now()) });
   assert.deepEqual(scheduler.tick(), []);
-});
-
-test("standalone sends retain retry deadlines and reconcile ambiguous responses without a duplicate", async (t) => {
-  const f = fixture(t);
-  writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ contract: { version: 1, authority: { tools: [{ name: "slack.postMessage", impact: "external-write" }], data: { write: ["connector:slack:slack"] } } } }));
-  let mode = "rate", sends = 0, clientId;
-  const runtime = f.keep(createStandaloneRuntime({ ...f.options, fetchImpl: async (url, options) => {
-    if (url.endsWith("auth.test")) return Response.json({ ok: true, team: "Fixture" }, { headers: { "x-oauth-scopes": "chat:write,channels:history" } });
-    if (url.includes("conversations.history")) return Response.json({ ok: true, messages: [{ ts: "12.1", client_msg_id: clientId }] });
-    sends++; const key = JSON.parse(options.body).client_msg_id;
-    assert.ok(!clientId || clientId === key); clientId = key;
-    if (mode === "rate") return Response.json({}, { status: 429, headers: { "retry-after": "10" } });
-    throw new Error("Socket closed after provider accepted message");
-  } }));
-  await runtime.operations.connect({ connectorId: "slack", credentials: { access_token: "xoxb-private-fixture" } });
-  const queued = await runtime.tools.registry.call({ role: "ops", toolName: "slack.postMessage", input: { channel: "C123", text: "One update" } });
-  await runtime.operations.decideApproval({ id: queued.actionId, action: "approve" });
-  assert.equal((await runtime.deliver()).status, "retry_wait");
-  await runtime.deliver(); assert.equal(sends, 1);
-  f.advance(10_001); mode = "ambiguous";
-  assert.equal((await runtime.deliver()).status, "uncertain");
-  await runtime.deliver(); assert.equal(sends, 2);
-  await runtime.operations.checkDelivery({ id: queued.actionId });
-  assert.equal(runtime.store.getAction(queued.actionId).status, "delivered");
-  assert.equal(runtime.store.getAction(queued.actionId).receipt.ts, "12.1");
-});
-
-test("standalone records captured results and can stop a running model", async (t) => {
-  const f = fixture(t);
-  const runtime = f.keep(createStandaloneRuntime({ ...f.options, executeTurn: async ({ signal }) => new Promise((resolve) => signal.addEventListener("abort", () => resolve({ ok: false, reason: "Stopped", text: "Partial result" }), { once: true })) }));
-  const run = runtime.store.enqueue({ agent: "ops", prompt: "Work until paused" });
-  const working = runtime.tick();
-  await new Promise((resolve) => setImmediate(resolve));
-  runtime.operations.controlTask({ id: run.id, action: "pause" });
-  await working;
-  assert.equal(runtime.store.getRun(run.id).status, "paused");
-  assert.equal(runtime.store.snapshot().runs[0].artifacts[0].content, "Partial result");
-});
-
-test("Gmail 403 rate-limit rejections retry safely and search matches remain review candidates", async (t) => {
-  const f = fixture(t);
-  writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ contract: { version: 1, authority: { tools: [{ name: "gmail.sendDraft", impact: "external-write" }], data: { write: ["connector:gmail:gmail"] } } } }));
-  const raw = Buffer.from("Message-ID: <brief@example.test>\r\nTo: client@example.test\r\n\r\nApproved brief").toString("base64url");
-  let sends = 0;
-  const runtime = f.keep(createStandaloneRuntime({ ...f.options, fetchImpl: async (url) => {
-    if (url.endsWith("/token")) return Response.json({ access_token: "private", scope: "https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.readonly" });
-    if (url.includes("?format=raw")) return Response.json({ message: { raw } });
-    if (url.includes("/messages?")) return Response.json({ messages: [{ id: "candidate", threadId: "thread" }] });
-    sends++;
-    return sends === 1 ? Response.json({ error: { errors: [{ reason: "userRateLimitExceeded" }] } }, { status: 403, headers: { "retry-after": "1" } }) : Response.json(null);
-  } }));
-  await runtime.operations.connect({ connectorId: "gmail", credentials: { client_id: "client", client_secret: "secret", refresh_token: "refresh", gmail_read: "1" } });
-  const queued = await runtime.tools.registry.call({ role: "ops", toolName: "gmail.sendDraft", input: { draftId: "draft123" } });
-  await runtime.operations.decideApproval({ id: queued.actionId, action: "approve" });
-  assert.equal((await runtime.deliver()).status, "retry_wait");
-  f.advance(3000);
-  assert.equal((await runtime.deliver()).status, "uncertain");
-  await runtime.operations.checkDelivery({ id: queued.actionId });
-  assert.equal(runtime.store.getAction(queued.actionId).status, "uncertain", "a reused Message-ID cannot prove that this attempt sent it");
-  assert.ok(runtime.store.snapshot().runs[0].timeline.some((e) => e.type === "action.receipt_candidate"));
-  assert.equal(sends, 2);
-});
-
-test("shutdown finishes an in-flight receipt without starting the next queued model turn", async (t) => {
-  const f = fixture(t);
-  writeFileSync(path.join(f.targetRoot, ".crew/agents/ops.json"), JSON.stringify({ contract: { version: 1, authority: { tools: [{ name: "slack.postMessage", impact: "external-write" }], data: { write: ["connector:slack:slack"] } } } }));
-  let finishSend, startedSend, turns = 0;
-  const sending = new Promise((resolve) => { startedSend = resolve; });
-  const runtime = f.keep(createStandaloneRuntime({ ...f.options, executeTurn: async () => { turns++; return { ok: true, text: "Should not start" }; }, fetchImpl: async (url) => {
-    if (url.endsWith("auth.test")) return Response.json({ ok: true }, { headers: { "x-oauth-scopes": "chat:write" } });
-    startedSend();
-    return new Promise((resolve) => { finishSend = () => resolve(Response.json({ ok: true, channel: "C123", ts: "13.1" })); });
-  } }));
-  await runtime.operations.connect({ connectorId: "slack", credentials: { access_token: "xoxb-private-fixture" } });
-  const action = await runtime.tools.registry.call({ role: "ops", toolName: "slack.postMessage", input: { channel: "C123", text: "Final update" } });
-  await runtime.operations.decideApproval({ id: action.actionId, action: "approve" });
-  const queued = runtime.store.enqueue({ agent: "ops", prompt: "Next task" });
-  const work = runtime.tick();
-  await sending;
-  const stopping = runtime.stop();
-  finishSend();
-  await stopping; await work;
-  assert.equal(turns, 0);
-  assert.equal(runtime.store.getRun(queued.id).status, "queued");
-  assert.equal(runtime.store.getAction(action.actionId).status, "delivered");
 });

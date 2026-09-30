@@ -2,27 +2,19 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { agentDirectories, agentFile } from "./agent-paths.js";
-import { parseFrontmatter, parseInlineList } from "./frontmatter.js";
 import { mergeRoleContracts, summarizeRoleContract } from "./role-contract.js";
 import { normalizeWeb } from "./web.js";
 
-// The role spec: <crew>/roles/<role>.json holds everything about how one role runs —
-// runner, title, memory_pointers, reflections knob, hooks, heartbeat, web access, and that
-// role's scheduled tasks. New specs use `scheduled`; legacy `schedules` stays readable. The
-// <crew>/roles/_defaults.json supplies values every role inherits (its
-// memory_pointers PREPEND — the shared floor loads first; scalar values are overridden).
-// A role's .md is pure prompt prose, read only when a spec's memory_pointers lists it.
-// Roles without a .json fall back to legacy .md frontmatter so existing projects keep working.
-
+// Versioned JSON agent definitions inherit a shared defaults floor. Markdown
+// instructions are loaded only through explicit memory pointers.
 const ROLE_SLUG = /^[a-z][a-z0-9-]{0,79}$/;
 
 function readJson(file) {
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  if (!existsSync(file)) return null;
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`Agent definition must be a JSON object: ${file}`);
+  roleScheduledEntries(parsed);
+  return parsed;
 }
 
 export function readRoleDefaults(targetRoot) {
@@ -35,46 +27,14 @@ export function readRoleSpecFile(targetRoot, role) {
   return readJson(agentFile(targetRoot, role));
 }
 
-// Turning a legacy Markdown agent into a JSON spec must retain its instructions
-// and frontmatter. Editing an existing agent is not a request to reset it.
 export function readAgentSpecForEditing(targetRoot, agent) {
-  const own = readRoleSpecFile(targetRoot, agent);
-  if (own) return own;
-  const markdown = agentFile(targetRoot, agent, "md");
-  if (!existsSync(markdown)) return {};
-  return { ...(legacySpecFromFrontmatter(targetRoot, agent) || {}), memory_pointers: [path.relative(path.resolve(targetRoot), markdown).split(path.sep).join("/")] };
+  return readRoleSpecFile(targetRoot, agent) || {};
 }
 
-// A role spec has one task list. Do not merge the old and new keys: duplicate
-// IDs could otherwise run a task twice. Writers lazily migrate legacy specs.
 export function roleScheduledEntries(spec) {
-  const source = spec && typeof spec === "object" && !Array.isArray(spec) ? spec : {};
-  const hasScheduled = Object.hasOwn(source, "scheduled");
-  const hasLegacySchedules = Object.hasOwn(source, "schedules");
-  if (hasScheduled && hasLegacySchedules) throw new Error('role spec cannot contain both "scheduled" and legacy "schedules"');
-  if (hasScheduled) return Array.isArray(source.scheduled) ? source.scheduled : [];
-  return Array.isArray(source.schedules) ? source.schedules : [];
-}
-
-function legacySpecFromFrontmatter(targetRoot, role) {
-  try {
-    const front = parseFrontmatter(readFileSync(agentFile(targetRoot, role, "md"), "utf8"));
-    const spec = {};
-    if (front.runner) spec.runner = front.runner;
-    if (front.title) spec.title = front.title;
-    if (front.heartbeat !== undefined) {
-      spec.heartbeat = {
-        interval: front.heartbeat,
-        ...(front.heartbeat_prompt ? { prompt: front.heartbeat_prompt } : {}),
-        ...(front.heartbeat_budget_usd_per_day ? { budget_usd_per_day: Number(front.heartbeat_budget_usd_per_day) } : {})
-      };
-    }
-    const hooks = parseInlineList(front.hooks);
-    if (hooks.length) spec.hooks = hooks;
-    return Object.keys(spec).length ? spec : null;
-  } catch {
-    return null;
-  }
+  if (spec && Object.hasOwn(spec, "schedules")) throw new Error('v6 uses "scheduled", not "schedules"; migrate the agent definition.');
+  if (spec?.scheduled != null && !Array.isArray(spec.scheduled)) throw new Error('"scheduled" must be an array');
+  return spec?.scheduled || [];
 }
 
 // Heartbeat accepts "30m" shorthand or { interval, prompt, budget_usd_per_day }.
@@ -91,16 +51,13 @@ export function normalizeHeartbeat(value) {
   return null;
 }
 
-// The merged, normalized spec: defaults + (role .json, else legacy .md frontmatter).
-// `source` says which layer defined the role ("spec" | "frontmatter" | "defaults-only").
+// Merge the shared floor with one explicitly declared agent.
 export function loadRoleSpec(targetRoot, role) {
   if (!ROLE_SLUG.test(String(role || ""))) return null;
   const defaults = readRoleDefaults(targetRoot);
   const specFile = readRoleSpecFile(targetRoot, role);
-  const legacy = specFile ? null : legacySpecFromFrontmatter(targetRoot, role);
-  const own = specFile || legacy;
-  const hasMd = existsSync(agentFile(targetRoot, role, "md"));
-  if (!own && !hasMd && !Object.keys(defaults).length) return null;
+  const own = specFile;
+  if (!own) return null;
 
   const defaultPointers = Array.isArray(defaults.memory_pointers) ? defaults.memory_pointers.map(String) : [];
   const ownPointers = Array.isArray(own?.memory_pointers) ? own.memory_pointers.map(String) : [];
@@ -114,7 +71,7 @@ export function loadRoleSpec(targetRoot, role) {
 
   return {
     role,
-    source: specFile ? "spec" : legacy ? "frontmatter" : "defaults-only",
+    source: "spec",
     instructions: String(own?.instructions || ""),
     title: String(own?.title || defaults.title || ""),
     runner: String(own?.runner || defaults.runner || "").trim(),
@@ -127,12 +84,11 @@ export function loadRoleSpec(targetRoot, role) {
     schedules: roleScheduledEntries(own).map((entry) => ({ ...entry, role })),
     contract,
     contractSummary: summarizeRoleContract(contract, { role }),
-    hasSpecFile: Boolean(specFile),
-    hasMd
+    hasSpecFile: true
   };
 }
 
-// Every role the project declares: any roles/<role>.json or roles/<role>.md (underscore files skipped).
+// Only JSON definitions declare agents; underscore files are shared settings.
 export function listRoleNames(targetRoot) {
   const names = new Set();
   for (const dir of agentDirectories(targetRoot)) {
@@ -140,7 +96,6 @@ export function listRoleNames(targetRoot) {
     for (const name of readdirSync(dir)) {
       if (name.startsWith("_")) continue;
       if (name.endsWith(".json")) names.add(name.slice(0, -5));
-      else if (name.endsWith(".md")) names.add(name.slice(0, -3));
     }
   }
   return [...names].filter((name) => ROLE_SLUG.test(name)).sort();
@@ -155,5 +110,5 @@ export function listRoleSpecs(targetRoot) {
   return specs;
 }
 
-// Canonical agent terminology; legacy exports remain supported.
+// Agent-facing names share the contract implementation.
 export { readRoleDefaults as readAgentDefaults, readRoleSpecFile as readAgentSpecFile, loadRoleSpec as loadAgentSpec, listRoleNames as listAgentNames, listRoleSpecs as listAgentSpecs, roleScheduledEntries as agentScheduledEntries };

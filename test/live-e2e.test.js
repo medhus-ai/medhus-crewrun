@@ -1,19 +1,11 @@
-// Opt-in tests that exercise real provider sessions and Docker. They never run
+// Opt-in tests that exercise real provider sessions. They never run
 // in the normal suite: set CREW_LIVE_E2E=1 plus one or more provider flags.
 // See README → Live integration tests for setup.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 
-import { createContainerEngine } from "../src/engines/container.js";
-import { createCliEngine } from "../src/engines/cli.js";
 import { createClaudeAgentEngine } from "../src/engines/claude-agent.js";
 import { createCodexAgentEngine } from "../src/engines/codex-agent.js";
-import { normalizeExecutionPolicy } from "../src/execution-policy.js";
 
 const LIVE = process.env.CREW_LIVE_E2E === "1";
 const LIVE_TIMEOUT_MS = 120_000;
@@ -62,59 +54,4 @@ test("live OpenRouter route reaches a tool-capable model", { timeout: LIVE_TIMEO
     auth: "api-key"
   });
   assert.equal(result.ok, true, result.message);
-});
-
-test("live Docker boundary keeps the container read-only and omits ambient credentials", { timeout: LIVE_TIMEOUT_MS }, async (t) => {
-  if (!requested(t, "DOCKER", "start Docker")) return;
-  const docker = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], {
-    encoding: "utf8",
-    timeout: 10_000,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  assert.equal(docker.status, 0, String(docker.stderr || docker.error?.message || "Docker is unavailable"));
-
-  const root = mkdtempSync(path.join(os.tmpdir(), "crew-live-container-root-"));
-  const workdir = mkdtempSync(path.join(os.tmpdir(), "crew-live-container-work-"));
-  mkdirSync(path.join(root, ".git"));
-  const originalKey = process.env.OPENAI_API_KEY;
-  process.env.OPENAI_API_KEY = "crew-live-must-not-enter-container";
-  try {
-    const policy = normalizeExecutionPolicy({
-      runtime: "container",
-      image: process.env.CREW_LIVE_DOCKER_IMAGE || "node:20-bookworm",
-      network: "none"
-    });
-    const engine = createContainerEngine(createCliEngine(), policy);
-    const lines = [];
-    const closed = await new Promise((resolve, reject) => {
-      engine.startTurn({
-        targetRoot: root,
-        workdir,
-        profile: {
-          id: "live-container-cli",
-          provider: "local",
-          command: "node",
-          args: ["-e", [
-            "const fs = require('node:fs');",
-            "let readOnly = false;",
-            "try { fs.writeFileSync('/etc/crewrun-live-probe', 'x'); } catch { readOnly = true; }",
-            "console.log(`CREW_CONTAINER_OK readonly=${readOnly} key=${process.env.OPENAI_API_KEY || 'none'}`);"
-          ].join(" ")]
-        },
-        role: "engineer",
-        mode: "execute",
-        prompt: "print the boundary check",
-        onLine: (line) => lines.push(String(line)),
-        onError: reject,
-        onClose: resolve
-      });
-    });
-    assert.equal(closed.code, 0, closed.stderr);
-    assert.ok(lines.some((line) => line.includes("CREW_CONTAINER_OK readonly=true key=none")), lines.join("\n"));
-  } finally {
-    if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = originalKey;
-    await rm(root, { recursive: true, force: true });
-    await rm(workdir, { recursive: true, force: true });
-  }
 });

@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { agentFile } from "./agent-paths.js";
-import { crewDir, crewHome } from "./crew-dirs.js";
 import { listRoleSpecs, roleScheduledEntries } from "./role-spec.js";
+import { readWorkspace } from "./workspace-manifest.js";
 
 // Cron-scheduled role turns. Definitions live in the project (`<crew dir>/schedules.json`,
 // versioned like roles); run state lives in the crew home so a repository never churns with
@@ -151,8 +150,21 @@ function formatTime(value) {
 }
 
 // First matching minute strictly after `from`, or null if none within a year.
-export function nextRun(expression, from = new Date()) {
+export function nextRun(expression, from = new Date(), { timezone } = {}) {
   const cron = typeof expression === "string" ? parseCron(expression) : expression;
+  if (timezone) {
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23" });
+    let at = Math.floor(from.getTime() / 60000) * 60000 + 60000;
+    const end = at + 366 * 86400000;
+    while (at <= end) {
+      const parts = Object.fromEntries(formatter.formatToParts(new Date(at)).map((p) => [p.type, p.value]));
+      const local = { getMinutes: () => Number(parts.minute), getHours: () => Number(parts.hour), getMonth: () => Number(parts.month) - 1, getDate: () => Number(parts.day), getDay: () => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday) };
+      if (cron.matches(local)) return new Date(at);
+      const step = cron.matchesDay(local) ? 1 : Math.max(1, Math.min(60, 1440 - local.getHours() * 60 - local.getMinutes()));
+      at += step * 60000;
+    }
+    return null;
+  }
   const cursor = new Date(from.getTime());
   cursor.setSeconds(0, 0);
   cursor.setMinutes(cursor.getMinutes() + 1);
@@ -169,13 +181,7 @@ export function nextRun(expression, from = new Date()) {
   return null;
 }
 
-// Legacy global file; new projects keep scheduled tasks inside each role's spec instead.
-export function schedulesPath(targetRoot) {
-  return path.join(path.resolve(targetRoot || process.cwd()), crewDir(), "schedules.json");
-}
-
-// Scheduled tasks come from every role's spec (roles/<role>.json "scheduled": [...]) plus
-// the legacy global file; IDs are unique per role, and run-state keys are "role:id".
+// Definitions live only in their owning agent JSON. Run state lives in SQLite.
 export function listSchedules({ targetRoot } = {}) {
   const out = [];
   const seen = new Set();
@@ -188,48 +194,23 @@ export function listSchedules({ targetRoot } = {}) {
       out.push(schedule);
     }
   }
-  const file = schedulesPath(targetRoot);
-  if (existsSync(file)) {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    for (const entry of (Array.isArray(parsed?.schedules) ? parsed.schedules : [])) {
-      const schedule = normalizeSchedule(entry);
-      if (!seen.has(`${schedule.role}:${schedule.id}`)) out.push(schedule);
-    }
-  }
-  return out;
+  const timezone = readWorkspace(targetRoot || process.cwd())?.timezone;
+  return timezone ? out.map((entry) => ({ ...entry, timezone })) : out;
 }
 
 export function scheduleRunsKey(schedule) {
   return `${schedule.role}:${schedule.id}`;
 }
 
-export function saveSchedules({ targetRoot, schedules = [] } = {}) {
-  const normalized = schedules.map(normalizeSchedule);
-  const seen = new Set();
-  for (const schedule of normalized) {
-    if (seen.has(schedule.id)) throw new Error(`duplicate schedule id: ${schedule.id}`);
-    seen.add(schedule.id);
-  }
-  writeJsonAtomic(schedulesPath(targetRoot), { version: 1, schedules: normalized });
-  return normalized;
-}
-
-// Writes land in the owning role's spec as `scheduled` when it exists; otherwise the legacy
-// global file keeps its established `schedules` format.
 export function upsertSchedule({ targetRoot, schedule } = {}) {
   const next = normalizeSchedule(schedule);
   const specFile = roleSpecPath(targetRoot, next.role);
-  if (specFile) {
-    const spec = JSON.parse(readFileSync(specFile, "utf8"));
-    const scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== next.id);
-    const { role, ...entry } = next;
-    spec.scheduled = [...scheduled, entry];
-    delete spec.schedules;
-    writeJsonAtomic(specFile, spec);
-    return next;
-  }
-  const current = legacySchedules(targetRoot).filter((entry) => !(entry.id === next.id && entry.role === next.role));
-  saveSchedules({ targetRoot, schedules: [...current, next] });
+  if (!specFile) throw new Error(`Agent ${next.role} must have a JSON definition before adding scheduled tasks.`);
+  const spec = JSON.parse(readFileSync(specFile, "utf8"));
+  const scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== next.id);
+  const { role, ...entry } = next;
+  spec.scheduled = [...scheduled, entry];
+  writeJsonAtomic(specFile, spec);
   return next;
 }
 
@@ -238,156 +219,21 @@ function roleSpecPath(targetRoot, role) {
   return existsSync(file) ? file : null;
 }
 
-function legacySchedules(targetRoot) {
-  const file = schedulesPath(targetRoot);
-  if (!existsSync(file)) return [];
-  const parsed = JSON.parse(readFileSync(file, "utf8"));
-  return (Array.isArray(parsed?.schedules) ? parsed.schedules : []).map(normalizeSchedule);
-}
-
 export function removeSchedule({ targetRoot, id, role } = {}) {
   const match = listSchedules({ targetRoot }).find((entry) => entry.id === id && (!role || entry.role === role));
   if (!match) return false;
   const specFile = roleSpecPath(targetRoot, match.role);
-  if (specFile) {
-    const spec = JSON.parse(readFileSync(specFile, "utf8"));
-    spec.scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== id);
-    delete spec.schedules;
-    writeJsonAtomic(specFile, spec);
-    return true;
-  }
-  const remaining = legacySchedules(targetRoot).filter((entry) => !(entry.id === id && entry.role === match.role));
-  saveSchedules({ targetRoot, schedules: remaining });
+  const spec = JSON.parse(readFileSync(specFile, "utf8"));
+  spec.scheduled = roleScheduledEntries(spec).filter((entry) => entry.id !== id);
+  writeJsonAtomic(specFile, spec);
   return true;
 }
 
-export function setScheduleEnabled({ targetRoot, id, enabled } = {}) {
-  const schedule = listSchedules({ targetRoot }).find((entry) => entry.id === id);
-  if (!schedule) throw new Error(`schedule ${id} was not found`);
-  return upsertSchedule({ targetRoot, schedule: { ...schedule, enabled: Boolean(enabled) } });
-}
-
-// Run state per project, keyed by the resolved root; { runs: { [id]: { lastRunAt, lastStartedAt, lastStatus, lastError, lastDurationMs } } }.
-export function scheduleStatePath(targetRoot, env = process.env) {
-  const key = createHash("sha1").update(path.resolve(targetRoot || process.cwd())).digest("hex").slice(0, 16);
-  return path.join(crewHome(env), "schedules", `${key}.json`);
-}
-
-export function readScheduleState({ targetRoot, env = process.env } = {}) {
-  const file = scheduleStatePath(targetRoot, env);
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return { version: 1, runs: parsed?.runs && typeof parsed.runs === "object" ? parsed.runs : {} };
-  } catch {
-    return { version: 1, runs: {} };
-  }
-}
-
-function writeScheduleState({ targetRoot, env = process.env, state }) {
-  writeJsonAtomic(scheduleStatePath(targetRoot, env), state);
-}
-
-// Enabled schedules whose next fire time since their last run (or since `since`, by default one
-// minute ago for a never-run schedule) is not in the future. A schedule that missed several
-// windows while nothing was running fires once, not once per missed window.
-// A run is considered in progress from lastStartedAt until lastRunAt is written; if a process
-// dies in between, the start goes stale after `staleAfterMs` and the schedule becomes due again.
-export const DEFAULT_STALE_RUN_MS = 60 * 60 * 1000;
-
-export function dueSchedules({ targetRoot, now = new Date(), state = readScheduleState({ targetRoot }), since, staleAfterMs = DEFAULT_STALE_RUN_MS } = {}) {
-  const due = [];
-  for (const schedule of listSchedules({ targetRoot })) {
-    if (!schedule.enabled) continue;
-    const run = state.runs?.[scheduleRunsKey(schedule)] || state.runs?.[schedule.id] || {};
-    const lastStarted = Date.parse(run.lastStartedAt || "");
-    const lastFinished = Date.parse(run.lastRunAt || "");
-    const inProgress = Number.isFinite(lastStarted) && !(Number.isFinite(lastFinished) && lastFinished >= lastStarted);
-    if (inProgress && now.getTime() - lastStarted < staleAfterMs) continue;
-    const from = Number.isFinite(lastFinished) ? new Date(lastFinished) : since ? new Date(since) : new Date(now.getTime() - 60_000);
-    const next = nextRun(schedule.cron, from);
-    if (next && next.getTime() <= now.getTime()) due.push({ ...schedule, dueAt: next.toISOString() });
-  }
-  return due;
-}
-
-// Ticks on an interval; `run(schedule)` performs the role turn and resolves to { ok, text?, reason? }.
-// One scheduler per project: the JSON run state is not a cross-process lock.
-export function createScheduler({ targetRoot, run, intervalMs = 30_000, staleAfterMs = DEFAULT_STALE_RUN_MS, now = () => new Date(), env = process.env, log = () => {}, error = () => {} } = {}) {
-  if (typeof run !== "function") throw new Error("createScheduler requires run(schedule)");
-  let timer = null;
-  let ticking = false;
-
-  async function execute(schedule, startedAt) {
-    const state = readScheduleState({ targetRoot, env });
-    const runsKey = scheduleRunsKey(schedule);
-    state.runs[runsKey] = { ...(state.runs[runsKey] || state.runs[schedule.id] || {}), lastStartedAt: startedAt.toISOString() };
-    writeScheduleState({ targetRoot, env, state });
-    const began = Date.now();
-    let result;
-    try {
-      result = await run(schedule);
-    } catch (err) {
-      result = { ok: false, reason: err?.message || String(err) };
-    }
-    const finished = readScheduleState({ targetRoot, env });
-    finished.runs[runsKey] = {
-      lastStartedAt: startedAt.toISOString(),
-      lastRunAt: new Date(Math.max(now().getTime(), startedAt.getTime())).toISOString(),
-      lastStatus: result?.ok === false ? "failed" : "ok",
-      lastError: result?.ok === false ? String(result.reason || "").slice(0, 500) : "",
-      lastDurationMs: Date.now() - began
-    };
-    writeScheduleState({ targetRoot, env, state: finished });
-    (result?.ok === false ? error : log)(`[schedule] ${schedule.id} (${schedule.role}) ${finished.runs[runsKey].lastStatus}${result?.ok === false ? `: ${result.reason || ""}` : ""}`);
-    return finished.runs[runsKey];
-  }
-
-  async function tick() {
-    if (ticking) return [];
-    ticking = true;
-    try {
-      const at = now();
-      const outcomes = [];
-      for (const schedule of dueSchedules({ targetRoot, now: at, state: readScheduleState({ targetRoot, env }), staleAfterMs })) {
-        outcomes.push({ id: schedule.id, ...(await execute(schedule, at)) });
-      }
-      return outcomes;
-    } finally {
-      ticking = false;
-    }
-  }
-
-  async function runNow(request) {
-    const input = typeof request === "string" ? { id: request } : request || {};
-    const id = String(input.id || "");
-    const role = String(input.role || "");
-    const schedule = listSchedules({ targetRoot }).find((entry) => entry.id === id && (!role || entry.role === role));
-    if (!schedule) throw new Error(`schedule ${role ? `${role}:` : ""}${id} was not found`);
-    return { id, ...(await execute(schedule, now())) };
-  }
-
-  return {
-    start() {
-      if (timer) return;
-      timer = setInterval(() => { void tick().catch((err) => error(`[schedule] ${err?.message || err}`)); }, intervalMs);
-      timer.unref?.();
-    },
-    stop() {
-      if (timer) clearInterval(timer);
-      timer = null;
-    },
-    tick,
-    runNow
-  };
-}
-
 // Display helper: every schedule with its next fire time and last outcome.
-export function scheduleOverview({ targetRoot, now = new Date(), env = process.env } = {}) {
-  const state = readScheduleState({ targetRoot, env });
+export function scheduleOverview({ targetRoot, now = new Date() } = {}) {
   return listSchedules({ targetRoot }).map((schedule) => ({
     ...schedule,
-    nextRunAt: schedule.enabled ? nextRun(schedule.cron, now)?.toISOString() || null : null,
-    ...(state.runs[scheduleRunsKey(schedule)] || state.runs[schedule.id] || {})
+    nextRunAt: schedule.enabled ? nextRun(schedule.cron, now, { timezone: schedule.timezone })?.toISOString() || null : null
   }));
 }
 

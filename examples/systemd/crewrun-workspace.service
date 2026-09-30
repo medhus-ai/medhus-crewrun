@@ -1,0 +1,19 @@
+# Copy to ~/.config/systemd/user/crewrun-workspace.service and replace the three
+# deployment paths below. Provider credentials belong in the optional private env file.
+[Unit]
+Description=CrewRun personal or organization workspace
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/crewrun
+EnvironmentFile=-%h/.config/crewrun/workspace.env
+ExecStart=/usr/bin/node %h/crewrun/bin/crewrun.js up %h/workspaces/my-crew --console --console-host 127.0.0.1 --console-port 4400
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -33,10 +33,10 @@ test("knowledge setup uses existing settings forms and owner-only operations", a
   } finally { await console_.close(); await rm(parent, { recursive: true, force: true }); }
 });
 
-test("sidebar orders Inbox, Workspace, combined Integrations & Skills, Chats, then the account menu", () => {
+test("sidebar orders Inbox, Workspace, combined Plugins & Skills, Chats, then the account menu", () => {
   for (const recentChats of [[], [{ role: "ops", title: "Incident response" }]]) {
     const sidebar = renderPage("chats", "", { recentChats }).match(/<aside[\s\S]*?<\/aside>/)[0];
-    const labels = ['aria-label="Inbox"', 'aria-label="Workspace"', 'aria-label="Integrations &amp; Skills"', 'aria-label="Chats"', 'data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu"', 'aria-label="Usage"', 'aria-label="Settings"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat: Incident response"'] : [])];
+    const labels = ['aria-label="Inbox"', 'aria-label="Workspace"', 'aria-label="Plugins &amp; Skills"', 'aria-label="Chats"', 'data-sidebar-menu-toggle aria-expanded="false" aria-controls="sidebar-settings-menu"', 'aria-label="Usage"', 'aria-label="Settings"', ...(recentChats.length ? ["Recent chats", 'aria-label="Open chat: Incident response"'] : [])];
     const positions = labels.map((label) => sidebar.indexOf(label));
     assert.ok(positions.slice(0, 7).every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
     assert.match(sidebar, /aria-label="Inbox"[^<]*>(?:<svg[\s\S]*?<\/svg>)<span class="nav-text">Inbox<\/span><\/a><a href="\/workspace"/, "Workspace sits directly below Inbox");
@@ -112,7 +112,7 @@ test("console renders pages and performs actions over the project's .crew", asyn
     assert.doesNotMatch(dashboard, /Manage agents/, "the dashboard does not duplicate the role directory");
     assert.doesNotMatch(dashboard, /Scheduled work/, "the dashboard does not duplicate the schedules page");
     const sidebar = dashboard.match(/<aside[\s\S]*?<\/aside>/)[0];
-    for (const label of ["Inbox", "Workspace", "Scheduled", "Integrations &amp; Skills", "Activity", "Settings"]) assert.match(sidebar, new RegExp(`aria-label="${label}"`));
+    for (const label of ["Inbox", "Workspace", "Scheduled", "Plugins &amp; Skills", "Activity", "Settings"]) assert.match(sidebar, new RegExp(`aria-label="${label}"`));
     for (const label of ["Dashboard", "Tasks", "Reviews", "Approvals", "Calendar", "Event inbox", "Audit", "Providers"]) assert.doesNotMatch(sidebar, new RegExp(`aria-label="${label}"`));
     for (const [legacy, target] of [["/dashboard", "/inbox"], ["/tasks", "/inbox?tab=attention"], ["/tasks?tab=active", "/inbox?tab=progress"], ["/tasks?run=abc", "/inbox?run=abc"], ["/reviews", "/inbox?tab=approvals"], ["/reviews?tab=results&run=abc", "/inbox?run=abc"], ["/reviews?tab=history", "/inbox?tab=done"]]) {
       const moved = await fetch(base + legacy, { redirect: "manual" });

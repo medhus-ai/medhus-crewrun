@@ -1,7 +1,7 @@
 # Console navigation
 
 Each page owns a distinct part of the workflow. The sidebar lists Inbox, Workspace, Scheduled,
-Agents, Integrations & Skills, Activity, and Chats; Usage and Settings are in the workspace menu
+Agents, Plugins & Skills, Activity, and Chats; Usage and Settings are in the workspace menu
 at the bottom of the sidebar. The Inbox item shows how many items need the owner.
 
 | Page | Purpose |
@@ -10,7 +10,7 @@ at the bottom of the sidebar. The Inbox item shows how many items need the owner
 | Workspace | Folders and subfolders of the workspace as an expandable tree; select a Markdown or CSV file to preview it. The selected file's folders open automatically. |
 | Scheduled | Calendar opens first and shows the next three occurrences in local time; choose 3, 5, 10, or 25 and page forward. List shows definitions with an enabled toggle, Edit, and Run now. |
 | Agents | Role instructions, model, reviewed authority, and memory pointers. |
-| Integrations & Skills | One sidebar item with two tabs. **Integrations**: service connections and permissions; open a service for its Connection and Event rules tabs. Calendar mirroring, when supported by the host, belongs here. **Skills**: installed procedures; skill proposals are approved under Inbox → Approvals. |
+| Plugins & Skills | One sidebar item with two tabs. **Plugins**: integration plugins for service connections and permissions; open a service for its Connection and Event rules tabs. Calendar mirroring, when supported by the host, belongs here. **Skills**: installed procedures; skill proposals are approved under Inbox → Approvals. |
 | Activity | Read-only Agent actions and Integration events; search the retained safe metadata. |
 | Chats | Resumed agent conversations, also accessible from recent chats in the sidebar. |
 | Usage | Recorded costs, estimates, and accepted outcomes. Spending appears only here. |

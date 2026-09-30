@@ -7,7 +7,7 @@ export const PAGES = [
   { id: "workspace", label: "Workspace", icon: "folder", group: "primary" },
   { id: "scheduled", label: "Scheduled", icon: "calendar", group: "primary" },
   { id: "agents", label: "Agents", icon: "cloud", group: "operations" },
-  { id: "integrations", label: "Integrations & Skills", icon: "network", group: "operations" },
+  { id: "integrations", label: "Plugins & Skills", icon: "network", group: "operations" },
   { id: "skills", label: "Skills", icon: "blocks", group: "operations", nav: false, navParent: "integrations" },
   { id: "activity", label: "Activity", icon: "list", group: "operations" },
   { id: "usage", label: "Usage", icon: "chart", group: "account" },

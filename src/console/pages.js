@@ -779,8 +779,8 @@ ${hostRows.length ? `<section class="section-heading"><h2>Host provider checks</
 // Integrations and Skills share one sidebar item with two tabs.
 function capabilitiesHeader(active, actions = "") {
   const link = (id, label) => `<a class="agent-tab${active === id ? " active" : ""}"${active === id ? ' aria-current="page"' : ""} href="/${id}">${label}</a>`;
-  return `<section class="hero"><div><h1>Integrations &amp; Skills</h1><p class="sub">${active === "skills" ? "Reusable procedures agents can follow. Agents propose new skills from chat; you approve them in the Inbox." : "Service connections, permissions, and event rules."}</p></div>${actions ? `<div class="actions">${actions}</div>` : ""}</section>
-<nav class="agent-tabs" aria-label="Integrations and skills">${link("integrations", "Integrations")}${link("skills", "Skills")}</nav>`;
+  return `<section class="hero"><div><h1>Plugins &amp; Skills</h1><p class="sub">${active === "skills" ? "Reusable procedures agents can follow. Agents propose new skills from chat; you approve them in the Inbox." : "Integration plugins: service connections, permissions, and event rules."}</p></div>${actions ? `<div class="actions">${actions}</div>` : ""}</section>
+<nav class="agent-tabs" aria-label="Plugins and skills">${link("integrations", "Plugins")}${link("skills", "Skills")}</nav>`;
 }
 
 function renderConnectors(models, options = {}) {
